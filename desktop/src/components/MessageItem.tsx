@@ -14,8 +14,7 @@ import {
   Globe,
   Image as ImageIcon,
   Music,
-  Package,
-  Sparkles,
+  UserRound,
   Video,
 } from 'lucide-react';
 import { ProcessTimeline, ProcessItem } from './ProcessTimeline';
@@ -117,7 +116,7 @@ function ChatVideoPlayer({
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
       setCapturedPoster(canvas.toDataURL('image/jpeg', 0.82));
     } catch {
-      // Local and remote media can be blocked by canvas security; playback still works.
+      // Local/remote media may be unavailable to canvas; the player still renders normally.
     }
   }, [capturedPoster, shouldCapturePoster, updateAspectRatio]);
 
@@ -175,20 +174,30 @@ function ChatVideoPlayer({
   );
 }
 
+// 当新增系统提示词或标签时，需要同步在此添加对应的过滤模式
 const INTERNAL_PROTOCOL_BLOCKS = [
+  // --- 内部协议 XML 标签（原有）---
   /<tool_call>[\s\S]*?<\/tool_call>/gi,
   /<activated_skill\b[\s\S]*?<\/activated_skill>/gi,
+
+  // --- Anthropic 平台系统标签 ---
   /<system-reminder[\s\S]*?<\/system-reminder>/gi,
   /<local-command-caveat[\s\S]*?<\/local-command-caveat>/gi,
   /<task-notification[\s\S]*?<\/task-notification>/gi,
+
+  // --- 配置注入标签（interactive_runtime_shared.rs）---
   /<redclaw_agent_md[\s\S]*?<\/redclaw_agent_md>/gi,
   /<redclaw_soul_md\b[\s\S]*?<\/redclaw_soul_md>/gi,
   /<redclaw_identity_md[\s\S]*?<\/redclaw_identity_md>/gi,
   /<redclaw_user_md[\s\S]*?<\/redclaw_user_md>/gi,
   /<redclaw_creator_profile_md[\s\S]*?<\/redclaw_creator_profile_md>/gi,
   /<redclaw_bootstrap[\s\S]*?<\/redclaw_bootstrap>/gi,
+
+  // --- Bracket 风格协议块（有闭合）---
   /\[KnowledgeReferences\][\s\S]*?\[\/KnowledgeReferences\]/gi,
   /\[AssetReferences\][\s\S]*?\[\/AssetReferences\]/gi,
+
+  // --- Bracket 风格协议块（无闭合，延伸到下一个大写节标题或文本末尾）---
   /\[SystemReminder[^\]]*\][\s\S]*?(?=\n\[[A-Z]|$)/gi,
   /\[Assistant Rules[^\]]*\][\s\S]*?(?=\n\[[A-Z]|$)/gi,
   /\[Available Skills\][\s\S]*?(?=\n\[[A-Z]|$)/gi,
@@ -307,7 +316,7 @@ export interface ChatMessageMemberActor {
   memberSkillRef?: string;
 }
 
-export interface ChatMessageKnowledgeReference {
+export interface ChatKnowledgeReference {
   id: string;
   title: string;
   sourceKind?: string;
@@ -320,19 +329,6 @@ export interface ChatMessageKnowledgeReference {
   updatedAt?: string;
   fileCount?: number;
   hasTranscript?: boolean;
-}
-
-export interface ChatMessageAssetReference {
-  id: string;
-  name: string;
-  description?: string;
-  primaryPreviewUrl?: string;
-  tags?: string[];
-}
-
-export interface ChatMessageSkillReference {
-  name: string;
-  description?: string;
 }
 
 export interface Message {
@@ -432,25 +428,7 @@ export interface Message {
   suppressPendingIndicator?: boolean;
   memberActor?: ChatMessageMemberActor;
   memberMention?: ChatMessageMemberActor;
-  knowledgeReferences?: ChatMessageKnowledgeReference[];
-  assetReferences?: ChatMessageAssetReference[];
-  skillReferences?: ChatMessageSkillReference[];
-}
-
-interface MessageItemProps {
-  msg: Message;
-  copiedMessageId: string | null;
-  onCopyMessage: (id: string, content: string) => void;
-  workflowPlacement?: 'top' | 'bottom';
-  workflowVariant?: 'default' | 'compact';
-  workflowEmphasis?: 'default' | 'thoughts-first';
-  workflowDisplayMode?: 'all' | 'thoughts-only';
-  workflowAutoHideWhenComplete?: boolean;
-  workflowFailureTone?: 'danger' | 'neutral';
-  showAttachments?: boolean;
-  linkRenderMode?: ChatMessageLinkRenderMode;
-  onPreviewLink?: (target: ChatMessageLinkTarget) => void;
-  activePreviewHref?: string | null;
+  knowledgeReferences?: ChatKnowledgeReference[];
 }
 
 export type ChatMessageLinkKind =
@@ -484,6 +462,22 @@ export interface ChatMessageLinkTarget {
 }
 
 export type ChatMessageLinkRenderMode = 'default' | 'preview-card';
+
+interface MessageItemProps {
+  msg: Message;
+  copiedMessageId: string | null;
+  onCopyMessage: (id: string, content: string) => void;
+  workflowPlacement?: 'top' | 'bottom';
+  workflowVariant?: 'default' | 'compact';
+  workflowEmphasis?: 'default' | 'thoughts-first';
+  workflowDisplayMode?: 'all' | 'thoughts-only';
+  workflowAutoHideWhenComplete?: boolean;
+  workflowFailureTone?: 'danger' | 'neutral';
+  showAttachments?: boolean;
+  linkRenderMode?: ChatMessageLinkRenderMode;
+  onPreviewLink?: (target: ChatMessageLinkTarget) => void;
+  activePreviewHref?: string | null;
+}
 
 interface ImageContextMenuState {
   visible: boolean;
@@ -652,28 +646,6 @@ const isPreviewRelativePath = (value: string): boolean => {
   return /\.(png|jpe?g|webp|gif|bmp|svg|avif|ico|tiff?|mp4|webm|mov|m4v|mkv|avi|ogv|mp3|wav|m4a|flac|aac|ogg|oga|opus|pdf|docx?|odt|pptx?|odp|xlsx?|ods|html?|md|markdown|thrive|txt|srt|vtt|diff|patch|json|csv|tsv|ya?ml|toml|ini|conf|config|env|xml|log|sql|sh|bash|zsh|fish|ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|c|cpp|cc|cxx|h|hpp|hh|hxx|css|scss|sass|less|vue|svelte|astro|rb|php|swift|kt|kts|scala|r|lua|pl|pm|dart|dockerfile|lock|zip|rar|7z|tar|gz|tgz)(?:[?#].*)?$/i.test(raw);
 };
 
-const safeDecodeLabel = (value: string): string => {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-};
-
-const stripQueryAndHash = (value: string): string => {
-  const hashIndex = value.indexOf('#');
-  const queryIndex = value.indexOf('?');
-  const indexes = [hashIndex, queryIndex].filter((index) => index >= 0);
-  if (indexes.length === 0) return value;
-  return value.slice(0, Math.min(...indexes));
-};
-
-const getPathFilename = (value: string): string => {
-  const clean = stripQueryAndHash(value).replace(/\\/g, '/').replace(/\/+$/, '');
-  const segment = clean.split('/').filter(Boolean).pop() || clean;
-  return safeDecodeLabel(segment);
-};
-
 const escapeMarkdownLinkLabel = (value: string): string => (
   getPathFilename(value).replace(/[[\]]/g, '\\$&') || value.replace(/[[\]]/g, '\\$&')
 );
@@ -697,6 +669,28 @@ const linkifyPreviewFilePaths = (content: string): string => {
       return `${prefix}[${escapeMarkdownLinkLabel(trimmedPath)}](<${trimmedPath}>)`;
     });
   }).join('\n');
+};
+
+const safeDecodeLabel = (value: string): string => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
+const stripQueryAndHash = (value: string): string => {
+  const hashIndex = value.indexOf('#');
+  const queryIndex = value.indexOf('?');
+  const indexes = [hashIndex, queryIndex].filter((index) => index >= 0);
+  if (indexes.length === 0) return value;
+  return value.slice(0, Math.min(...indexes));
+};
+
+const getPathFilename = (value: string): string => {
+  const clean = stripQueryAndHash(value).replace(/\\/g, '/').replace(/\/+$/, '');
+  const segment = clean.split('/').filter(Boolean).pop() || clean;
+  return safeDecodeLabel(segment);
 };
 
 const getUrlFilename = (value: string): string => {
@@ -952,7 +946,7 @@ export const MessageItem = memo(({
   msg,
   copiedMessageId,
   onCopyMessage,
-  workflowPlacement = 'bottom',
+  workflowPlacement = 'top',
   workflowVariant = 'default',
   workflowEmphasis = 'default',
   workflowDisplayMode = 'all',
@@ -1020,18 +1014,9 @@ export const MessageItem = memo(({
     && !hasTimelineNarration
     && Boolean(msg.isStreaming && !hasAssistantResponseContent);
   const showProcessingTimer = !isUser && !isThinkingMessage && typeof msg.processingStartedAt === 'number' && Number.isFinite(msg.processingStartedAt);
-  const uploadedFileAttachments = useMemo(() => {
-    const items = msg.attachments && msg.attachments.length > 0
-      ? msg.attachments
-      : msg.attachment?.type === 'uploaded-file'
-        ? [msg.attachment]
-        : [];
-    return items.filter((item): item is Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }> => (
-      Boolean(item) && item.type === 'uploaded-file'
-    ));
-  }, [msg.attachment, msg.attachments]);
   const hasMessageAttachments = Boolean(
-    uploadedFileAttachments.length > 0
+    (msg.attachments && msg.attachments.length > 0)
+      || msg.attachment?.type === 'uploaded-file'
       || msg.attachment?.type === 'youtube-video'
       || msg.attachment?.type === 'wander-references'
       || (msg.knowledgeReferences && msg.knowledgeReferences.length > 0),
@@ -1040,7 +1025,6 @@ export const MessageItem = memo(({
     ? Boolean(msg.displayContent || msg.content || hasMessageAttachments || (msg.isStreaming && !msg.thinking))
     : hasAssistantResponseContent || showPendingThinkingIndicator;
   const shouldAutoHideWorkflow = workflowAutoHideWhenComplete && !msg.isStreaming && hasAssistantResponseContent;
-  const assistantMemberActor = !isUser ? msg.memberActor : undefined;
   const showWorkflowOnTop = workflowPlacement === 'top';
   const latestTimelineThought = !isUser
     ? [...(msg.timeline || [])]
@@ -1066,82 +1050,7 @@ export const MessageItem = memo(({
     && !shouldAutoHideWorkflow
     && displayTimeline.length === 0
     && (msg.thinking || (showWorkflowDetails && (msg.tools.length > 0 || msg.activatedSkill)));
-
-  const renderMemberActorAvatar = (actor: ChatMessageMemberActor) => {
-    const avatar = String(actor.avatar || '').trim();
-    const name = String(actor.displayName || '').trim();
-    if (avatar && /^(https?:|file:|data:|local-file:|redbox-asset:)/i.test(avatar)) {
-      return (
-        <img
-          src={resolveAssetUrl(avatar)}
-          alt=""
-          className="h-6 w-6 shrink-0 rounded-full border border-border bg-surface-secondary object-cover"
-        />
-      );
-    }
-    return (
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-border bg-surface-secondary text-[11px] font-semibold text-text-secondary">
-        {name.slice(0, 1).toUpperCase() || '成'}
-      </span>
-    );
-  };
-
-  const renderKnowledgeReferenceChips = (items: ChatMessageKnowledgeReference[] | undefined) => {
-    const references = (items || []).filter((item) => item && item.id && item.title).slice(0, 6);
-    if (references.length === 0) return null;
-    return (
-      <div className="mb-1.5 flex max-w-full flex-wrap justify-end gap-1.5">
-        {references.map((item) => (
-          <span
-            key={item.id}
-            className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full border border-border bg-surface-primary/80 px-2 py-1 text-[11px] font-medium text-text-secondary shadow-sm"
-            title={item.title}
-          >
-            <FileText className="h-3.5 w-3.5 shrink-0 text-text-tertiary" />
-            <span className="truncate">#{item.title}</span>
-          </span>
-        ))}
-      </div>
-    );
-  };
-
-  const renderAssetReferenceChips = (items: ChatMessageAssetReference[] | undefined) => {
-    const references = (items || []).filter((item) => item && item.id && item.name).slice(0, 6);
-    if (references.length === 0) return null;
-    return (
-      <div className="mb-1.5 flex max-w-full flex-wrap justify-end gap-1.5">
-        {references.map((item) => (
-          <span
-            key={item.id}
-            className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full border border-border bg-surface-primary/80 px-2 py-1 text-[11px] font-medium text-text-secondary shadow-sm"
-            title={item.description || item.name}
-          >
-            <Package className="h-3.5 w-3.5 shrink-0 text-text-tertiary" />
-            <span className="truncate">@{item.name}</span>
-          </span>
-        ))}
-      </div>
-    );
-  };
-
-  const renderSkillReferenceChips = (items: ChatMessageSkillReference[] | undefined) => {
-    const references = (items || []).filter((item) => item && item.name).slice(0, 6);
-    if (references.length === 0) return null;
-    return (
-      <div className="mb-1.5 flex max-w-full flex-wrap justify-end gap-1.5">
-        {references.map((item) => (
-          <span
-            key={item.name}
-            className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full border border-border bg-surface-primary/80 px-2 py-1 text-[11px] font-medium text-text-secondary shadow-sm"
-            title={item.description || item.name}
-          >
-            <Sparkles className="h-3.5 w-3.5 shrink-0 text-text-tertiary" />
-            <span className="truncate">@{item.name}</span>
-          </span>
-        ))}
-      </div>
-    );
-  };
+  const assistantMemberActor = !isUser ? msg.memberActor : undefined;
 
   useEffect(() => {
     if (!imageMenu.visible) return;
@@ -1271,6 +1180,7 @@ export const MessageItem = memo(({
       ? linkifyPreviewFilePaths(visibleAssistantContent)
       : visibleAssistantContent
   ), [isUser, linkRenderMode, visibleAssistantContent]);
+
   const renderPreviewAwareMarkdownContent = useCallback((content: string) => (
     linkRenderMode === 'preview-card' && !isUser
       ? linkifyPreviewFilePaths(content)
@@ -1301,7 +1211,7 @@ export const MessageItem = memo(({
 
   const resolveUploadedAttachmentSource = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
     const preferred = String(
-      attachment.thumbnailDataUrl
+    attachment.thumbnailDataUrl
         || attachment.thumbnailUrl
         || attachment.inlineDataUrl
         || attachment.localUrl
@@ -1399,6 +1309,60 @@ export const MessageItem = memo(({
     </div>
   );
 
+  const knowledgeKindLabel = (item: ChatKnowledgeReference): string => {
+    const sourceKind = String(item.sourceKind || '').trim();
+    if (sourceKind === 'youtube-video' || sourceKind === 'youtube' || sourceKind === 'video') return '视频';
+    if (sourceKind === 'document-source' || sourceKind === 'document') return '文档';
+    if (sourceKind === 'redbook-note' || sourceKind === 'note') return '笔记';
+    return sourceKind || '知识';
+  };
+
+  const renderKnowledgeIcon = (item: ChatKnowledgeReference) => {
+    const sourceKind = String(item.sourceKind || '').trim();
+    if (sourceKind === 'youtube-video' || sourceKind === 'youtube' || sourceKind === 'video') {
+      return <Video className="h-4 w-4" />;
+    }
+    if (sourceKind === 'document-source' || sourceKind === 'document') {
+      return <FileText className="h-4 w-4" />;
+    }
+    return <Archive className="h-4 w-4" />;
+  };
+
+  const renderKnowledgeReferenceCards = (items?: ChatKnowledgeReference[]) => {
+    const references = (items || []).filter((item) => item.id || item.title);
+    if (references.length === 0) return null;
+    return (
+      <div className="mt-2 flex w-full flex-wrap justify-end gap-2">
+        {references.slice(0, 6).map((item) => {
+          const cover = String(item.cover || '').trim();
+          return (
+            <div
+              key={item.id || item.title}
+              className="inline-flex h-14 max-w-[min(100%,320px)] items-center gap-2 rounded-xl border border-border bg-surface-primary/95 px-2 py-1.5 shadow-sm"
+            >
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-secondary text-text-tertiary">
+                {cover ? (
+                  <img src={resolveAssetUrl(cover)} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  renderKnowledgeIcon(item)
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-center gap-1.5 text-[10px] leading-3 text-text-tertiary">
+                  <span className="truncate">{knowledgeKindLabel(item)}</span>
+                  {item.hasTranscript ? <span className="shrink-0">有转录</span> : null}
+                </div>
+                <div className="mt-0.5 truncate text-sm font-medium leading-5 text-text-primary" title={item.title}>
+                  {item.title || '未命名内容'}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderUploadedFileCard = (attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
     if (isUploadedVideoAttachment(attachment)) {
       const actionSource = resolveUploadedAttachmentActionSource(attachment);
@@ -1415,7 +1379,9 @@ export const MessageItem = memo(({
         );
       }
     }
-    const imageSrc = isUploadedImageAttachment(attachment) ? resolveUploadedAttachmentSource(attachment) : '';
+    const imageSrc = isUploadedImageAttachment(attachment)
+      ? resolveUploadedAttachmentSource(attachment)
+      : '';
     const actionSource = resolveUploadedAttachmentActionSource(attachment);
     if (imageSrc) {
       return (
@@ -1458,6 +1424,25 @@ export const MessageItem = memo(({
           </div>
         </div>
       </div>
+    );
+  };
+
+  const renderMemberActorAvatar = (actor: ChatMessageMemberActor) => {
+    const avatar = String(actor.avatar || '').trim();
+    const name = String(actor.displayName || '').trim();
+    if (avatar && /^(https?:|file:|data:|local-file:|asset:)/i.test(avatar)) {
+      return (
+        <img
+          src={resolveAssetUrl(avatar)}
+          alt=""
+          className="h-7 w-7 shrink-0 rounded-full border border-border bg-surface-secondary object-cover"
+        />
+      );
+    }
+    return (
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border bg-surface-secondary text-[12px] font-semibold text-text-secondary">
+        {name.slice(0, 1).toUpperCase() || <UserRound className="h-3.5 w-3.5" />}
+      </span>
     );
   };
 
@@ -1565,12 +1550,13 @@ export const MessageItem = memo(({
           (() => {
             const videoCardMatch = msg.content.match(/<!--VIDEO_CARD:(.*?)-->/);
             let videoCard: { title: string; thumbnailUrl?: string; videoId?: string } | null = null;
-            let displayText = msg.displayContent || msg.content;
+            const hasExplicitDisplayContent = typeof msg.displayContent === 'string';
+            let displayText = hasExplicitDisplayContent ? msg.displayContent || '' : stripInternalProtocolMarkup(msg.content);
 
             if (videoCardMatch) {
               try {
                 videoCard = JSON.parse(videoCardMatch[1]);
-                displayText = msg.displayContent || `总结视频「${videoCard?.title}」的内容`;
+                displayText = hasExplicitDisplayContent ? msg.displayContent || '' : `总结视频「${videoCard?.title}」的内容`;
               } catch (e) {
                 console.error('Failed to parse video card:', e);
               }
@@ -1578,17 +1564,8 @@ export const MessageItem = memo(({
 
             return (
               <div className="group/user flex w-full flex-col items-end">
-                {msg.memberMention ? (
-                  <div className="mb-1.5 flex max-w-full items-center gap-1.5 rounded-full border border-border bg-surface-primary/80 px-2 py-1 text-[11px] font-medium text-text-secondary shadow-sm">
-                    {renderMemberActorAvatar(msg.memberMention)}
-                    <span className="truncate">发给 @{msg.memberMention.displayName}</span>
-                  </div>
-                ) : null}
-                {renderKnowledgeReferenceChips(msg.knowledgeReferences)}
-                {renderAssetReferenceChips(msg.assetReferences)}
-                {renderSkillReferenceChips(msg.skillReferences)}
                 {(videoCard || displayText) && (
-                  <div className="chat-user-bubble max-w-full px-4 py-2.5 text-[15px] leading-relaxed text-white shadow-sm">
+                  <div className="chat-user-bubble max-w-full px-4 py-2.5 text-[15px] leading-relaxed shadow-sm">
                     {videoCard && (
                       <div className={displayText ? 'mb-3' : ''}>
                         {renderYoutubeCard(videoCard)}
@@ -1597,6 +1574,26 @@ export const MessageItem = memo(({
                     {displayText && <div className="whitespace-pre-wrap">{displayText}</div>}
                   </div>
                 )}
+                {showAttachments && msg.attachment?.type === 'youtube-video' && !videoCard && (
+                  <div className="mt-2 w-full max-w-[420px]">
+                    {renderYoutubeCard(msg.attachment)}
+                  </div>
+                )}
+                {showAttachments && msg.attachment?.type !== 'wander-references' && renderKnowledgeReferenceCards(msg.knowledgeReferences)}
+                {showAttachments && msg.attachment?.type === 'wander-references' && renderWanderReferenceCards(msg.attachment)}
+                {showAttachments && msg.attachments && msg.attachments.length > 0 ? (
+                  <div className="mt-2 flex w-full max-w-[520px] flex-col items-end gap-2">
+                    {msg.attachments.map((attachment, index) => (
+                      <div
+                        key={String(attachment.attachmentId || attachment.workspaceRelativePath || attachment.name || index)}
+                        className="max-w-full self-end"
+                      >
+                        {renderUploadedFileCard(attachment as Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>)}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {showAttachments && (!msg.attachments || msg.attachments.length === 0) && msg.attachment?.type === 'uploaded-file' && renderUploadedFileCard(msg.attachment)}
                 {userCopyContent && (
                   <div className="mt-1.5 flex justify-end opacity-0 transition-opacity group-hover/user:opacity-100 focus-within:opacity-100">
                     <button
@@ -1618,20 +1615,7 @@ export const MessageItem = memo(({
                       )}
                     </button>
                   </div>
-                  )}
-                {showAttachments && msg.attachment?.type === 'youtube-video' && !videoCard && (
-                  <div className="mt-2 w-full max-w-[420px]">
-                    {renderYoutubeCard(msg.attachment)}
-                  </div>
                 )}
-                {showAttachments && msg.attachment?.type === 'wander-references' && renderWanderReferenceCards(msg.attachment)}
-                {showAttachments && uploadedFileAttachments.map((attachment) => (
-                  <div
-                    key={attachment.attachmentId || attachment.workspaceRelativePath || attachment.toolPath || attachment.absolutePath || attachment.originalAbsolutePath || attachment.name}
-                  >
-                    {renderUploadedFileCard(attachment)}
-                  </div>
-                ))}
               </div>
             );
           })()
@@ -1775,8 +1759,6 @@ export const MessageItem = memo(({
     prevProps.msg.memberActor !== nextProps.msg.memberActor ||
     prevProps.msg.memberMention !== nextProps.msg.memberMention ||
     prevProps.msg.knowledgeReferences !== nextProps.msg.knowledgeReferences ||
-    prevProps.msg.assetReferences !== nextProps.msg.assetReferences ||
-    prevProps.msg.skillReferences !== nextProps.msg.skillReferences ||
     prevProps.msg.thinking !== nextProps.msg.thinking ||
     prevProps.msg.tools !== nextProps.msg.tools ||
     prevProps.msg.plan !== nextProps.msg.plan || // Check plan changes
@@ -1797,7 +1779,10 @@ export const MessageItem = memo(({
     prevProps.workflowDisplayMode !== nextProps.workflowDisplayMode ||
     prevProps.workflowAutoHideWhenComplete !== nextProps.workflowAutoHideWhenComplete ||
     prevProps.workflowFailureTone !== nextProps.workflowFailureTone ||
-    prevProps.showAttachments !== nextProps.showAttachments;
+    prevProps.showAttachments !== nextProps.showAttachments ||
+    prevProps.linkRenderMode !== nextProps.linkRenderMode ||
+    prevProps.onPreviewLink !== nextProps.onPreviewLink ||
+    prevProps.activePreviewHref !== nextProps.activePreviewHref;
 
   return !msgChanged && !copyStatusChanged && !workflowStyleChanged;
 });

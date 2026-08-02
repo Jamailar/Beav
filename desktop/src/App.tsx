@@ -1,9 +1,16 @@
-import { useEffect, useState, useCallback, lazy, Suspense, type ReactNode } from 'react';
-import { FileText, Loader2 } from 'lucide-react';
+import { useState, useEffect, useCallback, lazy, Suspense, type ReactNode } from 'react';
+import { FileText, Loader2, MessageSquareWarning } from 'lucide-react';
 import { AppDialogsHost } from './components/AppDialogsHost';
-import { AppOnboarding, getAppOnboardingStatus, markAppOnboardingSeenOnDevice } from './components/AppOnboarding';
-import { FeedbackReportDialog } from './components/FeedbackReportDialog';
 import { Layout } from './components/Layout';
+import { AppOnboarding, getAppAcquisitionSource, hasSeenAppOnboarding, markAppOnboardingSeen } from './components/AppOnboarding';
+import { FeedbackReportDialog } from './components/FeedbackReportDialog';
+import { useLlmReadinessLifecycle } from './hooks/useLlmReadinessLifecycle';
+import { useLlmReadinessState } from './hooks/useLlmReadinessState';
+import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
+import { useOfficialAuthState } from './hooks/useOfficialAuthState';
+import { NotificationsHost } from './notifications/NotificationsHost';
+import { useI18n } from './i18n';
+import { OfficialLoginGate } from './features/app-shell/OfficialLoginGate';
 import { AppSubjectsModal } from './features/app-shell/AppSubjectsModal';
 import { StartupMigrationGate } from './features/app-shell/StartupMigrationGate';
 import { useExecutionPersistence } from './features/app-shell/useExecutionPersistence';
@@ -15,11 +22,10 @@ import { useRedClawShellNavigation } from './features/app-shell/useRedClawShellN
 import { useSettingsShellNavigation } from './features/app-shell/useSettingsShellNavigation';
 import { useSubjectsModal } from './features/app-shell/useSubjectsModal';
 import { shouldRenderView, useViewNavigation } from './features/app-shell/useViewNavigation';
-import type { PendingChatMessage } from './features/app-shell/types';
+import type { GenerationIntent, ImmersiveMode } from './features/app-shell/types';
 import { ClipboardCapturePrompt } from './features/capture/ClipboardCapturePrompt';
-import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
-import { useI18n } from './i18n';
-import { NotificationsHost } from './notifications/NotificationsHost';
+
+export type { GenerationIntent, ImmersiveMode, PendingChatMessage, TeamSection, ViewType } from './features/app-shell/types';
 
 const SkillsPage = lazy(async () => ({ default: (await import('./pages/Skills')).Skills }));
 const KnowledgePage = lazy(async () => ({ default: (await import('./pages/Knowledge')).Knowledge }));
@@ -35,8 +41,6 @@ const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subject
 const AutomationPage = lazy(async () => ({ default: (await import('./pages/Automation')).Automation }));
 const ApprovalPage = lazy(async () => ({ default: (await import('./pages/Approval')).Approval }));
 
-export type { GenerationIntent, ImmersiveMode, PendingChatMessage, TeamSection, ViewType } from './features/app-shell/types';
-
 function ViewLoadingFallback() {
   const { t } = useI18n();
   return (
@@ -47,45 +51,53 @@ function ViewLoadingFallback() {
   );
 }
 
-function App() {
-  useOfficialAuthLifecycle();
-
+function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => void }) {
   const {
     currentView,
     setCurrentView,
-    navigateToView,
     immersiveMode,
     setImmersiveMode,
     activeManuscriptEditorFile,
     setActiveManuscriptEditorFile,
     mountedViews,
     persistentViews,
+    navigateToView,
     setViewPersistent,
     returnFromSettings,
   } = useViewNavigation();
   const [redClawGlobalSidebarContent, setRedClawGlobalSidebarContent] = useState<ReactNode>(null);
   const [redClawTitleBarActions, setRedClawTitleBarActions] = useState<ReactNode>(null);
+  const [wanderTitleBarContent, setWanderTitleBarContent] = useState<ReactNode>(null);
   const [knowledgeTitleBarContent, setKnowledgeTitleBarContent] = useState<ReactNode>(null);
-  const [appOnboardingOpen, setAppOnboardingOpen] = useState(false);
+  const [approvalTargetDocketId, setApprovalTargetDocketId] = useState('');
+
   const globalAuthNotice = useOfficialAuthNotice();
   const {
     subjectsModalOpen,
     openSubjectsModal,
     closeSubjectsModal,
   } = useSubjectsModal();
+
+  const {
+    feedbackReportOpen,
+    feedbackReportContext,
+    openFeedbackReport,
+    closeFeedbackReport,
+    notifyFeedbackReportSubmitted,
+  } = useFeedbackReportDialog(currentView);
+
   const {
     settingsNavigationTarget,
     setSettingsNavigationTarget,
   } = useSettingsShellNavigation();
-  const [skillsNavigationAction, setSkillsNavigationAction] = useState<{ action: 'open-market'; nonce: number } | null>(null);
-  const [approvalTargetRequestId, setApprovalTargetRequestId] = useState('');
+
   const {
     redclawOnboardingVersion,
     pendingRedClawMessage,
     redClawNavigationAction,
     setRedClawNavigationAction,
-    openRedClawOnboarding,
     navigateToRedClaw,
+    openRedClawOnboarding,
     clearPendingRedClawMessage,
     clearRedClawNavigationAction,
     navigateToManuscript,
@@ -98,44 +110,14 @@ function App() {
     setActiveManuscriptEditorFile,
     setImmersiveMode,
   });
+
   const {
     pendingGenerationIntent,
     setPendingGenerationIntent,
     navigateToGenerationStudio,
     clearPendingGenerationIntent,
-    openCoverStudio,
     returnToFreeCreation,
   } = useGenerationShellNavigation({ setCurrentView });
-  const {
-    handleWanderExecutionStateChange,
-    handleRedClawExecutionStateChange,
-    handleCoverStudioExecutionStateChange,
-    handleGenerationStudioExecutionStateChange,
-  } = useExecutionPersistence(setViewPersistent);
-  const {
-    feedbackReportOpen,
-    feedbackReportContext,
-    openFeedbackReport,
-    closeFeedbackReport,
-    notifyFeedbackReportSubmitted,
-  } = useFeedbackReportDialog(currentView);
-
-  useEffect(() => {
-    let disposed = false;
-    void getAppOnboardingStatus().then((status) => {
-      if (!disposed && !status.seen) {
-        setAppOnboardingOpen(true);
-      }
-    });
-    return () => {
-      disposed = true;
-    };
-  }, []);
-
-  const closeAppOnboarding = useCallback(() => {
-    void markAppOnboardingSeenOnDevice();
-    setAppOnboardingOpen(false);
-  }, []);
 
   useGlobalIntentRouter({
     navigateToView,
@@ -143,20 +125,38 @@ function App() {
     setActiveManuscriptEditorFile,
     setSettingsNavigationTarget,
     setRedClawNavigationAction,
-    setApprovalTargetRequestId,
+    setApprovalTargetDocketId,
     setPendingGenerationIntent,
-    setSkillsNavigationAction,
   });
 
-  const navigateToTeamMembers = useCallback(() => {
-    setSettingsNavigationTarget({
-      tab: 'team',
-      nonce: Date.now(),
-    });
-    navigateToView('settings');
-  }, [navigateToView, setSettingsNavigationTarget]);
+  const {
+    handleWanderExecutionStateChange,
+    handleRedClawExecutionStateChange,
+    handleGenerationStudioExecutionStateChange,
+    handleCoverStudioExecutionStateChange,
+  } = useExecutionPersistence(setViewPersistent);
+
   const isManuscriptEditorActive = currentView === 'redclaw' && Boolean(activeManuscriptEditorFile);
-  const effectiveImmersiveMode = isManuscriptEditorActive ? false : immersiveMode;
+  const effectiveImmersiveMode: ImmersiveMode = isManuscriptEditorActive ? false : immersiveMode;
+
+  useEffect(() => {
+    const acquisitionSource = getAppAcquisitionSource();
+    void window.ipcRenderer.analytics.track('app_launched', {
+      surface: 'app-shell',
+      origin: 'renderer',
+      properties: acquisitionSource ? { acquisitionSource } : {},
+    });
+  }, []);
+
+  useEffect(() => {
+    void window.ipcRenderer.analytics.track('surface_viewed', {
+      surface: currentView,
+      origin: 'renderer',
+      properties: {
+        surface: currentView,
+      },
+    });
+  }, [currentView]);
 
   return (
     <>
@@ -177,13 +177,24 @@ function App() {
               </div>
             );
           }
+          if (currentView === 'wander') return wanderTitleBarContent;
           if (currentView === 'knowledge') return knowledgeTitleBarContent;
           return null;
         }}
         renderTitleBarActions={({ currentView }) => (
-          currentView === 'redclaw' && !isManuscriptEditorActive ? redClawTitleBarActions : null
+          <>
+            {currentView === 'redclaw' && !isManuscriptEditorActive ? redClawTitleBarActions : null}
+            <button
+              type="button"
+              onClick={() => openFeedbackReport({ sourcePage: currentView })}
+              className="app-titlebar-button"
+              title="反馈问题"
+              aria-label="反馈问题"
+            >
+              <MessageSquareWarning className="w-[13px] h-[13px]" strokeWidth={1.75} />
+            </button>
+          </>
         )}
-        onOpenFeedbackReport={() => openFeedbackReport({ sourcePage: currentView })}
       >
         {isManuscriptEditorActive && activeManuscriptEditorFile && (
           <div className="h-full min-h-0 flex flex-col overflow-hidden">
@@ -202,7 +213,7 @@ function App() {
         {shouldRenderView(mountedViews, currentView, persistentViews, 'skills') && (
           <div className={currentView === 'skills' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'skills' ? <ViewLoadingFallback /> : null}>
-              <SkillsPage isActive={currentView === 'skills'} navigationAction={skillsNavigationAction} />
+              <SkillsPage isActive={currentView === 'skills'} />
             </Suspense>
           </div>
         )}
@@ -222,6 +233,7 @@ function App() {
             <Suspense fallback={currentView === 'settings' ? <ViewLoadingFallback /> : null}>
               <SettingsPage
                 isActive={currentView === 'settings'}
+                onOpenAppOnboarding={onOpenAppOnboarding}
                 onOpenRedClawOnboarding={openRedClawOnboarding}
                 redclawOnboardingVersion={redclawOnboardingVersion}
                 navigationTarget={settingsNavigationTarget}
@@ -241,15 +253,15 @@ function App() {
           <div className={currentView === 'wander' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'wander' ? <ViewLoadingFallback /> : null}>
               <WanderPage
-                onNavigateToManuscript={navigateToManuscript}
                 onNavigateToRedClaw={navigateToRedClaw}
                 onExecutionStateChange={handleWanderExecutionStateChange}
+                onTitleBarContentChange={setWanderTitleBarContent}
                 isActive={currentView === 'wander'}
               />
             </Suspense>
           </div>
         )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'redclaw') && (
+        {(currentView !== 'redclaw' || shouldRenderView(mountedViews, currentView, persistentViews, 'redclaw')) && (
           <div className={currentView === 'redclaw' && !isManuscriptEditorActive ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'redclaw' ? <ViewLoadingFallback /> : null}>
               <RedClawPage
@@ -266,18 +278,7 @@ function App() {
                 onOpenChatSurface={openRedClawChatSurface}
                 onOpenManuscriptEditor={navigateToManuscript}
                 activeManuscriptPath={activeManuscriptEditorFile}
-                onOpenTeamMembers={navigateToTeamMembers}
                 titleBarActive={currentView === 'redclaw' && !isManuscriptEditorActive}
-              />
-            </Suspense>
-          </div>
-        )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'subjects') && (
-          <div className={currentView === 'subjects' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'subjects' ? <ViewLoadingFallback /> : null}>
-              <SubjectsPage
-                isActive={currentView === 'subjects'}
-                onReturnHome={returnToFreeCreation}
               />
             </Suspense>
           </div>
@@ -288,6 +289,16 @@ function App() {
               <MediaLibraryPage
                 isActive={currentView === 'media-library'}
                 onNavigateToGenerationStudio={navigateToGenerationStudio}
+              />
+            </Suspense>
+          </div>
+        )}
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'subjects') && (
+          <div className={currentView === 'subjects' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+            <Suspense fallback={currentView === 'subjects' ? <ViewLoadingFallback /> : null}>
+              <SubjectsPage
+                isActive={currentView === 'subjects'}
+                variant="page"
               />
             </Suspense>
           </div>
@@ -311,9 +322,7 @@ function App() {
                 pendingIntent={pendingGenerationIntent}
                 onIntentConsumed={clearPendingGenerationIntent}
                 onExecutionStateChange={handleGenerationStudioExecutionStateChange}
-                onReturnHome={returnToFreeCreation}
                 onOpenAssets={openSubjectsModal}
-                onOpenCoverStudio={openCoverStudio}
               />
             </Suspense>
           </div>
@@ -333,13 +342,13 @@ function App() {
             <Suspense fallback={currentView === 'approval' ? <ViewLoadingFallback /> : null}>
               <ApprovalPage
                 isActive={currentView === 'approval'}
-                targetRequestId={approvalTargetRequestId}
-                onOpenRedClawSession={openRedClawSession}
+                targetDocketId={approvalTargetDocketId}
               />
             </Suspense>
           </div>
         )}
       </Layout>
+      <ClipboardCapturePrompt />
       {subjectsModalOpen && (
         <AppSubjectsModal close={closeSubjectsModal}>
           <Suspense fallback={<ViewLoadingFallback />}>
@@ -351,17 +360,94 @@ function App() {
           </Suspense>
         </AppSubjectsModal>
       )}
-      <ClipboardCapturePrompt />
-      <StartupMigrationGate />
-      <AppOnboarding open={appOnboardingOpen} onClose={closeAppOnboarding} />
-      <NotificationsHost currentView={currentView} />
       <FeedbackReportDialog
         open={feedbackReportOpen}
         context={feedbackReportContext}
         onClose={closeFeedbackReport}
         onSubmitted={notifyFeedbackReportSubmitted}
       />
+      <StartupMigrationGate />
+      <NotificationsHost currentView={currentView} />
       <AppDialogsHost />
+    </>
+  );
+}
+
+function App() {
+  useOfficialAuthLifecycle();
+  useLlmReadinessLifecycle();
+  const { snapshot: officialAuthState, bootstrapped: officialAuthBootstrapped } = useOfficialAuthState();
+  const { snapshot: llmReadinessState, bootstrapped: llmReadinessBootstrapped } = useLlmReadinessState();
+  const [appOnboardingOpen, setAppOnboardingOpen] = useState(false);
+  const officialAuthStatus = String(officialAuthState?.status || '').trim();
+  const officialAuthPending = !officialAuthBootstrapped
+    || officialAuthStatus === 'restoring'
+    || officialAuthStatus === 'refreshing';
+  const officialAuthLoggedIn = officialAuthBootstrapped
+    && officialAuthStatus !== 'anonymous'
+    && officialAuthStatus !== 'reauthRequired'
+    && officialAuthStatus !== 'restoring'
+    && Boolean(officialAuthState?.loggedIn);
+  const officialAuthNeedsLogin = officialAuthBootstrapped
+    && !officialAuthPending
+    && !officialAuthLoggedIn;
+  const llmReadinessPending = officialAuthLoggedIn && !llmReadinessBootstrapped;
+
+  const openAppOnboarding = useCallback(() => {
+    setAppOnboardingOpen(true);
+  }, []);
+
+  const closeAppOnboarding = useCallback(() => {
+    markAppOnboardingSeen();
+    setAppOnboardingOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!hasSeenAppOnboarding()) {
+      setAppOnboardingOpen(true);
+    }
+  }, []);
+
+  if (officialAuthPending) {
+    return (
+      <>
+        <OfficialLoginGate mode="checking" />
+        <AppOnboarding open={appOnboardingOpen} onClose={closeAppOnboarding} />
+      </>
+    );
+  }
+
+  if (officialAuthNeedsLogin) {
+    return (
+      <>
+        <OfficialLoginGate mode={officialAuthStatus === 'reauthRequired' ? 'expired' : 'login'} />
+        <AppOnboarding open={appOnboardingOpen} onClose={closeAppOnboarding} />
+      </>
+    );
+  }
+
+  if (llmReadinessPending) {
+    return (
+      <>
+        <OfficialLoginGate mode="checking" />
+        <AppOnboarding open={appOnboardingOpen} onClose={closeAppOnboarding} />
+      </>
+    );
+  }
+
+  if (!llmReadinessState?.ready) {
+    return (
+      <>
+        <OfficialLoginGate mode={officialAuthStatus === 'reauthRequired' ? 'expired' : 'login'} />
+        <AppOnboarding open={appOnboardingOpen} onClose={closeAppOnboarding} />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <AuthenticatedApp onOpenAppOnboarding={openAppOnboarding} />
+      <AppOnboarding open={appOnboardingOpen} onClose={closeAppOnboarding} />
     </>
   );
 }

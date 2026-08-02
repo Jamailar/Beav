@@ -1,5 +1,3 @@
-import type { SettingsNavigationTarget } from '../features/app-shell/types';
-
 export type NotificationSource = 'runtime' | 'generation' | 'redclaw' | 'system' | 'server';
 export type NotificationLevel = 'success' | 'error' | 'attention' | 'info';
 export type NotificationSound = 'success' | 'failure' | 'attention' | 'none';
@@ -13,9 +11,8 @@ export type NotificationAction =
         view: NotificationView;
         docketId?: string;
         escalationId?: string;
-        settingsTab?: SettingsNavigationTarget['tab'];
-        aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
-        requestId?: string;
+        settingsTab?: 'general' | 'ai' | 'platforms' | 'tools' | 'profile' | 'remote' | 'experimental';
+        aiModelSubTab?: 'custom' | 'login';
       };
     }
   | {

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useMembership } from './useMembership';
 import type { EntitlementKey } from './entitlementKeys';
 
 type MembershipGateProps = {
@@ -7,6 +8,7 @@ type MembershipGateProps = {
   fallback?: ReactNode;
 };
 
-export function MembershipGate({ entitlement: _entitlement, children, fallback: _fallback = null }: MembershipGateProps) {
-  return <>{children}</>;
+export function MembershipGate({ entitlement, children, fallback = null }: MembershipGateProps) {
+  const { can } = useMembership();
+  return can(entitlement) ? <>{children}</> : <>{fallback}</>;
 }

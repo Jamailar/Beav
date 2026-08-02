@@ -90,6 +90,10 @@ import { getRedClawProject, listRedClawProjects } from './core/redclawStore';
 import {
   handleRedClawOnboardingTurn,
   loadRedClawProfilePromptBundle,
+  completeRedClawInitialization,
+  completeRedClawStyleDefinition,
+  saveRedClawInitializationProgress,
+  startRedClawStyleDefinition,
   updateRedClawProfileDocument,
 } from './core/redclawProfileStore';
 import {
@@ -164,8 +168,18 @@ import {
 } from './core/toolDiagnosticsService';
 import { getAgentRuntime, getLongTaskCoordinator, getTaskGraphRuntime, listRoleSpecs, type RuntimeMode } from './core/ai';
 import { getSessionRuntimeStore } from './core/sessionRuntimeStore';
+import { exportRuntimeSession, importRuntimeSession } from './core/runtimeSessionArchive';
 import { listRuntimeHooks, registerRuntimeHook, unregisterRuntimeHook } from './core/runtimeHooks';
 import { getWorkItemStore } from './core/workItemStore';
+import {
+  cancelRedClawTask,
+  confirmRedClawTask,
+  createRedClawTask,
+  listRedClawTasks,
+  previewRedClawTask,
+  redClawTaskStats,
+  updateRedClawTask,
+} from './core/redclawTaskCompat';
 import { formatWechatArticleFromMarkdown } from './core/wechatFormatter';
 import {
   bindWechatOfficialAccount,
@@ -266,6 +280,8 @@ process.env.DIST = path.join(__dirname, '../dist')
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(process.env.DIST, '../public')
 
 let win: BrowserWindow | null
+let mediaGenerationListenersAttached = false;
+let teamRuntimeListenersAttached = false;
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 let redClawRunnerListenersAttached = false;
 let backgroundTaskRegistryListenersAttached = false;
@@ -526,6 +542,45 @@ async function getSessionBridgeServiceLazy() {
 async function getHeadlessWorkerProcessManagerLazy() {
   const module = await import('./core/headlessWorkerProcessManager');
   return module.getHeadlessWorkerProcessManager();
+}
+
+async function getMediaGenerationJobRegistryLazy() {
+  const module = await import('./core/mediaGenerationJobRegistry');
+  const registry = module.getMediaGenerationJobRegistry();
+  if (!mediaGenerationListenersAttached) {
+    mediaGenerationListenersAttached = true;
+    registry.on('job-updated', (payload: Record<string, unknown>) => {
+      for (const browserWindow of BrowserWindow.getAllWindows()) {
+        if (browserWindow.isDestroyed()) continue;
+        browserWindow.webContents.send('generation:job-updated', payload);
+      }
+      if (payload.status === 'completed') {
+        emitRendererDataChanged('media', { action: 'generation-job-completed', jobId: payload.jobId });
+      }
+    });
+    registry.on('job-log', (payload: Record<string, unknown>) => {
+      for (const browserWindow of BrowserWindow.getAllWindows()) {
+        if (browserWindow.isDestroyed()) continue;
+        browserWindow.webContents.send('generation:job-log', payload);
+      }
+    });
+  }
+  return registry;
+}
+
+async function getTeamRuntimeStoreLazy() {
+  const module = await import('./core/teamRuntimeStore');
+  const store = module.getTeamRuntimeStore();
+  if (!teamRuntimeListenersAttached) {
+    teamRuntimeListenersAttached = true;
+    store.on('runtime-event', (payload: Record<string, unknown>) => {
+      for (const browserWindow of BrowserWindow.getAllWindows()) {
+        if (browserWindow.isDestroyed()) continue;
+        browserWindow.webContents.send('runtime:event', payload);
+      }
+    });
+  }
+  return store;
 }
 
 async function shouldAutoStartAssistantDaemonAcrossSpaces(): Promise<boolean> {
@@ -2618,6 +2673,414 @@ ipcMain.handle('runtime:get-tool-results', (_event, payload?: { sessionId?: stri
   return getSessionRuntimeStore().listToolResults(sessionId, Number.isFinite(limit) && limit > 0 ? limit : undefined);
 });
 
+ipcMain.handle('runtime:get-events', (_event, payload?: {
+  sessionId?: string;
+  limit?: number;
+  includeChildSessions?: boolean;
+  category?: string;
+  eventType?: string;
+}) => {
+  const sessionId = String(payload?.sessionId || '').trim();
+  if (!sessionId) return [];
+  const limit = Number(payload?.limit || 0);
+  return getSessionRuntimeStore().listRuntimeEvents({
+    sessionId,
+    includeChildSessions: Boolean(payload?.includeChildSessions),
+    category: String(payload?.category || '').trim() || undefined,
+    eventType: String(payload?.eventType || '').trim() || undefined,
+    limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
+  });
+});
+
+ipcMain.handle('runtime:get-model-config', () => {
+  const settings = (getSettings() || {}) as Record<string, unknown>;
+  return {
+    success: true,
+    baseURL: normalizeApiBaseUrl(String(settings.api_endpoint || '').trim()),
+    model: String(resolveScopedModelName(settings, 'redclaw', String(settings.model_name || 'gpt-4o-mini'))).trim(),
+    apiKeyConfigured: Boolean(String(settings.api_key || '').trim()),
+    imageModel: String(settings.image_model || '').trim() || null,
+    videoModel: String(settings.video_model || '').trim() || null,
+  };
+});
+
+ipcMain.handle('runtime:list-approvals', async () => {
+  return (await getSessionBridgeServiceLazy()).listPermissionRequests();
+});
+
+ipcMain.handle('runtime:export-session', async (_event, payload?: {
+  sessionId?: string;
+  includeChildSessions?: boolean;
+  writePackage?: boolean;
+}) => {
+  return exportRuntimeSession({
+    sessionId: String(payload?.sessionId || '').trim(),
+    includeChildSessions: Boolean(payload?.includeChildSessions),
+    writePackage: payload?.writePackage !== false,
+  });
+});
+
+ipcMain.handle('runtime:import-session', async (_event, payload?: { packagePath?: string; overwrite?: boolean }) => {
+  try {
+    return await importRuntimeSession({
+      packagePath: String(payload?.packagePath || '').trim(),
+      overwrite: Boolean(payload?.overwrite),
+    });
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('task-panel:list', async (_event, payload?: { limit?: number }) => {
+  const limit = Math.max(1, Math.min(500, Math.floor(Number(payload?.limit || 200) || 200)));
+  const teamRuntime = await getTeamRuntimeStoreLazy();
+  const [backgroundTasks, workItems] = await Promise.all([
+    (await getBackgroundTaskRegistryLazy()).listTasks(),
+    getWorkItemStore().listWorkItems({ limit }),
+  ]);
+  const approvals = (await getSessionBridgeServiceLazy()).listPermissionRequests();
+  const graphTasks = getTaskGraphRuntime().listTasks({ limit });
+  const teamSessions = await teamRuntime.listSessions();
+  const [teamSnapshots, teamDockets, redclawTaskResult] = await Promise.all([
+    Promise.all(teamSessions.map((session) => teamRuntime.getSession({ sessionId: session.id }))),
+    teamRuntime.listDockets(),
+    listRedClawTasks({ includeDrafts: true }),
+  ]);
+  const teamTasks = teamSnapshots.flatMap((snapshot) => Array.isArray(snapshot.tasks) ? snapshot.tasks : []);
+  const teamMemberNames = new Map(
+    teamSnapshots.flatMap((snapshot) => (Array.isArray(snapshot.members) ? snapshot.members : []))
+      .map((member) => [String((member as Record<string, unknown>).id || ''), String((member as Record<string, unknown>).displayName || '')]),
+  );
+  const statusForTask = (status: string): string => {
+    if (status === 'running') return 'running';
+    if (status === 'paused') return 'paused';
+    if (status === 'completed') return 'completed';
+    if (status === 'failed' || status === 'cancelled') return 'failed';
+    return 'queued';
+  };
+  const panelStatusForCollab = (status: string): string => {
+    if (status === 'in_progress' || status === 'active' || status === 'working' || status === 'running') return 'running';
+    if (status === 'waiting_for_review' || status === 'reviewing' || status === 'review') return 'review';
+    if (status === 'blocked') return 'blocked';
+    if (status === 'done' || status === 'completed') return 'completed';
+    if (status === 'failed' || status === 'cancelled') return 'failed';
+    if (status === 'paused' || status === 'archived') return 'paused';
+    return 'queued';
+  };
+  const panelStatusForDocket = (status: string): string => {
+    if (status === 'approved') return 'completed';
+    if (status === 'rejected') return 'failed';
+    if (status === 'changes_requested') return 'blocked';
+    if (status === 'skipped' || status === 'archived') return 'paused';
+    return 'review';
+  };
+  const redclawItems = Array.isArray(redclawTaskResult.items)
+    ? redclawTaskResult.items as Array<Record<string, unknown>>
+    : [];
+  const items = [
+    ...approvals.map((request) => ({
+      id: `approval:${request.id}`,
+      source: 'approval',
+      sourceLabel: '审批',
+      sourceId: request.id,
+      title: request.details?.title || request.toolName || '工具审批',
+      summary: request.details?.description || `等待工具 ${request.toolName} 的确认`,
+      status: 'review',
+      owner: '人工审批',
+      sessionTitle: request.sessionId,
+      priorityLabel: '普通',
+      progress: 0,
+      artifactCount: 0,
+      updatedAt: request.createdAt,
+      createdAt: request.createdAt,
+      reviewCount: 1,
+      taskId: null,
+      definitionId: null,
+      latestExecution: null,
+    })),
+    ...graphTasks.map((task) => {
+      const session = task.ownerSessionId ? getChatSession(task.ownerSessionId) : null;
+      const completedNodes = task.graph.filter((node) => node.status === 'completed' || node.status === 'skipped').length;
+      return {
+        id: `task:${task.id}`,
+        source: 'redclaw',
+        sourceLabel: 'RedClaw',
+        sourceId: task.id,
+        sourceTaskId: task.id,
+        title: task.goal || task.intent || 'AI 任务',
+        summary: task.lastError || task.checkpoints.at(-1)?.summary || '',
+        status: statusForTask(task.status),
+        owner: task.roleId || 'RedClaw',
+        sessionTitle: session?.title || task.ownerSessionId || '-',
+        priorityLabel: '普通',
+        progress: task.graph.length ? Math.round((completedNodes / task.graph.length) * 100) : 0,
+        artifactCount: task.artifacts.length,
+        updatedAt: task.updatedAt,
+        createdAt: task.createdAt,
+        reviewCount: task.graph.some((node) => node.type === 'review' && node.status === 'running') ? 1 : 0,
+        taskId: task.id,
+        definitionId: null,
+        latestExecution: { status: task.status, lastError: task.lastError || null },
+        failureReason: task.lastError || null,
+      };
+    }),
+    ...teamDockets.map((docket) => ({
+      id: `approval:${docket.id}`,
+      source: 'approval',
+      sourceLabel: '审批',
+      sourceId: docket.id,
+      title: docket.title || '待审阅事项',
+      summary: docket.summary || docket.body || '',
+      status: panelStatusForDocket(docket.status),
+      owner: docket.assignedToUserId || '人工审批',
+      sessionTitle: docket.sessionId || docket.sourceKind || '-',
+      priorityLabel: docket.priority === 'urgent' ? '紧急' : docket.priority === 'high' ? '高' : docket.priority === 'low' ? '低' : '普通',
+      progress: 0,
+      artifactCount: docket.artifactRefs.length,
+      updatedAt: docket.updatedAt,
+      createdAt: docket.createdAt,
+      reviewCount: docket.status === 'pending' ? 1 : 0,
+      taskId: docket.taskId,
+      definitionId: null,
+      latestExecution: null,
+    })),
+    ...teamTasks.map((task) => {
+      const taskRecord = task as unknown as Record<string, unknown>;
+      const latestReport = teamSnapshots
+        .flatMap((snapshot) => Array.isArray(snapshot.reports) ? snapshot.reports : [])
+        .filter((report) => String((report as Record<string, unknown>).taskId || '') === String(taskRecord.id || ''))
+        .sort((left, right) => Number((right as Record<string, unknown>).createdAt || 0) - Number((left as Record<string, unknown>).createdAt || 0))[0] as Record<string, unknown> | undefined;
+      const pendingReviewCount = teamDockets.filter((docket) => docket.taskId === taskRecord.id && docket.status === 'pending').length;
+      const progress = Math.max(0, Math.min(100, Number(taskRecord.progressPercent || latestReport?.progressPercent || 0)));
+      return {
+        id: `collab:${String(taskRecord.id || '')}`,
+        source: 'collaboration',
+        sourceLabel: '团队',
+        sourceId: String(taskRecord.id || ''),
+        title: String(taskRecord.title || '未命名协作任务'),
+        summary: String(latestReport?.summary || taskRecord.resultSummary || taskRecord.description || taskRecord.objective || ''),
+        status: pendingReviewCount > 0 ? 'review' : panelStatusForCollab(String(taskRecord.status || 'todo')),
+        owner: teamMemberNames.get(String(taskRecord.memberId || '')) || '未分配',
+        sessionTitle: String(taskRecord.sessionId || '-'),
+        priorityLabel: `P${Number(taskRecord.priority || 0)}`,
+        progress,
+        artifactCount: (Array.isArray(taskRecord.artifacts) ? taskRecord.artifacts.length : 0) + (Array.isArray(taskRecord.artifactIds) ? taskRecord.artifactIds.length : 0),
+        updatedAt: Number(taskRecord.updatedAt || 0),
+        createdAt: Number(taskRecord.createdAt || 0),
+        reviewCount: pendingReviewCount,
+        taskId: String(taskRecord.id || ''),
+        definitionId: null,
+        latestExecution: null,
+        latestReportSummary: String(latestReport?.summary || ''),
+        failureReason: String(taskRecord.failureReason || '') || null,
+      };
+    }),
+    ...redclawItems.map((task) => {
+      const latestExecution = task.latestExecution && typeof task.latestExecution === 'object'
+        ? task.latestExecution as Record<string, unknown>
+        : null;
+      const latestStatus = String(latestExecution?.status || '');
+      const status = task.requiresConfirmation === true
+        ? 'queued'
+        : latestStatus === 'running' || latestStatus === 'leased' || latestStatus === 'retrying'
+          ? 'running'
+          : latestStatus === 'failed' || latestStatus === 'dead_lettered'
+            ? 'failed'
+            : latestStatus === 'completed' || latestStatus === 'succeeded'
+              ? 'completed'
+              : task.enabled === false ? 'paused' : 'queued';
+      const totalRounds = Number(task.totalRounds || 0);
+      const completedRounds = Number(task.completedRounds || 0);
+      return {
+        id: `redclaw:${String(task.definitionId || task.draftId || '')}`,
+        source: 'redclaw',
+        sourceLabel: task.kind === 'long_cycle' ? '长周期' : 'RedClaw',
+        sourceId: String(task.definitionId || task.draftId || ''),
+        sourceTaskId: task.sourceTaskId || null,
+        title: String(task.title || '未命名任务'),
+        summary: String(task.goal || task.prompt || task.objective || task.stepPrompt || ''),
+        status,
+        owner: String(task.ownerScope || 'RedClaw'),
+        sessionTitle: String(task.kind || 'scheduled'),
+        priorityLabel: task.requiresConfirmation === true ? '待确认' : task.enabled === false ? '已停用' : '已启用',
+        progress: task.kind === 'long_cycle' && totalRounds > 0 ? Math.max(0, Math.min(100, Math.round((completedRounds * 100) / totalRounds))) : status === 'completed' ? 100 : status === 'running' ? 50 : 0,
+        artifactCount: Array.isArray((latestExecution as Record<string, unknown> | null)?.artifacts) ? ((latestExecution as Record<string, unknown>).artifacts as unknown[]).length : 0,
+        updatedAt: Date.parse(String(task.updatedAt || '')) || 0,
+        createdAt: Date.parse(String(task.createdAt || '')) || 0,
+        reviewCount: 0,
+        taskId: task.sourceTaskId || null,
+        definitionId: task.definitionId || task.draftId || null,
+        latestExecution,
+        failureReason: String(latestExecution?.lastError || task.lastUpdatedReason || '') || null,
+      };
+    }),
+    ...backgroundTasks.map((task) => ({
+      id: `background:${task.id}`,
+      source: 'redclaw',
+      sourceLabel: '后台任务',
+      sourceId: task.id,
+      sourceTaskId: task.id,
+      title: task.title,
+      summary: task.latestText || task.summary || task.error || '',
+      status: statusForTask(task.status),
+      owner: task.kind,
+      sessionTitle: task.sessionId || '-',
+      priorityLabel: '后台',
+      progress: task.status === 'completed' ? 100 : task.status === 'failed' || task.status === 'cancelled' ? 0 : 50,
+      artifactCount: 0,
+      updatedAt: Date.parse(task.updatedAt) || 0,
+      createdAt: Date.parse(task.createdAt) || 0,
+      reviewCount: 0,
+      taskId: task.id,
+      definitionId: task.contextId || null,
+      latestExecution: { status: task.status, lastError: task.error || null },
+      failureReason: task.error || null,
+    })),
+    ...workItems
+      .filter((item) => item.type === 'review' || item.type === 'automation' || item.type === 'background-run')
+      .map((item) => ({
+        id: `work:${item.id}`,
+        source: 'collaboration',
+        sourceLabel: '工作项',
+        sourceId: item.id,
+        title: item.title,
+        summary: item.summary || item.description || '',
+        status: item.effectiveStatus === 'ready' ? 'queued' : item.effectiveStatus === 'blocked' ? 'blocked' : statusForTask(item.status),
+        owner: String(item.metadata?.owner || '本地工作区'),
+        sessionTitle: item.refs.sessionIds[0] || '-',
+        priorityLabel: `P${item.priority}`,
+        progress: item.status === 'done' ? 100 : item.status === 'active' ? 50 : 0,
+        artifactCount: item.refs.filePaths.length,
+        updatedAt: Date.parse(item.updatedAt) || 0,
+        createdAt: Date.parse(item.createdAt) || 0,
+        reviewCount: item.type === 'review' ? 1 : 0,
+        taskId: item.refs.taskIds[0] || null,
+        definitionId: null,
+        latestExecution: null,
+      })),
+  ];
+  items.sort((left, right) => {
+    const rank = (status: string) => ({ review: 0, blocked: 1, running: 2, queued: 3, failed: 4, paused: 5, completed: 6 }[status] ?? 9);
+    return rank(left.status) - rank(right.status) || right.updatedAt - left.updatedAt;
+  });
+  return { success: true, items: items.slice(0, limit), count: Math.min(items.length, limit) };
+});
+
+// Team Workbench and Approval pages share the historical 2.5.0 collaboration
+// contract. Keep these handlers on the same local durable store so mailbox,
+// task, report, and review-docket mutations have one source of truth.
+ipcMain.handle('team-runtime:list-sessions', async () => (await getTeamRuntimeStoreLazy()).listSessions());
+ipcMain.handle('collab:sessions:list', async () => (await getTeamRuntimeStoreLazy()).listSessions());
+ipcMain.handle('team-runtime:create-session', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).createSession(payload || {}));
+ipcMain.handle('collab:sessions:create', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).createSession(payload || {}));
+ipcMain.handle('team-runtime:guide-create', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).createSession({ ...(payload || {}), source: 'team-guide' }));
+ipcMain.handle('team-runtime:get-session', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).getSession(payload || {}));
+ipcMain.handle('collab:sessions:get', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).getSession(payload || {}));
+ipcMain.handle('team-runtime:list-members', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).listMembers(payload || {}));
+ipcMain.handle('team-runtime:add-member', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).addMember(payload || {}));
+ipcMain.handle('collab:members:add', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).addMember(payload || {}));
+ipcMain.handle('team-runtime:set-session-coordinator', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).setSessionCoordinator(payload || {}));
+ipcMain.handle('team-runtime:rename-member', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).renameMember(payload || {}));
+ipcMain.handle('team-runtime:shutdown-member', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).shutdownMember(payload || {}));
+ipcMain.handle('team-runtime:list-tasks', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).listTasks(payload || {}));
+ipcMain.handle('team-runtime:create-task', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).createTask(payload || {}));
+ipcMain.handle('collab:tasks:create', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).createTask(payload || {}));
+ipcMain.handle('team-runtime:update-task', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).updateTask(payload || {}));
+ipcMain.handle('collab:tasks:update', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).updateTask(payload || {}));
+
+for (const [channel, transition] of [
+  ['team-runtime:claim-task', 'claim'],
+  ['team-runtime:start-task', 'start'],
+  ['team-runtime:wait-review-task', 'wait-review'],
+  ['team-runtime:complete-task', 'complete'],
+  ['team-runtime:fail-task', 'fail'],
+  ['team-runtime:cancel-task', 'cancel'],
+] as const) {
+  ipcMain.handle(channel, async (_, payload?: Record<string, unknown>) =>
+    (await getTeamRuntimeStoreLazy()).transitionTask(payload || {}, transition));
+}
+ipcMain.handle('team-runtime:pin-task-session', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).pinTaskSession(payload || {}));
+ipcMain.handle('team-runtime:retry-task', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).retryTask(payload || {}));
+ipcMain.handle('review:dockets:list', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).listDockets(payload || {}));
+ipcMain.handle('team-runtime:list-review-dockets', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).listDockets(payload || {}));
+ipcMain.handle('review:dockets:get', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).getDocket(payload || {}));
+ipcMain.handle('team-runtime:get-review-docket', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).getDocket(payload || {}));
+ipcMain.handle('review:dockets:stats', async () => (await getTeamRuntimeStoreLazy()).docketStats());
+ipcMain.handle('team-runtime:review-docket-stats', async () => (await getTeamRuntimeStoreLazy()).docketStats());
+ipcMain.handle('review:dockets:create', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).createDocket(payload || {}));
+ipcMain.handle('team-runtime:create-review-docket', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).createDocket(payload || {}));
+ipcMain.handle('review:dockets:decide', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).decideDocket(payload || {}));
+ipcMain.handle('team-runtime:decide-review-docket', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).decideDocket(payload || {}));
+ipcMain.handle('review:dockets:skip', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).archiveDocket(payload || {}, 'skipped'));
+ipcMain.handle('team-runtime:skip-review-docket', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).archiveDocket(payload || {}, 'skipped'));
+ipcMain.handle('review:dockets:archive', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).archiveDocket(payload || {}, 'archived'));
+ipcMain.handle('team-runtime:archive-review-docket', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).archiveDocket(payload || {}, 'archived'));
+ipcMain.handle('team-runtime:list-messages', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).listMessages(payload || {}));
+ipcMain.handle('team-runtime:read-mailbox', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).listMessages(payload || {}, true));
+ipcMain.handle('team-runtime:send-message', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).sendMessage(payload || {}));
+ipcMain.handle('collab:mailbox:post', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).sendMessage(payload || {}));
+ipcMain.handle('team-runtime:request-report', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).requestReport(payload || {}));
+ipcMain.handle('team-runtime:list-reports', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).listReports(payload || {}));
+ipcMain.handle('team-runtime:submit-report', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).submitReport(payload || {}));
+ipcMain.handle('collab:reports:submit', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).submitReport(payload || {}));
+ipcMain.handle('team-runtime:pause-session', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).updateSessionStatus(payload || {}, 'paused'));
+ipcMain.handle('team-runtime:resume-session', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).updateSessionStatus(payload || {}, 'active'));
+ipcMain.handle('team-runtime:archive-session', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).updateSessionStatus(payload || {}, 'archived'));
+ipcMain.handle('team-runtime:tick-reports', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).tickReports(payload || {}));
+ipcMain.handle('team-runtime:list-agent-backends', async () => (await getTeamRuntimeStoreLazy()).listAgentBackends());
+ipcMain.handle('team-runtime:list-tools', async () => (await getTeamRuntimeStoreLazy()).listTools());
+ipcMain.handle('team-runtime:execute-tool', async (_, payload?: { action?: string; payload?: Record<string, unknown> }) =>
+  (await getTeamRuntimeStoreLazy()).executeTool(payload || {}));
+ipcMain.handle('team-runtime:run-external-member', async (_, payload?: Record<string, unknown>) =>
+  (await getTeamRuntimeStoreLazy()).runExternalMember(payload || {}));
+ipcMain.handle('team-runtime:mcp-contract', async () => ({
+  transport: 'embedded',
+  backend: 'pi-agent-core',
+  tools: await (await getTeamRuntimeStoreLazy()).listTools(),
+}));
+
 ipcMain.handle('runtime:resume', (_event, payload?: { sessionId?: string }) => {
   const sessionId = String(payload?.sessionId || '').trim();
   if (!sessionId) return null;
@@ -2639,7 +3102,15 @@ ipcMain.handle('runtime:fork-session', (_event, payload?: { sessionId?: string; 
   };
 });
 
-ipcMain.handle('runtime:query', async (event, payload?: { sessionId?: string; message?: string }) => {
+ipcMain.handle('runtime:query', async (event, payload?: {
+  sessionId?: string;
+  message?: string;
+  modelConfig?: {
+    apiKey?: string;
+    baseURL?: string;
+    modelName?: string;
+  };
+}) => {
   const message = String(payload?.message || '').trim();
   if (!message) {
     return { success: false, error: 'message is required' };
@@ -2657,7 +3128,7 @@ ipcMain.handle('runtime:query', async (event, payload?: { sessionId?: string; me
     content: message,
   });
   const service = await getOrCreateChatService(sessionId, event.sender);
-  await service.sendMessage(message, sessionId);
+  await service.sendMessage(message, sessionId, payload?.modelConfig);
   return {
     success: true,
     sessionId,
@@ -3542,6 +4013,44 @@ ipcMain.handle('background-tasks:cancel', async (_, payload?: { taskId?: string 
   return (await getBackgroundTaskRegistryLazy()).cancelTask(String(payload?.taskId || ''));
 });
 
+ipcMain.handle('background-tasks:retry', async (_, payload?: { taskId?: string }) => {
+  const taskId = String(payload?.taskId || '').trim();
+  const registry = await getBackgroundTaskRegistryLazy();
+  const task = await registry.getTask(taskId);
+  if (!task) return { success: false, error: '后台任务不存在' };
+  if (task.status === 'running') return { success: false, error: '后台任务仍在运行' };
+  try {
+    const contextId = String(task.contextId || '').trim();
+    if (task.kind === 'redclaw-project') {
+      await (await getRedClawBackgroundRunnerLazy()).runNow(contextId || undefined);
+    } else if (task.kind === 'scheduled-task') {
+      if (!contextId) throw new Error('定时任务缺少 definition id');
+      await (await getRedClawBackgroundRunnerLazy()).runScheduledTaskNow(contextId);
+    } else if (task.kind === 'long-cycle') {
+      if (!contextId) throw new Error('长周期任务缺少 definition id');
+      await (await getRedClawBackgroundRunnerLazy()).runLongCycleTaskNow(contextId);
+    } else if (task.kind === 'memory-maintenance') {
+      await (await getMemoryMaintenanceServiceLazy()).runNow();
+    } else {
+      return { success: false, error: `后台任务类型 ${task.kind} 没有可恢复的定义` };
+    }
+    return { success: true, executionId: task.id, definitionId: contextId || task.id };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('background-tasks:archive', async (_, payload?: { taskId?: string }) => {
+  const taskId = String(payload?.taskId || '').trim();
+  try {
+    const task = await (await getBackgroundTaskRegistryLazy()).archiveTask(taskId);
+    if (!task) return { success: false, error: '后台任务不存在' };
+    return { success: true, executionId: task.id, archivedAt: task.archivedAt };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
 ipcMain.handle('background-workers:get-pool-state', async () => {
   return (await getHeadlessWorkerProcessManagerLazy()).getPoolSnapshot();
 });
@@ -3752,6 +4261,61 @@ ipcMain.handle('memory:update', async (_, { id, updates }) => {
 ipcMain.handle('mcp:list', async () => {
   return { success: true, servers: getMcpServers() };
 });
+
+ipcMain.handle('mcp:get', async (_, payload?: { serverId?: string }) => {
+  const serverId = String(payload?.serverId || '').trim();
+  const server = getMcpServers().find((item) => item.id === serverId) || null;
+  return server
+    ? { success: true, server }
+    : { success: false, server: null, error: 'MCP server not found' };
+});
+
+ipcMain.handle('mcp:add', async (_, payload?: Partial<McpServerConfig> & { name?: string }) => {
+  try {
+    const name = String(payload?.name || '').trim();
+    if (!name) return { success: false, error: 'name is required', servers: getMcpServers() };
+    const server = {
+      ...(payload || {}),
+      id: String(payload?.id || name).trim(),
+      name,
+      enabled: payload?.enabled !== false,
+    } as McpServerConfig;
+    const servers = saveMcpServers([
+      ...getMcpServers().filter((item) => item.id !== server.id),
+      server,
+    ]);
+    return { success: true, server: servers.find((item) => item.id === server.id) || null, servers };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error), servers: getMcpServers() };
+  }
+});
+
+ipcMain.handle('mcp:remove', async (_, payload?: { serverId?: string }) => {
+  try {
+    const serverId = String(payload?.serverId || '').trim();
+    const current = getMcpServers();
+    const servers = saveMcpServers(current.filter((item) => item.id !== serverId));
+    return { success: true, serverId, removed: current.length !== servers.length, servers };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error), servers: getMcpServers() };
+  }
+});
+
+for (const [channel, enabled] of [['mcp:enable', true], ['mcp:disable', false]] as const) {
+  ipcMain.handle(channel, async (_, payload?: { serverId?: string }) => {
+    try {
+      const serverId = String(payload?.serverId || '').trim();
+      const current = getMcpServers();
+      if (!current.some((item) => item.id === serverId)) {
+        return { success: false, error: 'MCP server not found', servers: current };
+      }
+      const servers = saveMcpServers(current.map((item) => item.id === serverId ? { ...item, enabled } : item));
+      return { success: true, server: servers.find((item) => item.id === serverId) || null, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error), servers: getMcpServers() };
+    }
+  });
+}
 
 ipcMain.handle('mcp:save', async (_, payload: { servers?: McpServerConfig[] }) => {
   try {
@@ -4379,6 +4943,45 @@ ipcMain.handle('redclaw:profile:onboarding-turn', async (_, payload?: { input?: 
   }
 });
 
+ipcMain.handle('redclaw:profile:start-style-definition', async (_, payload?: { forceRestart?: boolean }) => {
+  try {
+    const state = await startRedClawStyleDefinition(Boolean(payload?.forceRestart));
+    return { success: true, state };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('redclaw:profile:save-initialization-progress', async (_, payload?: {
+  stepIndex?: number;
+  answers?: Record<string, unknown>;
+}) => {
+  try {
+    const state = await saveRedClawInitializationProgress(Number(payload?.stepIndex || 0), payload?.answers || {});
+    return { success: true, state };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('redclaw:profile:complete-initialization', async (_, payload?: { answers?: Record<string, unknown> }) => {
+  try {
+    const state = await completeRedClawInitialization(payload?.answers || {});
+    return { success: true, completed: true, state };
+  } catch (error) {
+    return { success: false, completed: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('redclaw:profile:complete-style-definition', async (_, payload?: Record<string, unknown>) => {
+  try {
+    const bundle = await completeRedClawStyleDefinition(payload || {});
+    return { success: true, completed: true, bundle };
+  } catch (error) {
+    return { success: false, completed: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
 ipcMain.handle('redclaw:get-project', async (_, { projectId }: { projectId: string }) => {
   try {
     if (!projectId) {
@@ -4580,6 +5183,20 @@ ipcMain.handle('redclaw:runner-run-long-cycle-now', async (_, payload: { taskId:
     return { success: false, error: String(error) };
   }
 });
+
+ipcMain.handle('redclaw:task-preview', async (_, payload?: Record<string, unknown>) =>
+  previewRedClawTask(payload || {}));
+ipcMain.handle('redclaw:task-create', async (_, payload?: Record<string, unknown>) =>
+  createRedClawTask(payload || {}));
+ipcMain.handle('redclaw:task-confirm', async (_, payload?: Record<string, unknown>) =>
+  confirmRedClawTask(payload || {}));
+ipcMain.handle('redclaw:task-update', async (_, payload?: Record<string, unknown>) =>
+  updateRedClawTask(payload || {}));
+ipcMain.handle('redclaw:task-cancel', async (_, payload?: Record<string, unknown>) =>
+  cancelRedClawTask(payload || {}));
+ipcMain.handle('redclaw:task-list', async (_, payload?: Record<string, unknown>) =>
+  listRedClawTasks(payload || {}));
+ipcMain.handle('redclaw:task-stats', async () => redClawTaskStats());
 
 ipcMain.handle('media:list', async (_, payload: { limit?: number; cursor?: string | number | null } = {}) => {
   try {
@@ -5594,6 +6211,179 @@ ipcMain.handle('cover:generate', async (_, {
     console.error('Failed to generate cover assets:', error);
     return { success: false, error: String(error) };
   }
+});
+
+// Historical 2.5.0 media pages use a durable generation job projection rather
+// than waiting on the provider request directly. Keep the legacy synchronous
+// channels below for older callers, but route the 2.5.0 surface through the
+// local Electron job registry.
+// Recording itself stays in the renderer so it works on macOS, Windows and Linux
+// without a second native audio stack. These host handlers make the contract
+// explicit and let the renderer choose its MediaRecorder fallback deterministically.
+ipcMain.handle('audio:get-capture-capability', async () => ({
+  success: false,
+  available: false,
+  activeRecording: false,
+  platform: process.platform,
+  reason: 'renderer_fallback',
+  strategy: 'renderer-media-recorder',
+}));
+
+ipcMain.handle('audio:start-recording', async () => ({
+  success: false,
+  reason: 'renderer_fallback',
+  error: '录音由 renderer MediaRecorder 承担',
+}));
+
+ipcMain.handle('audio:stop-recording', async () => ({
+  success: false,
+  reason: 'renderer_fallback',
+  error: '录音由 renderer MediaRecorder 承担',
+}));
+
+ipcMain.handle('audio:cancel-recording', async () => ({
+  success: false,
+  reason: 'renderer_fallback',
+  error: '录音由 renderer MediaRecorder 承担',
+}));
+
+ipcMain.handle('audio:open-microphone-settings', async () => {
+  const target = process.platform === 'darwin'
+    ? 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
+    : process.platform === 'win32'
+      ? 'ms-settings:privacy-microphone'
+      : '';
+  if (!target) {
+    return { success: false, error: '请在系统设置中手动开启麦克风权限' };
+  }
+  try {
+    await shell.openExternal(target);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('generation:submit-image', async (_, payload?: Record<string, unknown>) => {
+  try {
+    return await (await getMediaGenerationJobRegistryLazy()).submit('image', payload || {});
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('generation:submit-video', async (_, payload?: Record<string, unknown>) => {
+  try {
+    return await (await getMediaGenerationJobRegistryLazy()).submit('video', payload || {});
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('generation:submit-audio', async (_, payload?: Record<string, unknown>) => {
+  try {
+    return await (await getMediaGenerationJobRegistryLazy()).submit('audio', payload || {});
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('generation:submit-voice-clone', async (_, payload?: Record<string, unknown>) => {
+  try {
+    return await (await getMediaGenerationJobRegistryLazy()).submit('voice_clone', payload || {});
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('generation:upload-temp-file', async (_, payload?: Record<string, unknown>) => {
+  try {
+    const module = await import('./core/mediaGenerationJobRegistry');
+    return await module.stageGenerationTempFile(payload || {});
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('generation:prepare-video-retalk-source', async (_, payload?: Record<string, unknown>) => {
+  try {
+    const module = await import('./core/mediaGenerationJobRegistry');
+    return await module.prepareVideoRetalkSource(payload || {});
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('generation:list-job-summaries', async (_, payload?: Record<string, unknown>) => {
+  return (await getMediaGenerationJobRegistryLazy()).listJobSummaries(payload || {});
+});
+
+ipcMain.handle('generation:list-jobs', async (_, payload?: Record<string, unknown>) => {
+  return (await getMediaGenerationJobRegistryLazy()).listJobs(payload || {});
+});
+
+ipcMain.handle('generation:get-job', async (_, payload?: { jobId?: string }) => {
+  return (await getMediaGenerationJobRegistryLazy()).getJob(String(payload?.jobId || '').trim());
+});
+
+ipcMain.handle('generation:get-job-artifacts', async (_, payload?: { jobId?: string }) => {
+  return (await getMediaGenerationJobRegistryLazy()).getJobArtifacts(String(payload?.jobId || '').trim());
+});
+
+ipcMain.handle('generation:await-job', async (_, payload?: { jobId?: string; timeoutMs?: number }) => {
+  return (await getMediaGenerationJobRegistryLazy()).awaitJob(
+    String(payload?.jobId || '').trim(),
+    Number(payload?.timeoutMs || 600_000),
+  );
+});
+
+ipcMain.handle('generation:cancel-job', async (_, payload?: { jobId?: string }) => {
+  return (await getMediaGenerationJobRegistryLazy()).cancelJob(String(payload?.jobId || '').trim());
+});
+
+ipcMain.handle('generation:delete-job', async (_, payload?: { jobId?: string }) => {
+  return (await getMediaGenerationJobRegistryLazy()).deleteJob(String(payload?.jobId || '').trim());
+});
+
+ipcMain.handle('generation:retry-job', async (_, payload?: { jobId?: string }) => {
+  return (await getMediaGenerationJobRegistryLazy()).retryJob(String(payload?.jobId || '').trim());
+});
+
+ipcMain.handle('generation:get-runtime-status', async () => {
+  return (await getMediaGenerationJobRegistryLazy()).getRuntimeStatus();
+});
+
+ipcMain.handle('voice:list', async (_, payload?: Record<string, unknown>) => {
+  const module = await import('./core/mediaGenerationJobRegistry');
+  return module.listVoices(payload || {});
+});
+
+ipcMain.handle('voice:get', async (_, payload?: Record<string, unknown>) => {
+  const module = await import('./core/mediaGenerationJobRegistry');
+  return module.getVoice(payload || {});
+});
+
+ipcMain.handle('voice:clone', async (_, payload?: Record<string, unknown>) => {
+  try {
+    return await (await getMediaGenerationJobRegistryLazy()).submit('voice_clone', payload || {});
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('voice:speech', async (_, payload?: Record<string, unknown>) => {
+  const module = await import('./core/mediaGenerationJobRegistry');
+  return module.synthesizeVoiceSpeech(payload || {});
+});
+
+ipcMain.handle('voice:delete', async (_, payload?: Record<string, unknown>) => {
+  const module = await import('./core/mediaGenerationJobRegistry');
+  return module.deleteVoice(payload || {});
+});
+
+ipcMain.handle('voice:bind-asset', async (_, payload?: Record<string, unknown>) => {
+  const module = await import('./core/mediaGenerationJobRegistry');
+  return module.bindVoiceAsset(payload || {});
 });
 
 ipcMain.handle('image-gen:generate', async (_, {
@@ -10998,6 +11788,75 @@ ipcMain.handle('knowledge:delete-batch', async (_, payload?: { items?: Knowledge
     deleted,
     failed,
     results,
+  };
+});
+
+ipcMain.handle('knowledge:batch-ingest', async (_, payload?: {
+  entries?: KnowledgeEntryPayload[];
+  documentSources?: Array<Partial<DocumentSourceRecord> & { rootPath?: string; name?: string }>;
+  mediaAssets?: Array<{ title?: string; source?: string }>;
+}) => {
+  const entryResults: Array<Record<string, unknown>> = [];
+  for (const entry of Array.isArray(payload?.entries) ? payload.entries : []) {
+    const result = await persistKnowledgeEntry(entry);
+    entryResults.push(result as Record<string, unknown>);
+  }
+
+  let documentSourceCount = 0;
+  if (Array.isArray(payload?.documentSources) && payload.documentSources.length > 0) {
+    const workspacePaths = getWorkspacePaths();
+    const currentSources = await loadDocumentSources(workspacePaths);
+    const byRoot = new Map(currentSources.map((source) => [path.resolve(source.rootPath), source]));
+    for (const input of payload.documentSources) {
+      const rootPath = String(input?.rootPath || '').trim();
+      if (!rootPath) continue;
+      const normalizedRoot = path.resolve(path.normalize(rootPath));
+      const stat = await fs.stat(normalizedRoot).catch(() => null);
+      if (!stat || (!stat.isFile() && !stat.isDirectory())) continue;
+      const existing = byRoot.get(normalizedRoot);
+      const timestamp = new Date().toISOString();
+      const source: DocumentSourceRecord = {
+        id: String(input?.id || existing?.id || createDocumentSourceId()).trim(),
+        kind: input?.kind === 'obsidian-vault' || input?.kind === 'tracked-folder' ? input.kind : 'copied-file',
+        name: String(input?.name || existing?.name || path.basename(normalizedRoot)).trim() || path.basename(normalizedRoot),
+        rootPath: normalizedRoot,
+        locked: input?.kind === 'obsidian-vault' || Boolean(input?.locked),
+        indexing: false,
+        indexError: undefined,
+        indexedAt: existing?.indexedAt,
+        createdAt: existing?.createdAt || timestamp,
+        updatedAt: timestamp,
+      };
+      byRoot.set(normalizedRoot, source);
+      documentSourceCount += 1;
+    }
+    const nextSources = Array.from(byRoot.values());
+    await saveDocumentSources(workspacePaths, nextSources);
+    await indexDocumentSources(nextSources);
+    win?.webContents.send('knowledge:docs-updated');
+  }
+
+  let mediaAssetCount = 0;
+  const mediaItems = Array.isArray(payload?.mediaAssets)
+    ? payload.mediaAssets.map((item) => ({
+        title: String(item?.title || '').trim() || undefined,
+        source: String(item?.source || '').trim(),
+      })).filter((item) => item.source)
+    : [];
+  if (mediaItems.length > 0) {
+    const imported = await importMediaSources(mediaItems);
+    mediaAssetCount = imported.length;
+    emitRendererDataChanged('media', { action: 'batch-ingest', count: mediaAssetCount });
+  }
+
+  const failedEntries = entryResults.filter((result) => result.success !== true);
+  return {
+    success: failedEntries.length === 0,
+    count: entryResults.filter((result) => result.success === true).length,
+    entries: entryResults,
+    documentSources: documentSourceCount,
+    mediaAssets: mediaAssetCount,
+    error: failedEntries.length > 0 ? '部分知识条目入库失败' : undefined,
   };
 });
 

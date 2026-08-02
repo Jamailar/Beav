@@ -1,7 +1,8 @@
+import { getCurrentWindow, type DragDropEvent } from '@tauri-apps/api/window';
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
 import type { ChatComposerHandle, UploadedFileAttachment } from '../../components/ChatComposer';
-import { clearAttachmentDraft, loadAttachmentDrafts, saveAttachmentDrafts } from '../../features/chat/attachmentDraftStore';
+import { clearAttachmentDraft, loadAttachmentDraft, saveAttachmentDraft } from '../../features/chat/attachmentDraftStore';
 import { resolveAssetUrl } from '../../utils/pathManager';
 
 function logVideoThumbnailDebug(event: string, fields: Record<string, unknown>) {
@@ -35,9 +36,10 @@ function droppedFiles(fileList: FileList | null | undefined): File[] {
   return Array.from(fileList).filter((file) => file && file.name);
 }
 
-function filePathFromElectronFile(file: File): string {
-  const value = (file as File & { path?: unknown }).path;
-  return typeof value === 'string' ? value.trim() : '';
+function droppedPaths(paths: string[] | null | undefined): string[] {
+  return Array.from(new Set((paths || [])
+    .map((path) => String(path || '').trim())
+    .filter(Boolean)));
 }
 
 function pickFilesFromBrowserInput(): Promise<File[]> {
@@ -90,6 +92,15 @@ function pickFilesFromBrowserInput(): Promise<File[]> {
   });
 }
 
+function isTauriRuntime(): boolean {
+  if (typeof window === 'undefined') return false;
+  const tauriWindow = window as unknown as {
+    __TAURI__?: unknown;
+    __TAURI_INTERNALS__?: unknown;
+  };
+  return Boolean(tauriWindow.__TAURI_INTERNALS__ || tauriWindow.__TAURI__);
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -129,7 +140,7 @@ function attachmentIdentity(attachment: UploadedFileAttachment): string {
     || attachment.absolutePath
     || attachment.originalAbsolutePath
     || attachment.inlineDataUrl
-    || attachment.name,
+    || attachment.name
   ).trim();
 }
 
@@ -265,6 +276,7 @@ async function withVideoThumbnail(
         backendSource,
         error: error instanceof Error ? error.message : String(error),
       });
+      // Browser-based extraction below is only a preview fallback.
     }
   }
   const thumbnailDataUrl = await createVideoThumbnailDataUrl(source.startsWith('blob:') || source.startsWith('data:') ? source : resolveAssetUrl(source));
@@ -344,12 +356,13 @@ export function useChatAttachments({
       setPendingAttachments([]);
       return;
     }
-    setPendingAttachments(loadAttachmentDrafts('chat', attachmentDraftScopeId));
+    const draft = loadAttachmentDraft('chat', attachmentDraftScopeId);
+    setPendingAttachments(draft ? [draft] : []);
   }, [attachmentDraftScopeId]);
 
   useEffect(() => {
     if (!isPersistentAttachmentDraftScope(attachmentDraftScopeId)) return;
-    saveAttachmentDrafts('chat', attachmentDraftScopeId, pendingAttachments);
+    saveAttachmentDraft('chat', attachmentDraftScopeId, pendingAttachments[0] || null);
   }, [attachmentDraftScopeId, pendingAttachments]);
 
   useEffect(() => {
@@ -392,49 +405,8 @@ export function useChatAttachments({
     });
   }, [currentSessionId, pendingAttachments]);
 
-  const attachFilePath = useCallback(async (path: string) => {
-    if (!allowFileUpload || isProcessing) return;
-    const normalizedPath = String(path || '').trim();
-    if (!normalizedPath) return;
-    setIsAttachmentUploading(true);
-    setErrorNotice(null);
-    try {
-      const result = await window.ipcRenderer.chat.createPathAttachment({
-        path: normalizedPath,
-        sessionId: currentSessionId || undefined,
-      }) as { success?: boolean; error?: string; attachment?: UploadedFileAttachment };
-      logVideoThumbnailDebug('attachment.path.result', {
-        path: normalizedPath,
-        success: result?.success,
-        error: result?.error,
-        attachment: result?.attachment,
-      });
-      if (!result?.success || !result.attachment) {
-        throw new Error(result?.error || '上传文件失败');
-      }
-      const attachmentWithThumbnail = await withVideoThumbnail(result.attachment, undefined, currentSessionId);
-      logVideoThumbnailDebug('attachment.path.append', {
-        name: attachmentWithThumbnail.name,
-        hasThumbnailDataUrl: Boolean(attachmentWithThumbnail.thumbnailDataUrl),
-        thumbnailDataUrl: attachmentWithThumbnail.thumbnailDataUrl,
-        thumbnailUrl: attachmentWithThumbnail.thumbnailUrl,
-      });
-      appendPendingAttachment(attachmentWithThumbnail);
-      focusComposer();
-    } catch (error) {
-      setErrorNotice(error instanceof Error ? error.message : String(error || '上传文件失败'));
-    } finally {
-      setIsAttachmentUploading(false);
-    }
-  }, [allowFileUpload, appendPendingAttachment, currentSessionId, focusComposer, isProcessing, setErrorNotice]);
-
   const attachFile = useCallback(async (file: File) => {
     if (!allowFileUpload || isProcessing) return;
-    const electronPath = filePathFromElectronFile(file);
-    if (electronPath) {
-      await attachFilePath(electronPath);
-      return;
-    }
     setIsAttachmentUploading(true);
     setErrorNotice(null);
     try {
@@ -478,7 +450,7 @@ export function useChatAttachments({
     } finally {
       setIsAttachmentUploading(false);
     }
-  }, [allowFileUpload, appendPendingAttachment, attachFilePath, currentSessionId, focusComposer, isProcessing, setErrorNotice]);
+  }, [allowFileUpload, appendPendingAttachment, currentSessionId, focusComposer, isProcessing, setErrorNotice]);
 
   const attachFiles = useCallback(async (files: File[]) => {
     if (!allowFileUpload || isProcessing || files.length === 0) return;
@@ -487,61 +459,148 @@ export function useChatAttachments({
     }
   }, [allowFileUpload, attachFile, isProcessing]);
 
+  const attachFilePath = useCallback(async (path: string) => {
+    if (!allowFileUpload || isProcessing) return;
+    const normalizedPath = String(path || '').trim();
+    if (!normalizedPath) return;
+    setIsAttachmentUploading(true);
+    setErrorNotice(null);
+    try {
+      const result = await window.ipcRenderer.chat.createPathAttachment({
+        path: normalizedPath,
+        sessionId: currentSessionId || undefined,
+      }) as { success?: boolean; error?: string; attachment?: UploadedFileAttachment };
+      logVideoThumbnailDebug('attachment.path.result', {
+        path: normalizedPath,
+        success: result?.success,
+        error: result?.error,
+        attachment: result?.attachment,
+      });
+      if (!result?.success || !result.attachment) {
+        throw new Error(result?.error || '上传文件失败');
+      }
+      const attachmentWithThumbnail = await withVideoThumbnail(result.attachment, undefined, currentSessionId);
+      logVideoThumbnailDebug('attachment.path.append', {
+        name: attachmentWithThumbnail.name,
+        hasThumbnailDataUrl: Boolean(attachmentWithThumbnail.thumbnailDataUrl),
+        thumbnailDataUrl: attachmentWithThumbnail.thumbnailDataUrl,
+        thumbnailUrl: attachmentWithThumbnail.thumbnailUrl,
+      });
+      appendPendingAttachment(attachmentWithThumbnail);
+      focusComposer();
+    } catch (error) {
+      setErrorNotice(error instanceof Error ? error.message : String(error || '上传文件失败'));
+    } finally {
+      setIsAttachmentUploading(false);
+    }
+  }, [allowFileUpload, appendPendingAttachment, currentSessionId, focusComposer, isProcessing, setErrorNotice]);
+
   const handleDroppedFiles = useCallback((files: FileList | null | undefined) => {
     const items = droppedFiles(files);
     if (!items.length) return;
     void attachFiles(items);
   }, [attachFiles]);
 
+  const handleDroppedPaths = useCallback((paths: string[] | null | undefined) => {
+    const items = droppedPaths(paths);
+    if (!items.length) return;
+    void (async () => {
+      for (const path of items) {
+        await attachFilePath(path);
+      }
+    })();
+  }, [attachFilePath]);
+
+  useEffect(() => {
+    if (!allowFileUpload || !isActive) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    getCurrentWindow().onDragDropEvent((event) => {
+      if (disposed || isProcessing) return;
+      const payload = event.payload as DragDropEvent;
+      if (payload.type === 'enter' || payload.type === 'over') {
+        setIsFileDragActive(true);
+        return;
+      }
+      if (payload.type === 'drop') {
+        fileDragDepthRef.current = 0;
+        setIsFileDragActive(false);
+        handleDroppedPaths(payload.paths);
+        return;
+      }
+      if (payload.type === 'leave') {
+        fileDragDepthRef.current = 0;
+        setIsFileDragActive(false);
+      }
+    }).then((dispose) => {
+      if (disposed) {
+        dispose();
+      } else {
+        unlisten = dispose;
+      }
+    }).catch(() => {
+      // Browser preview builds keep the HTML5 drag handlers below.
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [allowFileUpload, handleDroppedPaths, isActive, isProcessing]);
+
   const handleFileDragEnter = useCallback((event: React.DragEvent<HTMLDivElement>) => {
-    if (!isActive || !allowFileUpload || isProcessing || !dragEventHasFiles(event)) return;
+    if (!allowFileUpload || isProcessing || !dragEventHasFiles(event)) return;
     event.preventDefault();
     event.stopPropagation();
     fileDragDepthRef.current += 1;
     setIsFileDragActive(true);
-  }, [allowFileUpload, isActive, isProcessing]);
+  }, [allowFileUpload, isProcessing]);
 
   const handleFileDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
-    if (!isActive || !allowFileUpload || isProcessing || !dragEventHasFiles(event)) return;
+    if (!allowFileUpload || isProcessing || !dragEventHasFiles(event)) return;
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = 'copy';
     setIsFileDragActive(true);
-  }, [allowFileUpload, isActive, isProcessing]);
+  }, [allowFileUpload, isProcessing]);
 
   const handleFileDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
-    if (!isActive || !allowFileUpload || !dragEventHasFiles(event)) return;
+    if (!allowFileUpload || !dragEventHasFiles(event)) return;
     event.preventDefault();
     event.stopPropagation();
     fileDragDepthRef.current = Math.max(0, fileDragDepthRef.current - 1);
     if (fileDragDepthRef.current === 0) {
       setIsFileDragActive(false);
     }
-  }, [allowFileUpload, isActive]);
+  }, [allowFileUpload]);
 
   const handleFileDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
-    if (!isActive || !allowFileUpload || isProcessing || !dragEventHasFiles(event)) return;
+    if (!allowFileUpload || isProcessing || !dragEventHasFiles(event)) return;
     event.preventDefault();
     event.stopPropagation();
     fileDragDepthRef.current = 0;
     setIsFileDragActive(false);
+    if (isTauriRuntime()) {
+      return;
+    }
     handleDroppedFiles(event.dataTransfer.files);
-  }, [allowFileUpload, handleDroppedFiles, isActive, isProcessing]);
+  }, [allowFileUpload, handleDroppedFiles, isProcessing]);
 
   const pickAttachment = useCallback(async () => {
-    if (!allowFileUpload || isProcessing) return;
-    setErrorNotice(null);
+    if (isProcessing) return;
+    if (!allowFileUpload) return;
     try {
       const pickedFiles = await pickFilesFromBrowserInput();
-      if (pickedFiles.length > 0) {
-        await attachFiles(pickedFiles);
-        return;
-      }
-    } catch {
-      // Fall back to the Electron native picker below.
+      if (pickedFiles.length === 0) return;
+      await attachFiles(pickedFiles);
+      return;
+    } catch (error) {
+      setErrorNotice(error instanceof Error ? error.message : String(error || '选择文件失败'));
     }
 
     setIsAttachmentUploading(true);
+    setErrorNotice(null);
     try {
       const result = await window.ipcRenderer.chat.pickAttachment({
         sessionId: currentSessionId || undefined,
@@ -552,7 +611,8 @@ export function useChatAttachments({
       }
       if (result.canceled) return;
       if (result.attachment) {
-        appendPendingAttachment(await withVideoThumbnail(result.attachment, undefined, currentSessionId));
+        setErrorNotice(null);
+        appendPendingAttachment(await withVideoThumbnail(result.attachment));
         focusComposer();
       }
     } catch (error) {

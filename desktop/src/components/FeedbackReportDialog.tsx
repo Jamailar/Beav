@@ -72,9 +72,9 @@ export function FeedbackReportDialog({
         contact: contact.trim(),
         category: 'desktop_bug',
         priority,
-        source: 'desktop-electron',
+        source: 'desktop',
         includeAdvancedContext,
-        uploadNow: false,
+        uploadNow: true,
         context: {
           window: sourcePage,
           sessionId: contextValue(context, 'sessionId'),
@@ -88,7 +88,11 @@ export function FeedbackReportDialog({
       }
       onClose();
       onSubmitted?.();
-      await appAlert('问题已保存到待发送诊断报告，可在设置的诊断日志中导出。');
+      if (result.uploaded) {
+        await appAlert('问题已提交。');
+      } else {
+        await appAlert(result.error ? `已保存待发送报告：${result.error}` : '已保存待发送报告。');
+      }
     } catch (error) {
       void appAlert(error instanceof Error ? error.message : '提交失败');
     } finally {
@@ -176,7 +180,7 @@ export function FeedbackReportDialog({
             附带高级诊断数据
           </label>
           <div className="rounded-md border border-border bg-surface-secondary/25 px-3 py-2 text-[11px] leading-5 text-text-tertiary">
-            Electron 开源版会在本机保存反馈和最近日志，不会自动上传。
+            会自动附带最近日志并脱敏。
           </div>
         </div>
 
@@ -196,7 +200,7 @@ export function FeedbackReportDialog({
             className="inline-flex items-center gap-2 rounded-md bg-accent-primary px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-primary/90 disabled:opacity-60"
           >
             {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            保存反馈
+            提交
           </button>
         </div>
       </div>

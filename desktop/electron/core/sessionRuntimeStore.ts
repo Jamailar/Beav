@@ -1,10 +1,13 @@
 import { EventEmitter } from 'events';
 import {
+  addRuntimeEvent,
   addSessionCheckpoint,
   addSessionTranscriptRecord,
   cloneChatSession,
   getChatSession,
   getChatSessions,
+  listRuntimeEventSessionIds,
+  listRuntimeEvents,
   listSessionCheckpoints,
   listSessionTranscriptRecords,
 } from '../db';
@@ -20,6 +23,24 @@ const nextId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toSt
 const toPayloadJson = (value: Record<string, unknown> | undefined): string | null => {
   if (!value || !Object.keys(value).length) return null;
   return JSON.stringify(value);
+};
+
+const toRuntimePayloadJson = (value: unknown): string | null => {
+  if (value === undefined) return null;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return JSON.stringify({ error: 'json-stringify-failed' });
+  }
+};
+
+const readJson = (value: string | null | undefined): unknown => {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 };
 
 export class SessionRuntimeStore {
@@ -79,6 +100,59 @@ export class SessionRuntimeStore {
     return payload;
   }
 
+  appendRuntimeEvent(params: {
+    category: string;
+    eventType: string;
+    sessionId?: string | null;
+    runtimeId?: string | null;
+    parentRuntimeId?: string | null;
+    sourceTaskId?: string | null;
+    taskId?: string | null;
+    toolCallId?: string | null;
+    projectId?: string | null;
+    payload?: unknown;
+  }) {
+    const sessionId = String(params.sessionId || '').trim() || null;
+    const session = sessionId ? getChatSession(sessionId) : null;
+    let metadata: Record<string, unknown> = {};
+    if (session?.metadata) {
+      try {
+        metadata = JSON.parse(session.metadata) as Record<string, unknown>;
+      } catch {
+        metadata = {};
+      }
+    }
+    const record = addRuntimeEvent({
+      id: nextId('runtime-event'),
+      category: String(params.category || 'runtime').trim() || 'runtime',
+      event_type: String(params.eventType || 'runtime:event').trim() || 'runtime:event',
+      session_id: sessionId,
+      runtime_id: params.runtimeId ?? (typeof metadata.runtimeId === 'string' ? metadata.runtimeId : null),
+      parent_runtime_id: params.parentRuntimeId ?? (typeof metadata.parentRuntimeId === 'string' ? metadata.parentRuntimeId : null),
+      source_task_id: params.sourceTaskId ?? (typeof metadata.sourceTaskId === 'string' ? metadata.sourceTaskId : null),
+      task_id: params.taskId ?? null,
+      tool_call_id: params.toolCallId ?? null,
+      project_id: params.projectId ?? null,
+      payload_json: toRuntimePayloadJson(params.payload),
+    });
+    const payload = {
+      id: record.id,
+      category: record.category,
+      eventType: record.event_type,
+      sessionId: record.session_id,
+      runtimeId: record.runtime_id,
+      parentRuntimeId: record.parent_runtime_id,
+      sourceTaskId: record.source_task_id,
+      taskId: record.task_id,
+      toolCallId: record.tool_call_id,
+      projectId: record.project_id,
+      payload: readJson(record.payload_json),
+      createdAt: record.created_at,
+    };
+    this.emitter.emit('runtime-event-added', payload);
+    return payload;
+  }
+
   listTranscript(sessionId: string, limit?: number) {
     return listSessionTranscriptRecords(sessionId, limit).map((record) => ({
       id: record.id,
@@ -133,8 +207,37 @@ export class SessionRuntimeStore {
     return this.toolResults.list(sessionId, limit);
   }
 
+  listRuntimeEvents(params: {
+    sessionId: string;
+    includeChildSessions?: boolean;
+    category?: string;
+    eventType?: string;
+    limit?: number;
+  }) {
+    const sessionIds = listRuntimeEventSessionIds(params.sessionId, Boolean(params.includeChildSessions));
+    return listRuntimeEvents({
+      sessionIds,
+      category: params.category,
+      eventType: params.eventType,
+      limit: params.limit,
+    }).map((record) => ({
+      id: record.id,
+      category: record.category,
+      eventType: record.event_type,
+      sessionId: record.session_id,
+      runtimeId: record.runtime_id,
+      parentRuntimeId: record.parent_runtime_id,
+      sourceTaskId: record.source_task_id,
+      taskId: record.task_id,
+      toolCallId: record.tool_call_id,
+      projectId: record.project_id,
+      payload: readJson(record.payload_json),
+      createdAt: record.created_at,
+    }));
+  }
+
   on(
-    event: 'transcript-appended' | 'checkpoint-added',
+    event: 'transcript-appended' | 'checkpoint-added' | 'runtime-event-added',
     listener: (payload: unknown) => void,
   ): () => void {
     this.emitter.on(event, listener);

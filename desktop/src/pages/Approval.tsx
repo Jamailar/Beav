@@ -1,256 +1,336 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Check, Loader2, MessageSquare, ShieldCheck, X } from 'lucide-react';
-import type { SessionBridgePermissionRequest } from '../types';
+import { AlertCircle, Check, Loader2 } from 'lucide-react';
+import type { ReviewDocketRecord } from '../types';
 import { appAlert } from '../utils/appDialogs';
 
-interface ApprovalProps {
-  isActive?: boolean;
-  targetRequestId?: string | null;
-  onOpenRedClawSession?: (sessionId: string) => void;
-}
-
-function formatDateTime(value?: number | string | null): string {
+function formatDateTime(value?: string | number | null): string {
   if (!value) return '-';
   const ts = typeof value === 'number' ? value : Date.parse(value);
   if (!Number.isFinite(ts)) return String(value);
   return new Date(ts).toLocaleString('zh-CN', { hour12: false });
 }
 
-function shortId(value?: string | null): string {
+function shortFingerprint(value?: string | null): string {
   const raw = String(value || '').trim();
   if (!raw) return '-';
   if (raw.length <= 18) return raw;
   return `${raw.slice(0, 8)}...${raw.slice(-8)}`;
 }
 
-function permissionTone(type?: string): string {
-  switch (String(type || '').trim()) {
-    case 'exec':
+function approvalStatusLabel(value?: string | null): string {
+  switch (String(value || '').trim()) {
+    case 'pending':
+      return '待审';
+    case 'approved':
+      return '已批准';
+    case 'rejected':
+      return '已驳回';
+    case 'changes_requested':
+      return '需修改';
+    case 'skipped':
+      return '已跳过';
+    case 'archived':
+      return '已归档';
+    default:
+      return value || '未知';
+  }
+}
+
+function approvalStatusTone(value?: string | null): string {
+  switch (String(value || '').trim()) {
+    case 'approved':
+      return 'bg-status-success/10 text-status-success';
+    case 'rejected':
+      return 'bg-status-error/10 text-status-error';
+    case 'changes_requested':
       return 'bg-status-warning/10 text-status-warning';
-    case 'edit':
-      return 'bg-accent-primary/10 text-accent-primary';
-    default:
+    case 'skipped':
+    case 'archived':
       return 'bg-surface-secondary text-text-tertiary';
-  }
-}
-
-function permissionTypeLabel(type?: string): string {
-  switch (String(type || '').trim()) {
-    case 'exec':
-      return '执行';
-    case 'edit':
-      return '编辑';
-    case 'info':
-      return '读取';
     default:
-      return '权限';
+      return 'bg-accent-primary/10 text-accent-primary';
   }
 }
 
-function previewParams(params: Record<string, unknown>): string {
-  try {
-    const text = JSON.stringify(params, null, 2);
-    return text.length > 1600 ? `${text.slice(0, 1600)}\n...` : text;
-  } catch {
-    return '';
+function approvalPriorityLabel(value?: string | null): string {
+  switch (String(value || '').trim()) {
+    case 'urgent':
+      return '紧急';
+    case 'high':
+      return '高';
+    case 'low':
+      return '低';
+    default:
+      return '普通';
   }
 }
 
-export function Approval({ isActive = true, targetRequestId = '', onOpenRedClawSession }: ApprovalProps) {
-  const [requests, setRequests] = useState<SessionBridgePermissionRequest[]>([]);
+function approvalText(value?: string | null): string {
+  const text = String(value || '').trim();
+  return text || '-';
+}
+
+function optionText(option: unknown, key: 'id' | 'label' | 'description'): string {
+  if (!option || typeof option !== 'object' || Array.isArray(option)) return '';
+  const value = (option as Record<string, unknown>)[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+export function ApprovalPanel({
+  isActive = true,
+  targetDocketId = '',
+}: {
+  isActive?: boolean;
+  targetDocketId?: string | null;
+}) {
+  const [dockets, setDockets] = useState<ReviewDocketRecord[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busyAction, setBusyAction] = useState('');
-  const requestsRef = useRef<SessionBridgePermissionRequest[]>([]);
+  const [comment, setComment] = useState('');
+  const docketsRef = useRef<ReviewDocketRecord[]>([]);
 
   useEffect(() => {
-    requestsRef.current = requests;
-  }, [requests]);
+    docketsRef.current = dockets;
+  }, [dockets]);
 
-  const loadRequests = useCallback(async () => {
-    if (requestsRef.current.length === 0) {
-      setLoading(true);
-    }
+  const loadDockets = useCallback(async () => {
+    if (docketsRef.current.length === 0) setLoading(true);
     setError('');
     try {
-      const next = await window.ipcRenderer.sessionBridge.listPermissions();
-      const pending = (Array.isArray(next) ? next : [])
-        .filter((item) => item.status === 'pending')
-        .sort((left, right) => left.createdAt - right.createdAt);
-      const targetId = String(targetRequestId || '').trim();
-      setRequests(pending);
+      const nextDockets = await window.ipcRenderer.teamRuntime.listReviewDockets({ limit: 80 });
+      const normalized = Array.isArray(nextDockets) ? nextDockets : [];
+      const targetId = String(targetDocketId || '').trim();
+      setDockets(normalized);
       setSelectedId((current) => (
-        targetId && pending.some((item) => item.id === targetId)
+        targetId && normalized.some((item) => item.id === targetId && item.status === 'pending')
           ? targetId
-          : current && pending.some((item) => item.id === current)
+          : current && normalized.some((item) => item.id === current && item.status === 'pending')
             ? current
-            : pending[0]?.id || ''
+            : normalized.find((item) => item.status === 'pending')?.id || normalized[0]?.id || ''
       ));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
       setLoading(false);
     }
-  }, [targetRequestId]);
+  }, [targetDocketId]);
 
   useEffect(() => {
-    const targetId = String(targetRequestId || '').trim();
+    const targetId = String(targetDocketId || '').trim();
     if (targetId) setSelectedId(targetId);
-  }, [targetRequestId]);
+  }, [targetDocketId]);
 
   useEffect(() => {
     if (!isActive) return;
-    void loadRequests();
-    const timer = window.setInterval(() => {
-      void loadRequests();
-    }, 2500);
-    return () => window.clearInterval(timer);
-  }, [isActive, loadRequests]);
+    void loadDockets();
+  }, [isActive, loadDockets]);
 
-  const selectedRequest = useMemo(
-    () => requests.find((item) => item.id === selectedId) || requests[0] || null,
-    [requests, selectedId],
+  useEffect(() => {
+    if (!isActive) return;
+    const listener = (_event: unknown, envelope?: unknown) => {
+      const eventRecord = envelope && typeof envelope === 'object' ? envelope as Record<string, unknown> : {};
+      if (String(eventRecord.eventType || '') !== 'runtime:review-docket-changed') return;
+      void loadDockets();
+    };
+    window.ipcRenderer.teamRuntime.onEvent(listener);
+    return () => window.ipcRenderer.teamRuntime.offEvent(listener);
+  }, [isActive, loadDockets]);
+
+  const pendingDockets = useMemo(
+    () => dockets.filter((item) => item.status === 'pending'),
+    [dockets],
   );
-  const selectedIndex = selectedRequest
-    ? Math.max(0, requests.findIndex((item) => item.id === selectedRequest.id))
-    : -1;
+  const selectedDocket = useMemo(
+    () => pendingDockets.find((item) => item.id === selectedId) || pendingDockets[0] || null,
+    [pendingDockets, selectedId],
+  );
+  const approvalOptions = useMemo(
+    () => (selectedDocket?.options || [])
+      .map((option) => ({
+        id: optionText(option, 'id'),
+        label: optionText(option, 'label') || optionText(option, 'id'),
+        description: optionText(option, 'description'),
+      }))
+      .filter((option) => option.id && option.label),
+    [selectedDocket?.options],
+  );
 
-  const resolve = useCallback(async (outcome: 'proceed_once' | 'proceed_always' | 'cancel') => {
-    if (!selectedRequest || busyAction) return;
-    setBusyAction(outcome);
+  useEffect(() => {
+    setComment('');
+  }, [selectedDocket?.id]);
+
+  const selectedIndex = selectedDocket
+    ? Math.max(0, pendingDockets.findIndex((item) => item.id === selectedDocket.id))
+    : -1;
+  const nextPendingDocket = selectedDocket
+    ? pendingDockets.find((item) => item.id !== selectedDocket.id) || null
+    : null;
+  const hasPendingDockets = pendingDockets.length > 0;
+
+  const decide = useCallback(async (decision: string, selectedOptionId?: string) => {
+    if (!selectedDocket || selectedDocket.status !== 'pending') return;
     try {
-      const result = await window.ipcRenderer.sessionBridge.resolvePermission({
-        requestId: selectedRequest.id,
-        outcome,
+      setBusyAction(selectedOptionId || decision);
+      await window.ipcRenderer.teamRuntime.decideReviewDocket({
+        docketId: selectedDocket.id,
+        decision,
+        selectedOptionId,
+        comment: comment.trim() || undefined,
       });
-      if (!result?.success) {
-        throw new Error(result?.error || '处理审批失败');
-      }
-      const nextRequestId = requests.find((item) => item.id !== selectedRequest.id)?.id || '';
-      await loadRequests();
-      if (nextRequestId) setSelectedId(nextRequestId);
-    } catch (resolveError) {
-      void appAlert(resolveError instanceof Error ? resolveError.message : String(resolveError));
+      const nextDocketId = nextPendingDocket?.id || '';
+      await loadDockets();
+      if (nextDocketId) setSelectedId(nextDocketId);
+    } catch (decisionError) {
+      void appAlert(decisionError instanceof Error ? decisionError.message : String(decisionError));
     } finally {
       setBusyAction('');
     }
-  }, [busyAction, loadRequests, requests, selectedRequest]);
+  }, [comment, loadDockets, nextPendingDocket?.id, selectedDocket]);
+
+  const skip = useCallback(async () => {
+    if (!selectedDocket || selectedDocket.status !== 'pending') return;
+    try {
+      setBusyAction('skip');
+      await window.ipcRenderer.teamRuntime.skipReviewDocket({ docketId: selectedDocket.id });
+      const nextDocketId = nextPendingDocket?.id || '';
+      await loadDockets();
+      if (nextDocketId) setSelectedId(nextDocketId);
+    } catch (skipError) {
+      void appAlert(skipError instanceof Error ? skipError.message : String(skipError));
+    } finally {
+      setBusyAction('');
+    }
+  }, [loadDockets, nextPendingDocket?.id, selectedDocket]);
 
   return (
     <div className="h-full min-h-0 text-text-primary">
-      <div className="mx-auto flex h-full min-h-0 max-w-[820px] flex-col gap-4 px-5 py-5">
+      <div className="mx-auto flex h-full min-h-0 max-w-[760px] flex-col gap-4 px-5 py-5">
         {error && (
-          <button
-            type="button"
-            onClick={() => void loadRequests()}
-            className="inline-flex items-center gap-2 rounded-lg border border-status-error/20 bg-status-error/10 px-3 py-2.5 text-left text-[13px] text-status-error"
-          >
+          <div className="inline-flex items-center gap-2 rounded-lg border border-status-error/20 bg-status-error/10 px-3 py-2.5 text-[13px] text-status-error">
             <AlertCircle className="h-3.5 w-3.5" />
             {error}
-          </button>
+          </div>
         )}
 
-        <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-surface-primary">
-          {loading && requests.length === 0 ? (
+        <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-border bg-surface-primary">
+          {loading && !hasPendingDockets ? (
             <div className="flex h-full min-h-[320px] items-center justify-center text-[13px] text-text-tertiary">
               <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
               正在加载
             </div>
-          ) : !selectedRequest ? (
+          ) : !selectedDocket ? (
             <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-[13px] leading-6 text-text-tertiary">
               当前没有需要处理的审批。
             </div>
           ) : (
-            <div className="flex h-full min-h-0 flex-col">
+            <div className="flex min-h-full flex-col">
               <div className="border-b border-border px-5 py-4">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${permissionTone(selectedRequest.details.type)}`}>
-                    {permissionTypeLabel(selectedRequest.details.type)}
-                  </span>
-                  <span className="rounded-full bg-accent-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-accent-primary">
-                    {selectedIndex + 1}/{requests.length}
+                  <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${approvalStatusTone(selectedDocket.status)}`}>
+                    {approvalStatusLabel(selectedDocket.status)}
                   </span>
                   <span className="rounded-full bg-surface-secondary px-2.5 py-0.5 text-[11px] font-medium text-text-tertiary">
-                    {selectedRequest.toolName}
+                    {approvalPriorityLabel(selectedDocket.priority)}
                   </span>
+                  {selectedIndex >= 0 && (
+                    <span className="rounded-full bg-accent-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-accent-primary">
+                      {selectedIndex + 1}/{pendingDockets.length}
+                    </span>
+                  )}
                 </div>
                 <h2 className="mt-3 text-[21px] font-semibold tracking-[0] text-text-primary">
-                  {selectedRequest.details.title || '需要确认操作'}
+                  {selectedDocket.title || '未命名审批'}
                 </h2>
                 <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-tertiary">
-                  <span>{shortId(selectedRequest.sessionId)}</span>
-                  <span>{shortId(selectedRequest.callId)}</span>
-                  <span>{formatDateTime(selectedRequest.createdAt)}</span>
+                  <span>{selectedDocket.sourceKind || '-'}</span>
+                  <span>{shortFingerprint(selectedDocket.taskId || selectedDocket.sourceId)}</span>
+                  <span>{formatDateTime(selectedDocket.createdAt)}</span>
                 </div>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              <div className="flex-1 space-y-4 px-5 py-4">
                 <section>
-                  <div className="text-[11px] font-medium text-text-tertiary">说明</div>
+                  <div className="text-[11px] font-medium text-text-tertiary">摘要</div>
                   <div className="mt-2 whitespace-pre-wrap text-[14px] leading-7 text-text-primary">
-                    {selectedRequest.details.description || '-'}
+                    {approvalText(selectedDocket.summary)}
                   </div>
                 </section>
 
-                {selectedRequest.details.impact && (
-                  <section className="mt-4 border-t border-border pt-4">
-                    <div className="text-[11px] font-medium text-text-tertiary">影响</div>
-                    <div className="mt-2 whitespace-pre-wrap text-[13px] leading-7 text-text-secondary">
-                      {selectedRequest.details.impact}
+                <section className="border-t border-border pt-4">
+                  <div className="text-[11px] font-medium text-text-tertiary">正文</div>
+                  <div className="mt-2 whitespace-pre-wrap text-[13px] leading-7 text-text-secondary">
+                    {approvalText(selectedDocket.body)}
+                  </div>
+                </section>
+
+                {selectedDocket.artifactRefs.length > 0 && (
+                  <section className="border-t border-border pt-4">
+                    <div className="text-[11px] font-medium text-text-tertiary">附件</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {selectedDocket.artifactRefs.map((artifact) => (
+                        <span key={artifact} className="rounded-md border border-border bg-surface-secondary px-2 py-1 text-[11px] text-text-secondary">
+                          {artifact}
+                        </span>
+                      ))}
                     </div>
                   </section>
                 )}
-
-                <section className="mt-4 border-t border-border pt-4">
-                  <div className="text-[11px] font-medium text-text-tertiary">参数</div>
-                  <pre className="mt-2 max-h-[260px] overflow-auto rounded-lg border border-border bg-surface-secondary p-3 text-[11px] leading-5 text-text-secondary">
-                    {previewParams(selectedRequest.params) || '{}'}
-                  </pre>
-                </section>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-surface-secondary px-5 py-4">
-                <div>
-                  {selectedRequest.sessionId && onOpenRedClawSession && (
+              <div className="border-t border-border bg-surface-secondary px-5 py-4">
+                <textarea
+                  value={comment}
+                  onChange={(event) => setComment(event.target.value)}
+                  placeholder="审批意见"
+                  className="h-[76px] w-full resize-none rounded-lg border border-border bg-surface-primary px-3 py-2 text-[13px] leading-6 text-text-primary outline-none transition focus:border-accent-primary focus:ring-2 focus:ring-accent-primary/15"
+                />
+                <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    onClick={() => void skip()}
+                    disabled={Boolean(busyAction)}
+                    className="rounded-md border border-border bg-surface-primary px-3 py-1.5 text-[12px] text-text-secondary hover:bg-surface-tertiary disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {busyAction === 'skip' ? '处理中...' : '稍后'}
+                  </button>
+                  <button
+                    onClick={() => void decide('changes_requested')}
+                    disabled={Boolean(busyAction)}
+                    className="rounded-md border border-border bg-surface-primary px-3 py-1.5 text-[12px] text-text-secondary hover:bg-surface-tertiary disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {busyAction === 'changes_requested' ? '处理中...' : '要求修改'}
+                  </button>
+                  <button
+                    onClick={() => void decide('reject')}
+                    disabled={Boolean(busyAction)}
+                    className="rounded-md border border-status-error/20 bg-status-error/10 px-3 py-1.5 text-[12px] text-status-error hover:bg-status-error/15 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {busyAction === 'reject' ? '处理中...' : '驳回'}
+                  </button>
+                  {approvalOptions.length > 0 ? (
+                    approvalOptions.map((option) => (
+                      <button
+                        key={option.id}
+                        onClick={() => void decide('approve', option.id)}
+                        disabled={Boolean(busyAction)}
+                        title={option.description || option.label}
+                        className="inline-flex items-center rounded-md bg-accent-primary px-3 py-1.5 text-[12px] text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {busyAction === option.id ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />}
+                        {busyAction === option.id ? '处理中...' : option.label}
+                      </button>
+                    ))
+                  ) : (
                     <button
-                      type="button"
-                      onClick={() => onOpenRedClawSession(selectedRequest.sessionId)}
-                      className="inline-flex items-center rounded-md border border-border bg-surface-primary px-3 py-1.5 text-[12px] text-text-secondary hover:bg-surface-tertiary"
+                      onClick={() => void decide('approve')}
+                      disabled={Boolean(busyAction)}
+                      className="inline-flex items-center rounded-md bg-accent-primary px-3 py-1.5 text-[12px] text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
-                      打开会话
+                      {busyAction === 'approve' ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />}
+                      {busyAction === 'approve' ? '处理中...' : '批准'}
                     </button>
                   )}
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void resolve('cancel')}
-                    disabled={Boolean(busyAction)}
-                    className="inline-flex items-center rounded-md border border-status-error/20 bg-status-error/10 px-3 py-1.5 text-[12px] text-status-error hover:bg-status-error/15 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {busyAction === 'cancel' ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <X className="mr-1.5 h-3.5 w-3.5" />}
-                    {busyAction === 'cancel' ? '处理中...' : '拒绝'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void resolve('proceed_once')}
-                    disabled={Boolean(busyAction)}
-                    className="inline-flex items-center rounded-md border border-border bg-surface-primary px-3 py-1.5 text-[12px] text-text-secondary hover:bg-surface-tertiary disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {busyAction === 'proceed_once' ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />}
-                    {busyAction === 'proceed_once' ? '处理中...' : '允许一次'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void resolve('proceed_always')}
-                    disabled={Boolean(busyAction)}
-                    className="inline-flex items-center rounded-md bg-accent-primary px-3 py-1.5 text-[12px] text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {busyAction === 'proceed_always' ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />}
-                    {busyAction === 'proceed_always' ? '处理中...' : '始终允许'}
-                  </button>
                 </div>
               </div>
             </div>
@@ -259,4 +339,8 @@ export function Approval({ isActive = true, targetRequestId = '', onOpenRedClawS
       </div>
     </div>
   );
+}
+
+export function Approval(props: { isActive?: boolean; targetDocketId?: string | null }) {
+  return <ApprovalPanel {...props} />;
 }

@@ -1,30 +1,11 @@
 import { useEffect } from 'react';
 import { REDBOX_NAVIGATE_EVENT } from '../../notifications/types';
-import type {
-  AppIntent,
-  AppNavigateEventDetail,
-  GenerationIntent,
-  RedClawNavigationAction,
-  SettingsNavigationTarget,
-  ViewType,
-} from './types';
-
-type TeamRuntimeEvent = {
-  eventType?: string;
-  sessionId?: string | null;
-  payload?: unknown;
-};
+import type { AppIntent, AppNavigateEventDetail, GenerationIntent, RedClawNavigationAction, SettingsNavigationTarget, ViewType } from './types';
 
 function recordFromUnknown(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-}
-
-function eventFromArgs(args: unknown[]): TeamRuntimeEvent | null {
-  const candidate = args.length > 1 ? args[1] : args[0];
-  const event = recordFromUnknown(candidate);
-  return typeof event.eventType === 'string' ? event as TeamRuntimeEvent : null;
 }
 
 function shouldAutoOpenTeamSession(session: Record<string, unknown>): boolean {
@@ -47,39 +28,10 @@ function isAppIntent(detail: AppNavigateEventDetail | null | undefined): detail 
   return Boolean(detail && typeof detail === 'object' && 'type' in detail);
 }
 
-function normalizeRedClawNavigationAction(action: RedClawNavigationAction['action'] | undefined): RedClawNavigationAction['action'] | undefined {
-  if (action === 'open-team') return 'open-session';
-  return action;
-}
-
 function normalizeNavigateIntent(detail: AppNavigateEventDetail | null | undefined): AppIntent | null {
-  if (!detail || typeof detail !== 'object') return null;
-  if (isAppIntent(detail)) {
-    if (detail.type === 'redclaw.open') {
-      return {
-        ...detail,
-        action: normalizeRedClawNavigationAction(detail.action),
-      };
-    }
-    return detail;
-  }
+  if (isAppIntent(detail)) return detail;
 
-  if (detail.settingsTab) {
-    return {
-      type: 'settings.open',
-      tab: detail.settingsTab,
-      aiModelSubTab: detail.aiModelSubTab,
-    };
-  }
-
-  if (detail.manuscriptPath) {
-    return {
-      type: 'manuscript.open',
-      manuscriptPath: detail.manuscriptPath,
-    };
-  }
-
-  const view = detail.view;
+  const view = detail?.view;
   if (!view) return null;
 
   if (view === 'settings') {
@@ -93,7 +45,7 @@ function normalizeNavigateIntent(detail: AppNavigateEventDetail | null | undefin
   if (view === 'redclaw') {
     return {
       type: 'redclaw.open',
-      action: normalizeRedClawNavigationAction(detail.redclawAction || detail.action),
+      action: detail.redclawAction,
       sessionId: detail.teamSessionId || detail.sessionId,
     };
   }
@@ -101,49 +53,35 @@ function normalizeNavigateIntent(detail: AppNavigateEventDetail | null | undefin
   if (view === 'approval') {
     return {
       type: 'approval.open',
-      requestId: detail.requestId || detail.docketId || detail.escalationId,
       docketId: detail.docketId,
-      escalationId: detail.escalationId,
-    };
-  }
-
-  if (view === 'generation-studio' && detail.intent) {
-    return {
-      type: 'generation.open',
-      intent: detail.intent,
     };
   }
 
   return {
     type: 'view.open',
     view,
-    skillsAction: detail.skillsAction || (view === 'skills' && detail.action === 'open-market' ? 'open-market' : undefined),
   };
 }
 
 type UseGlobalIntentRouterParams = {
+  navigateToView: (view: ViewType) => void;
   setCurrentView: (view: ViewType) => void;
-  navigateToView?: (view: ViewType) => void;
   setActiveManuscriptEditorFile: (value: string | null) => void;
   setSettingsNavigationTarget: (value: SettingsNavigationTarget | null) => void;
   setRedClawNavigationAction: (value: RedClawNavigationAction | null) => void;
-  setApprovalTargetRequestId: (value: string) => void;
+  setApprovalTargetDocketId: (value: string) => void;
   setPendingGenerationIntent: (value: GenerationIntent | null) => void;
-  setSkillsNavigationAction: (value: { action: 'open-market'; nonce: number } | null) => void;
 };
 
 export function useGlobalIntentRouter({
-  setCurrentView,
   navigateToView,
+  setCurrentView,
   setActiveManuscriptEditorFile,
   setSettingsNavigationTarget,
   setRedClawNavigationAction,
-  setApprovalTargetRequestId,
+  setApprovalTargetDocketId,
   setPendingGenerationIntent,
-  setSkillsNavigationAction,
 }: UseGlobalIntentRouterParams) {
-  const openView = navigateToView || setCurrentView;
-
   useEffect(() => {
     const handleNavigate = (event: Event) => {
       const intent = normalizeNavigateIntent((event as CustomEvent<AppNavigateEventDetail>).detail);
@@ -155,37 +93,56 @@ export function useGlobalIntentRouter({
           aiModelSubTab: intent.aiModelSubTab,
           nonce: Date.now(),
         });
-        openView('settings');
+        navigateToView('settings');
+        return;
+      }
+
+      if (intent.type === 'redclaw.open' && intent.action === 'new') {
+        setActiveManuscriptEditorFile(null);
+        setRedClawNavigationAction({
+          action: 'new',
+          nonce: Date.now(),
+        });
+        navigateToView('redclaw');
+        return;
+      }
+
+      if (intent.type === 'redclaw.open' && intent.action === 'open-team' && intent.sessionId) {
+        setActiveManuscriptEditorFile(null);
+        setRedClawNavigationAction({
+          action: 'open-team',
+          sessionId: intent.sessionId,
+          nonce: Date.now(),
+        });
+        navigateToView('redclaw');
+        return;
+      }
+
+      if (intent.type === 'redclaw.open' && intent.action === 'open-session' && intent.sessionId) {
+        setActiveManuscriptEditorFile(null);
+        setRedClawNavigationAction({
+          action: 'open-session',
+          sessionId: intent.sessionId,
+          nonce: Date.now(),
+        });
+        navigateToView('redclaw');
         return;
       }
 
       if (intent.type === 'redclaw.open') {
-        setActiveManuscriptEditorFile(null);
-        if (intent.action) {
-          setRedClawNavigationAction({
-            action: intent.action,
-            sessionId: intent.sessionId,
-            nonce: Date.now(),
-          });
-        }
-        openView('redclaw');
+        navigateToView('redclaw');
         return;
       }
 
       if (intent.type === 'approval.open') {
-        setApprovalTargetRequestId(String(intent.requestId || intent.docketId || intent.escalationId || ''));
-        openView('approval');
+        setApprovalTargetDocketId(String(intent.docketId || ''));
+        navigateToView('approval');
         return;
       }
 
       if (intent.type === 'generation.open') {
-        if (intent.intent.mode === 'cover') {
-          setPendingGenerationIntent(null);
-          openView('cover-studio');
-          return;
-        }
         setPendingGenerationIntent(intent.intent);
-        openView('generation-studio');
+        navigateToView('generation-studio');
         return;
       }
 
@@ -193,18 +150,12 @@ export function useGlobalIntentRouter({
         const manuscriptPath = String(intent.manuscriptPath || '').trim();
         if (!manuscriptPath) return;
         setActiveManuscriptEditorFile(manuscriptPath);
-        openView('redclaw');
+        navigateToView('redclaw');
         return;
       }
 
       if (intent.type === 'view.open') {
-        if (intent.view === 'approval') {
-          setApprovalTargetRequestId('');
-        }
-        if (intent.view === 'skills' && intent.skillsAction === 'open-market') {
-          setSkillsNavigationAction({ action: 'open-market', nonce: Date.now() });
-        }
-        openView(intent.view);
+        navigateToView(intent.view);
       }
     };
 
@@ -213,37 +164,36 @@ export function useGlobalIntentRouter({
       window.removeEventListener(REDBOX_NAVIGATE_EVENT, handleNavigate as EventListener);
     };
   }, [
-    openView,
+    navigateToView,
     setActiveManuscriptEditorFile,
-    setApprovalTargetRequestId,
+    setApprovalTargetDocketId,
     setPendingGenerationIntent,
     setRedClawNavigationAction,
     setSettingsNavigationTarget,
-    setSkillsNavigationAction,
   ]);
 
   useEffect(() => {
     const openedSessionIds = new Set<string>();
-    const handleTeamRuntimeEvent = (...args: unknown[]) => {
-      const event = eventFromArgs(args);
-      if (event?.eventType !== 'runtime:collab-session-changed') return;
+    const handleTeamRuntimeEvent = (_event: unknown, envelope?: { eventType?: string; payload?: unknown }) => {
+      const event = envelope || {};
+      if (event.eventType !== 'runtime:collab-session-changed') return;
       const payload = recordFromUnknown(event.payload);
       const session = recordFromUnknown(payload.session);
-      const sessionId = String(session.id || payload.collabSessionId || event.sessionId || '').trim();
+      const sessionId = String(session.id || payload.collabSessionId || '').trim();
       if (!sessionId || openedSessionIds.has(sessionId)) return;
       if (!shouldAutoOpenTeamSession(session)) return;
       openedSessionIds.add(sessionId);
       setRedClawNavigationAction({
-        action: 'open-session',
+        action: 'open-team',
         sessionId,
         nonce: Date.now(),
       });
-      openView('redclaw');
+      setCurrentView('redclaw');
     };
 
     window.ipcRenderer.teamRuntime.onEvent(handleTeamRuntimeEvent);
     return () => {
       window.ipcRenderer.teamRuntime.offEvent(handleTeamRuntimeEvent);
     };
-  }, [openView, setRedClawNavigationAction]);
+  }, [setCurrentView, setRedClawNavigationAction]);
 }

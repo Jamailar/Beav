@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const archiveRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(archiveRoot, '..', '..');
+const baselineRoot = process.env.RED_BOX_PARITY_BASELINE?.trim()
+  ? path.resolve(process.env.RED_BOX_PARITY_BASELINE)
+  : path.join(repoRoot, 'desktop');
 
 const SOURCE_ROOTS = [
   'components',
@@ -72,7 +75,7 @@ function collectRootFiles(basePath, roots) {
 }
 
 function assertSourceCoverage() {
-  const formalSrc = path.join(repoRoot, 'desktop', 'src');
+  const formalSrc = path.join(baselineRoot, 'src');
   const archiveSrc = path.join(archiveRoot, 'src');
   const formalFiles = collectRootFiles(formalSrc, SOURCE_ROOTS);
   const missing = formalFiles.filter((relativeFile) => !existsSync(path.join(archiveSrc, relativeFile)));
@@ -89,7 +92,7 @@ function assertSourceCoverage() {
 }
 
 function assertPublicAssetParity() {
-  const formalPublic = path.join(repoRoot, 'desktop', 'public');
+  const formalPublic = path.join(baselineRoot, 'public');
   const archivePublic = path.join(archiveRoot, 'public');
   const formalAssets = collectRootFiles(formalPublic, PUBLIC_ASSET_ROOTS);
   const missing = [];

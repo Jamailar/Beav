@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: in_progress
-last_updated: 2026-07-01
+last_updated: 2026-08-02
 ---
 
 # Electron Open Source 2.5.0 Parity Plan
@@ -362,10 +362,10 @@ Electron 版已经具备以下可复用基础：
 - Electron bridge accounts domain 落地：新增 `bridge/domains/accountsBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `accounts.list/get`；Electron 开源版继续返回空账号列表或明确 unavailable，用于支撑复制 CreatorProfiles / Archives 类 UI 文件时的调用面稳定，不启用正式版账号学习后端。
 - Electron bridge advisors domain 落地：新增 `bridge/domains/advisorsBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `advisors.*` 与归档版旧顶层 YouTube helper；Electron 版复用现有顾问、知识文件、YouTube 字幕和后台 runner IPC，`distillMemberSkill` 保持接旧版 unavailable handler，未迁移的会员技能检查 / 文件夹选择只返回明确 fallback。
 - Electron bridge AI 配置 domain 落地：新增 `bridge/domains/aiConfigBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `aiRoles.list`、`detectAiProtocol` 和 `testAiConnection`，同时保留 Electron 设置页已有 `fetchModels` 入口；后续复制正式版 Settings AI 区时可复用同名方法，不改 AI source 后端。
-- Electron bridge audio/voice domain 落地：新增 `bridge/domains/audioVoiceBridge.ts` 并由 `ipcRenderer.ts` 组合导出，`audio.*` 继续复用现有录音输入 IPC；`voice.*` 只提供正式版同名调用面的空态 / unavailable fallback，不迁移正式版音色克隆、TTS 或数字人后端，也不新增对应 UI 入口。
+- Electron bridge audio/voice domain 落地：新增 `bridge/domains/audioVoiceBridge.ts` 并由 `ipcRenderer.ts` 组合导出；录音由 renderer `MediaRecorder` 负责，`voice.*` 和 audio generation 统一进入本地持久任务投影并复用兼容远端端点，数字人 retalk 仍保留明确 fallback，不新增隐藏的商业服务依赖。
 - Electron bridge assistant control domain 落地：新增 `bridge/domains/assistantControlBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `assistantDaemon` 和 `wechatOfficial`；Electron 版继续复用现有 assistant daemon、ACP client、微信登录等待和公众号草稿 IPC，不把归档版额外 `sessionBridge` 混入该 domain。
 - Electron bridge CLI runtime domain 落地：新增 `bridge/domains/cliRuntimeBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `cliRuntime.*`；Electron 版当前主要依赖既有 fallback 返回空工具 / 不可用动作，`diagnose` 保留原 renderer 侧 detect + inspect 组合摘要，不新增 CLI sandbox、安装或执行后端。
-- Electron bridge runtime domain 落地：新增 `bridge/domains/runtimeBridge.ts` 并由 `ipcRenderer.ts` 组合导出，集中承载正式版 `runtime`、`taskPanel`、`backgroundTasks`、`backgroundWorkers`、`tasks` 和 `work` 调用面；Electron 版继续复用现有 query / trace / task / work IPC，正式版新增的 session export/import、runtime events 和 model config 先返回稳定 fallback，不新增未迁移后端。
+- Electron bridge runtime domain 落地：新增 `bridge/domains/runtimeBridge.ts` 并由 `ipcRenderer.ts` 组合导出，集中承载正式版 `runtime`、`taskPanel`、`backgroundTasks`、`backgroundWorkers`、`tasks` 和 `work` 调用面；Electron 版已补本地 runtime events、model config、session export/import，并把 Team/review/RedClaw 定义汇入 task panel。
 - Electron bridge tools domain 落地：新增 `bridge/domains/toolsBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `toolHooks` 和 `toolDiagnostics`；Electron 版复用现有 `tools:hooks:*` 和 `tools:diagnostics:*` handler，支撑 Settings 工具管理 / 诊断 UI 继续按正式版调用面迁移。
 - Electron bridge RedClaw domain 落地：新增 `bridge/domains/redclawBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `redclawRunner`、`redclawProfile`、`redclawProjects` 和 `redclawOrchestration`；Electron 版 runner / profile 继续复用现有自动化和创作档案 IPC，正式版项目编排、导出和风格定义未迁移能力返回明确 fallback，不新增半成品 RedClaw 后端入口。
 - Electron bridge team runtime domain 落地：新增 `bridge/domains/teamRuntimeBridge.ts` 并由 `ipcRenderer.ts` 组合导出，正式版 `teamRuntime` / `collab` 调用面从入口文件抽离；Electron 版保留已有 `runExternalMember` 扩展，继续复用现有 team runtime / review docket IPC，不新增协作后端。
@@ -375,7 +375,7 @@ Electron 版已经具备以下可复用基础：
 - Electron bridge wander domain 落地：新增 `bridge/domains/wanderBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `wander`；Electron 版复用现有随机选题、历史、brainstorm、进度和结果事件，正式版 guided/comment candidates 当前继续走 fallback，不迁移 topic center 后端。
 - Electron bridge topic center domain 落地：新增 `bridge/domains/topicCenterBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `topicCenter`；Electron 版当前只返回空列表或明确 unavailable，用作复制正式版 Wander / 选题相关 UI 时的兼容层，不新增正式版 topic center 后端，也不暴露不可用入口。
 - Electron bridge media / cover domain 落地：新增 `bridge/domains/mediaBridge.ts` 和 `bridge/domains/coverBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `media`、`imageGeneration`、`videoGeneration` 和 `cover`；Electron 版复用现有媒体库、生图、生视频和封面 IPC，`cover.generate` 继续保留素材 preflight，便于后续 MediaLibrary / GenerationStudio / CoverStudio UI 直接迁移。
-- Electron bridge generation domain 落地：新增 `bridge/domains/generationBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `generation.*`；Electron 版图片 / 视频提交继续走素材 preflight，生成任务列表 / 状态继续复用现有 fallback，音频、voice clone、retalk 等后端未迁移能力不新增 UI 入口。
+- Electron bridge generation domain 落地：新增 `bridge/domains/generationBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `generation.*`；图片、视频、音频和 voice clone 提交统一进入本地持久 job registry，任务列表、事件、取消、重试和 artifact read-back 接入 GenerationStudio / Subjects，provider-specific retalk 继续明确降级。
 - Electron bridge knowledge domain 落地：新增 `bridge/domains/knowledgeBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `knowledge`、`embedding` 和 `similarity`；Electron 版保留更完整的文件索引 dashboard / scope status、视觉索引状态、`memory` facade 和旧顶层 `readYoutubeSubtitle` 兼容入口，便于继续复制正式版 Knowledge / RedClaw 引用 UI 时减少改动。
 - Electron bridge manuscripts domain 落地：新增 `bridge/domains/manuscriptsBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名覆盖正式版 `manuscripts` 基础稿件 / Remotion / write proposal 调用面，同时保留 Electron 版已有富文本卡片、包稿、时间线、主题预览和导出扩展方法，避免复制正式版 UI 时削弱归档版现有编辑能力。
 - Electron bridge MCP domain 落地：新增 `bridge/domains/mcpBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `mcp.*`；Electron 版复用现有 MCP 配置保存、测试、导入和 OAuth 状态 IPC，session / tool / resource 查询继续走现有空态 fallback，支撑 Settings MCP 面板迁移。
@@ -384,8 +384,8 @@ Electron 版已经具备以下可复用基础：
 - Electron bridge video editor domain 落地：新增 `bridge/domains/videoEditorBridge.ts` 并由 `ipcRenderer.ts` 组合导出，方法名对齐正式版 `videoEditorV2`；Electron 版复用现有 V2 视频编辑项目、素材导入、字幕、时间线、自动剪辑和渲染 IPC，便于后续迁移正式版视频编辑 UI。
 - Electron bridge sessions domain 落地：新增 `bridge/domains/sessionsBridge.ts` 并由 `ipcRenderer.ts` 组合导出，收敛归档版 `sessions` 审计 / transcript API 和正式版已有 `sessionBridge` 外部会话 / 审批调用面；Approval、Settings 和 RedClaw 仍复用现有 Electron session bridge 后端。
 - 正式版纯 UI model 底座继续迁入归档版：新增 `features/knowledge`、`features/manuscripts`、`features/settings`，复制正式版知识库、稿件、设置的 model/helper 和 README；`Knowledge` 已改用知识库 model 的关键词、哈希、视觉索引和封面排序 helper，`Settings` 已改用设置 model 的 runtime perf、视觉索引 prompt、技能来源和缓存 TTL helper。`Manuscripts` 暂不强行套正式版 editor model，因为归档版仍保留 richpost / video / audio 等 Electron 独有编辑器类型，后续作为稿件编辑器专项收敛。
-- 生成任务状态层继续对齐正式版：`features/media-jobs` 三个模块直接同步正式版，补 `queueMode`、归档任务过滤、音频 / voice job kind、timestamp normalizer、visibility/focus 快照刷新和 selector 去重；RedClaw / 自由创作 / 稿件工作台的生成进度 UI 继续复用现有 Electron generation IPC，不新增音频或数字人入口。
-- 录音输入能力层继续对齐正式版：`features/audio-input` 三个模块直接同步正式版，补 `capturedDurationMs`、品牌化麦克风权限文案、录音 hook 的 ref 状态防竞态和转写不可用错误降噪；Chat / Subjects 继续复用现有 Electron audio IPC，不新增生音频或数字人入口。
+- 生成任务状态层继续对齐正式版：`features/media-jobs` 三个模块直接同步正式版，补 `queueMode`、归档任务过滤、音频 / voice job kind、timestamp normalizer、visibility/focus 快照刷新和 selector 去重；RedClaw / 自由创作 / 稿件工作台的生成进度 UI 统一复用 Electron 持久 generation job registry。
+- 录音输入能力层继续对齐正式版：`features/audio-input` 三个模块直接同步正式版，补 `capturedDurationMs`、品牌化麦克风权限文案、录音 hook 的 ref 状态防竞态和转写不可用错误降噪；Chat / Subjects 在 host handler 不提供 native PCM 时回退 renderer `MediaRecorder`，并保留 macOS / Windows 麦克风设置入口。
 - 采集状态条边界对齐正式版：新增归档版 `features/capture/CaptureJobsBar.tsx` 和 README，把原本内联在 `Knowledge` 页的 YouTube 采集队列 UI 抽成 feature 组件；当前组件按正式版队列结构展示本地队列 / server jobs，并兼容 Electron 现有 YouTube processing 列表。
 - 采集队列内部模型继续对齐正式版：新增归档版 `features/capture/captureQueue.ts` 和 `serverCaptureClient.ts`，剪贴板确认后的 YouTube 本地保存会进入本地串行队列；server capture client 已可直接被正式版 UI 调用，但 Electron bridge 仍返回 `unavailable`，不暴露小红书 / 抖音服务端采集。
 - 通用控件继续按正式版复制：新增 `components/ui/SelectMenu.tsx`，并把 `Knowledge` 顶部排序从原生 `select` 切到正式版同款 menu 结构；当前只替换排序控件，不改筛选、搜索、分页和 `knowledge:list-page` 数据流。
@@ -423,7 +423,7 @@ Electron 版已经具备以下可复用基础：
 - 通知成功音效继续对齐正式版：复制 `assets/notifications/runtime-complete.wav`，`notifications/audio.ts` 改用 Vite inline asset，并在音频文件播放失败时回退到合成提示音；不依赖 public 静态路径，打包后更稳。
 - 通知策略继续对齐正式版：`notifications/policy.ts` 的生成任务标题补音频 / 音色克隆 kind label，RedClaw 任务通知改用 `APP_BRAND.aiDisplayName`；运行错误里识别余额不足 / 登录失效时直接导航到设置页官方账号入口；CLI escalation 兼容正式版 `reviewDocketId` / `escalationId` / `requestId`，有审批 id 时跳 Electron 现有 Approval 页。保留 Electron 已有 quiet hours、前台成功通知静音和 chat/redclaw 本地路由适配，不启用正式版 review docket 后端或 Tauri 自动更新入口。
 - Bridge system / capture 命名面继续对齐正式版：Electron bridge 补 `getAppReleaseNotes`、`installAppUpdate`、`openExternalUrl`、`clipboardWriteText` 和 `capture.saveYoutubeNote` 同名方法；`installAppUpdate` 明确返回 unavailable fallback，更新弹窗仍走 GitHub Release 手动安装，剪贴板采集 hook 改用正式版 `capture.saveYoutubeNote` 路径。
-- Capture server bridge 兼容正式版方法名：Electron bridge 补 `capture.createServerJob`、`capture.getServerJob`、`capture.listServerJobs` 和 `knowledge.batchIngest`，当前统一返回 `status: unavailable` / 空列表，不连接正式版服务端采集；正式版 `serverCaptureClient` 已复制进归档版并依赖这些 fallback 保持调用面稳定。
+- Capture server bridge 兼容正式版方法名：Electron bridge 补 `capture.createServerJob`、`capture.getServerJob`、`capture.listServerJobs` 和 `knowledge.batchIngest`；服务端采集仍返回 `status: unavailable` / 空列表，但本地 batch ingest 已复用知识条目、文档源和媒体导入 store，保证历史页面的批量落库路径可用。
 - Accounts bridge 补正式版低风险空态兼容：`ipcRenderer.accounts.list/get` 与正式版同名，当前 `list` 返回空账号列表，`get` 返回明确 unavailable；用于支撑后续 Archives / CreatorProfiles UI 文件复制时的调用面稳定，不启用正式版账号学习后端或新页面入口。
 - Plugins bridge 补正式版同名调用面：`ipcRenderer.plugins` 增加 list / connectors / marketplace / codexMarketplace / discoverLocal / install / enable / home 等方法和类型；当前 Electron fallback 对列表类返回空集合，对安装、启停、能力同步和数据读取返回明确 unavailable，不启用正式版插件市场、插件数据源或远程 connector 后端。
 - Renderer settings 类型兼容正式版：`types.d.ts` 抽出 `RendererSettingsPayload`，并补视觉索引、视频分析、member runtime flags、analytics、CLI runtime、`ai_model_routes_json` 等正式版可选字段；当前只是 renderer typing，Electron 后端不因此暴露未实现 UI。
@@ -446,10 +446,25 @@ Electron 版已经具备以下可复用基础：
 - Automation 页面布局继续对齐正式版：移除归档版额外页面标题，内容区 padding 和 section 间距收敛到正式版；自动化样式已从归档版独立 `Automation.css` 并入 `index.css`，页面文件与正式版保持同构。
 - Bridge parity 校验升级为最终 API 路径检查：`scripts/check-bridge-domain-parity.mjs` 现在同时检查正式版 domain 文件覆盖和 `ipcRenderer` 聚合后的 546 个正式版 API 路径；`appBridge` 补 `onAppUpdateAvailable/offAppUpdateAvailable/onAppUpdateInstallProgress/offAppUpdateInstallProgress` 事件监听面，保持更新提示 UI 复用时不因缺方法崩溃，但 Electron 版仍不启用 Tauri updater 自动安装。
 - 更新提示 hook / modal 调用面继续对齐正式版：`useAppUpdateNotice.ts` 重新导出 `AppUpdateNoticePayload`、`AppUpdateInstallProgressPayload` 和 `AppUpdateInstallState`，`AppUpdateNoticeModal` 恢复 `installState`、`isInstallingUpdate`、`installUpdate` props；Electron 版 `installUpdate` 仍只打开 GitHub Release / 下载页，不启用 Tauri updater 自动安装。
-- UI 源文件和静态资源覆盖补校验：新增 `scripts/check-ui-parity-source.mjs` 和 `pnpm run check:ui-parity`，检查正式版 `desktop/src` 的 UI 源文件在归档版都有对应文件，并校验 `branding`、`channel-logos`、`ecommerce-platform-icons`、`onboarding`、`provider-logos`、`Box.png` 等 public 视觉资源内容一致；当前通过该校验，后续正式版新增 UI 文件或资源时可直接作为同步漏项 gate。
+- UI 源文件和静态资源覆盖补校验：新增 `scripts/check-ui-parity-source.mjs` 和 `pnpm run check:ui-parity`，检查基线 `src` 的 UI 源文件在归档版都有对应文件，并校验 `branding`、`channel-logos`、`ecommerce-platform-icons`、`onboarding`、`provider-logos`、`Box.png` 等 public 视觉资源内容一致；脚本支持 `RED_BOX_PARITY_BASELINE=/path/to/desktop`，2.5.0 交付必须指向历史 `f7182069` 工作树，不能默认把后续主线页面当作 2.5.0 漏项。
 - 最低静态验证门禁恢复：补齐正式版 `shared/videoAutoEdit.ts` 和 `shared/videoAutoEditRemotion.ts` 到 Electron 归档版，修复 video-auto-edit / video-editor-v2 缺共享类型导致的级联隐式 any；新增 `package.json` 的 `check:types` / `check:parity`，其中 `check:parity` 串起 UI 覆盖、bridge API 覆盖和 TypeScript；`./node_modules/.bin/tsc --noEmit --pretty false` 当前已恢复通过。
 - 法务弹窗正文继续对齐正式版完整度：`features/legal/legalDocuments.ts` 补回账号安全、积分售后、AI 内容责任、用户行为、第三方服务、知识产权、未成年人、服务变更、责任限制、争议解决、敏感个人信息、存储期限、自动化决策和用户权利等章节；Electron 开源版仍保留开源边界说明，不启用正式版创始赞助会员、购买入口或会员 gate。
 - 首启/版本提示体验继续对齐正式版：`App.tsx` 不再挂载归档版旧 `FirstRunTour` 版本引导，首启只保留正式版 `AppOnboarding`、更新提示和 shell 级弹窗；旧 `FirstRunTour`、`startupAnnouncements` 和 `redbox-tour` CSS 已删除，避免 AppOnboarding 之后再弹一层正式版没有的旧 tour。
+
+## 3.2 页面与 AI runtime 对齐批次（2026-08-02）
+
+本批次以准确的历史 2.5.0 主版本 commit `f71820698892e614eb148f22a47329128ceea0cd` 为页面和 bridge 基线，再把能力接回 Electron 已有的本地 runtime；没有用当前 `desktop/` 的新实现反向定义开源版行为。
+
+- 页面契约：历史 2.5.0 的 `Chat`、`RedClaw`、`Team`、`Approval`、`Automation`、`Knowledge`、`GenerationStudio`、`Subjects`、`Settings`、`MediaLibrary`、`Wander`、`Home` 和 `CreatorProfiles` 页面及静态资源已同步到归档壳层，保留 Electron 的匿名账号、本地工作区和手动更新边界。
+- Runtime 事件：`runtime_events` 进入 Electron SQLite，限制单会话 1000 条、payload 2000 字符；`PiChatService` 的 thought / response / tool / error 事件投影到 `runtime:*`，renderer 仍同时收到旧 `chat:*` 事件，避免页面回归。
+- 会话闭环：runtime 支持事件查询、子会话查询、模型配置摘要、权限列表、session export/import；导出包包含 sessions、messages、transcript、checkpoint、tool result、runtime event 和 bundle message，并在导入前验证 session 引用。
+- 任务面板：历史 task panel 现在聚合 pending approvals、TaskGraph、Team tasks、review dockets、RedClaw scheduled/long-cycle definitions、background tasks 和 workspace work items，统一排序、状态、进度和 artifact 数量。
+- Team AI：Team mailbox、成员会话、任务状态机、报告、review docket 和 runtime event 均落到本地 workspace JSON；成员消息通过 `SessionBridgeService -> PiChatService -> QueryRuntime` 执行，结果再回写 mailbox，不用自然语言完成消息冒充用户输入。
+- 生成底层：图片、视频、音频、voice clone 统一进入 `.redbox/media-runtime/media-jobs.json`，具备 queued/running/completed/failed/cancelled、事件、重试、取消、归档和 artifact read-back；生成结果同步登记媒体库，避免页面只拿到 provider response 而没有本地素材。
+- 录音与输入：Chat / Subjects 先尝试 host contract，Electron 归档版没有 native PCM 时由 renderer `MediaRecorder` 录制，再走已有转写 / chat attachment 路径；系统麦克风权限入口按平台打开设置。
+- 业务兼容：Automation 的 preview/create/confirm/update/cancel 复用现有 RedClaw runner；Knowledge batch ingest 复用本地 note / document source / media store；MCP CRUD 和 RedClaw profile initialization 接回已有本地配置与 onboarding 状态。
+
+明确保留的开源边界：正式版账号 / 会员 / 插件远程市场、服务端小红书/抖音采集、CLI sandbox、provider-specific digital-human retalk，以及 ACP run 的跨重启修复仍由 bridge 返回稳定 unavailable 或待补状态；这些能力不伪装成已完成，也不让页面因为缺 handler 直接崩溃。
 
 ## 4. 完整产品架构
 

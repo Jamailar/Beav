@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Users, Plus, Pencil, Trash2, Upload, FileText, X, Check, Sparkles, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Download, MoreHorizontal, History, Loader2 } from 'lucide-react';
+import { Users, Plus, Pencil, Trash2, Upload, FolderOpen, FileText, X, Check, Sparkles, RefreshCw, ChevronDown, ChevronUp, AlertCircle, MoreHorizontal, History, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Chat } from './Chat';
 import { APP_BRAND } from '../config/brand';
+import { subscribeYoutubeFetchInfoProgress } from '../bridge/appEvents';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 
@@ -29,6 +30,30 @@ export interface Advisor {
     redclawVisible?: boolean;
     redclawOrder?: number;
     createdAt: string;
+}
+
+interface MemberSkillVersionSummary {
+    version?: string;
+    updatedAt?: string;
+    path?: string;
+    skillPreview?: string;
+    sourceEvent?: string;
+    diff?: {
+        added?: string[];
+        removed?: string[];
+        addedCount?: number;
+        removedCount?: number;
+    };
+}
+
+interface MemberSkillInspectResult {
+    success?: boolean;
+    skillName?: string;
+    packagePath?: string;
+    current?: MemberSkillVersionSummary;
+    candidate?: MemberSkillVersionSummary | null;
+    versions?: MemberSkillVersionSummary[];
+    error?: string;
 }
 
 export type AdvisorProfile = Advisor;
@@ -131,7 +156,6 @@ export function Advisors({
     onAdvisorsChange,
     createRequestKey,
     createRequestMode = 'manual',
-    modalOnly = false,
 }: {
     isActive?: boolean;
     hideAdvisorList?: boolean;
@@ -140,7 +164,6 @@ export function Advisors({
     onAdvisorsChange?: (advisors: Advisor[]) => void;
     createRequestKey?: number;
     createRequestMode?: AdvisorCreateMode;
-    modalOnly?: boolean;
 }) {
     const [advisors, setAdvisors] = useState<Advisor[]>([]);
     const [selectedAdvisor, setSelectedAdvisor] = useState<Advisor | null>(null);
@@ -392,7 +415,7 @@ export function Advisors({
 
     const handleCreate = (mode: AdvisorCreateMode = 'manual') => {
         setEditingAdvisor(null);
-        setPendingCreateMode(mode);
+        setPendingCreateMode(mode === 'youtube' ? 'manual' : mode);
         setIsModalOpen(true);
     };
 
@@ -595,16 +618,62 @@ export function Advisors({
         }
     };
 
-    if (modalOnly) {
-        return isModalOpen ? (
-            <AdvisorModal
-                advisor={editingAdvisor}
-                defaultMode={pendingCreateMode}
-                onSave={handleSaveAdvisor}
-                onClose={() => setIsModalOpen(false)}
-            />
-        ) : null;
-    }
+    const handlePromoteMemberSkillCandidate = async (advisor: Advisor) => {
+        try {
+            await window.ipcRenderer.advisors.promoteMemberSkillCandidate({
+                advisorId: advisor.id,
+                candidateVersion: advisor.memberSkillCandidateVersion,
+            });
+            const list = await loadAdvisors();
+            const updated = list.find((item) => item.id === advisor.id);
+            if (updated) setSelectedAdvisor(updated);
+        } catch (e) {
+            console.error('Failed to promote member skill candidate:', e);
+        }
+    };
+
+    const handleDiscardMemberSkillCandidate = async (advisor: Advisor) => {
+        try {
+            await window.ipcRenderer.advisors.discardMemberSkillCandidate({ advisorId: advisor.id });
+            const list = await loadAdvisors();
+            const updated = list.find((item) => item.id === advisor.id);
+            if (updated) setSelectedAdvisor(updated);
+        } catch (e) {
+            console.error('Failed to discard member skill candidate:', e);
+        }
+    };
+
+    const handleRefreshMemberSkill = async (advisor: Advisor) => {
+        try {
+            const result = await window.ipcRenderer.advisors.distillMemberSkill({ advisorId: advisor.id }) as { success?: boolean; error?: string };
+            if (result && result.success === false) {
+                throw new Error(result.error || '成员技能蒸馏失败');
+            }
+            const list = await loadAdvisors();
+            const updated = list.find((item) => item.id === advisor.id);
+            if (updated) setSelectedAdvisor(updated);
+        } catch (e) {
+            console.error('Failed to refresh member skill:', e);
+            void appAlert(`成员技能蒸馏失败：${e instanceof Error ? e.message : '未知错误'}`);
+        }
+    };
+
+    const handleRollbackMemberSkillVersion = async (advisor: Advisor, version: string) => {
+        if (!version) return;
+        if (!(await appConfirm(`确定要把 ${advisor.name} 回滚到成员技能版本 "${version}" 吗？`, {
+            title: '回滚成员技能',
+            confirmLabel: '回滚',
+            tone: 'danger',
+        }))) return;
+        try {
+            await window.ipcRenderer.advisors.rollbackMemberSkillVersion({ advisorId: advisor.id, version });
+            const list = await loadAdvisors();
+            const updated = list.find((item) => item.id === advisor.id);
+            if (updated) setSelectedAdvisor(updated);
+        } catch (e) {
+            console.error('Failed to rollback member skill version:', e);
+        }
+    };
 
     return (
         <div className="flex h-full min-h-0">
@@ -664,6 +733,12 @@ export function Advisors({
                                             <div className="text-sm font-medium text-text-primary truncate">{advisor.name}</div>
                                             <div className="text-xs text-text-tertiary truncate">{advisor.personality}</div>
                                             <div className="text-[11px] text-text-tertiary truncate">知识库语言：{advisor.knowledgeLanguage || '中文'}</div>
+                                            <div className={clsx(
+                                                "text-[11px] truncate",
+                                                advisor.memberSkillStatus === 'failed' ? "text-red-500" : "text-text-tertiary"
+                                            )}>
+                                                成员技能：{advisor.memberSkillCandidateVersion ? '有候选待确认' : advisor.memberSkillRef ? advisor.memberSkillStatus || 'ready' : '待蒸馏'}
+                                            </div>
                                         </div>
                                     </div>
                                 </button>
@@ -808,6 +883,10 @@ export function Advisors({
                                 onOptimizePrompt={() => void handleOptimizePrompt(selectedAdvisor)}
                                 onUploadKnowledge={() => void handleUploadKnowledge(selectedAdvisor.id)}
                                 onDeleteKnowledge={(fileName) => void handleDeleteKnowledge(selectedAdvisor.id, fileName)}
+                                onPromoteMemberSkillCandidate={() => void handlePromoteMemberSkillCandidate(selectedAdvisor)}
+                                onDiscardMemberSkillCandidate={() => void handleDiscardMemberSkillCandidate(selectedAdvisor)}
+                                onRefreshMemberSkill={() => handleRefreshMemberSkill(selectedAdvisor)}
+                                onRollbackMemberSkillVersion={(version) => void handleRollbackMemberSkillVersion(selectedAdvisor, version)}
                                 onEdit={() => handleEdit(selectedAdvisor)}
                                 onDelete={() => void handleDelete(selectedAdvisor.id)}
                                 onClose={() => setIsSettingsDrawerOpen(false)}
@@ -991,6 +1070,10 @@ export function AdvisorSettingsPanel({
     onOptimizePrompt,
     onUploadKnowledge,
     onDeleteKnowledge,
+    onPromoteMemberSkillCandidate,
+    onDiscardMemberSkillCandidate,
+    onRefreshMemberSkill,
+    onRollbackMemberSkillVersion,
     onEdit,
     onDelete,
     onClose,
@@ -1004,10 +1087,65 @@ export function AdvisorSettingsPanel({
     onOptimizePrompt: () => void;
     onUploadKnowledge: () => void;
     onDeleteKnowledge: (fileName: string) => void;
+    onPromoteMemberSkillCandidate: () => void;
+    onDiscardMemberSkillCandidate: () => void;
+    onRefreshMemberSkill: () => Promise<void>;
+    onRollbackMemberSkillVersion: (version: string) => void;
     onEdit: () => void;
     onDelete: () => void;
     onClose: () => void;
 }) {
+    const [memberSkillDetails, setMemberSkillDetails] = useState<MemberSkillInspectResult | null>(null);
+    const [isMemberSkillDetailsOpen, setIsMemberSkillDetailsOpen] = useState(false);
+    const [isMemberSkillDetailsLoading, setIsMemberSkillDetailsLoading] = useState(false);
+    const [isMemberSkillRefreshing, setIsMemberSkillRefreshing] = useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+        if (!advisor.memberSkillRef && !advisor.memberSkillCandidateVersion) {
+            setMemberSkillDetails(null);
+            return () => {
+                cancelled = true;
+            };
+        }
+        setIsMemberSkillDetailsLoading(true);
+        void window.ipcRenderer.advisors.inspectMemberSkill({ advisorId: advisor.id })
+            .then((result) => {
+                if (!cancelled) {
+                    setMemberSkillDetails(result as MemberSkillInspectResult);
+                }
+            })
+            .catch((error) => {
+                if (!cancelled) {
+                    setMemberSkillDetails({ success: false, error: String(error) });
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setIsMemberSkillDetailsLoading(false);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [advisor.id, advisor.memberSkillRef, advisor.memberSkillVersion, advisor.memberSkillCandidateVersion]);
+
+    const candidateDiff = memberSkillDetails?.candidate?.diff;
+    const candidateAdded = candidateDiff?.added || [];
+    const candidateRemoved = candidateDiff?.removed || [];
+    const rollbackVersions = (memberSkillDetails?.versions || [])
+        .filter((item) => item.version && item.version !== advisor.memberSkillVersion)
+        .slice(0, 5);
+    const handleRefreshClick = async () => {
+        setIsMemberSkillRefreshing(true);
+        try {
+            await onRefreshMemberSkill();
+            setMemberSkillDetails(null);
+        } finally {
+            setIsMemberSkillRefreshing(false);
+        }
+    };
+
     return (
         <div className="flex h-full flex-col">
             <div className="border-b border-black/[0.04] px-5 pt-5 pb-4">
@@ -1042,6 +1180,134 @@ export function AdvisorSettingsPanel({
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 custom-scrollbar">
+                <section className="rounded-2xl border border-black/[0.04] bg-white/55 p-4 shadow-[0_10px_30px_-22px_rgba(0,0,0,0.25)]">
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                            <h3 className="text-sm font-medium text-text-primary">成员技能</h3>
+                            <p className="mt-1 truncate text-xs text-text-tertiary">
+                                {advisor.memberSkillRef || '尚未生成成员技能'}
+                            </p>
+                        </div>
+                        <span className={clsx(
+                            "shrink-0 rounded-full px-2 py-1 text-[10px] font-medium",
+                            advisor.memberSkillLastError ? "bg-red-50 text-red-500" : "bg-accent-primary/10 text-accent-primary"
+                        )}>
+                            {advisor.memberSkillCandidateVersion ? '候选待确认' : advisor.memberSkillStatus || 'pending'}
+                        </span>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => void handleRefreshClick()}
+                            disabled={isMemberSkillRefreshing}
+                            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-black/10 bg-white/75 px-2.5 text-xs font-medium text-text-secondary transition-colors hover:bg-white hover:text-accent-primary disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            <RefreshCw className={clsx("h-3 w-3", isMemberSkillRefreshing && "animate-spin")} />
+                            {isMemberSkillRefreshing ? '蒸馏中' : advisor.memberSkillLastError || !advisor.memberSkillRef ? '重新蒸馏' : '刷新技能'}
+                        </button>
+                        {advisor.memberSkillVersion && (
+                            <span className="truncate text-[11px] text-text-tertiary">
+                                当前版本：{advisor.memberSkillVersion}
+                            </span>
+                        )}
+                    </div>
+                    {advisor.memberSkillCandidateVersion && (
+                        <div className="mt-3 rounded-2xl border border-accent-primary/15 bg-white/70 p-3">
+                            <div className="text-xs font-medium text-text-primary">
+                                候选版本：{advisor.memberSkillCandidateVersion}
+                            </div>
+                            <div className="mt-1 text-[11px] text-text-tertiary">
+                                来源：{advisor.memberSkillCandidateSourceEvent || '知识更新'} · {advisor.memberSkillCandidateCreatedAt || '刚刚'}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setIsMemberSkillDetailsOpen(!isMemberSkillDetailsOpen)}
+                                className="mt-2 inline-flex h-6 items-center gap-1 rounded-lg border border-black/10 bg-white/80 px-2 text-[11px] font-medium text-text-secondary hover:bg-white"
+                            >
+                                {isMemberSkillDetailsLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileText className="h-3 w-3" />}
+                                {isMemberSkillDetailsOpen ? '收起差异' : '查看差异'}
+                            </button>
+                            {isMemberSkillDetailsOpen && (
+                                <div className="mt-2 grid gap-2">
+                                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                                        <div className="rounded-lg border border-emerald-100 bg-emerald-50/70 p-2">
+                                            <div className="mb-1 font-medium text-emerald-700">
+                                                新增 {candidateDiff?.addedCount || 0}
+                                            </div>
+                                            <div className="max-h-24 space-y-1 overflow-auto text-emerald-700/80 custom-scrollbar">
+                                                {candidateAdded.length > 0 ? candidateAdded.map((line, index) => (
+                                                    <div key={`${line}-${index}`} className="truncate">+ {line}</div>
+                                                )) : <div>无明显新增</div>}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-lg border border-red-100 bg-red-50/60 p-2">
+                                            <div className="mb-1 font-medium text-red-600">
+                                                移除 {candidateDiff?.removedCount || 0}
+                                            </div>
+                                            <div className="max-h-24 space-y-1 overflow-auto text-red-500/80 custom-scrollbar">
+                                                {candidateRemoved.length > 0 ? candidateRemoved.map((line, index) => (
+                                                    <div key={`${line}-${index}`} className="truncate">- {line}</div>
+                                                )) : <div>无明显移除</div>}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {memberSkillDetails?.candidate?.skillPreview && (
+                                        <pre className="max-h-28 overflow-auto rounded-lg bg-black/[0.03] p-2 text-[10px] leading-relaxed text-text-secondary custom-scrollbar">
+                                            {memberSkillDetails.candidate.skillPreview}
+                                        </pre>
+                                    )}
+                                </div>
+                            )}
+                            <div className="mt-3 flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={onPromoteMemberSkillCandidate}
+                                    className="h-7 rounded-lg bg-accent-primary px-3 text-xs font-medium text-white hover:bg-accent-primary/90"
+                                >
+                                    发布候选
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={onDiscardMemberSkillCandidate}
+                                    className="h-7 rounded-lg border border-black/10 bg-white/70 px-3 text-xs font-medium text-text-secondary hover:bg-white"
+                                >
+                                    丢弃
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    {advisor.memberSkillLastError && (
+                        <div className="mt-3 rounded-2xl border border-red-100 bg-red-50/70 p-3 text-xs text-red-500">
+                            {advisor.memberSkillLastError}
+                        </div>
+                    )}
+                    {rollbackVersions.length > 0 && (
+                        <div className="mt-3 rounded-2xl border border-black/[0.04] bg-white/60 p-3">
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                                <div className="text-xs font-medium text-text-primary">历史版本</div>
+                                {isMemberSkillDetailsLoading && <Loader2 className="h-3 w-3 animate-spin text-text-tertiary" />}
+                            </div>
+                            <div className="space-y-1.5">
+                                {rollbackVersions.map((version) => (
+                                    <div key={version.version} className="flex items-center justify-between gap-2 rounded-lg bg-black/[0.025] px-2 py-1.5">
+                                        <div className="min-w-0">
+                                            <div className="truncate text-[11px] font-medium text-text-secondary">{version.version}</div>
+                                            <div className="truncate text-[10px] text-text-tertiary">{version.updatedAt || '未知更新时间'}</div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => onRollbackMemberSkillVersion(version.version || '')}
+                                            className="h-6 shrink-0 rounded-lg border border-black/10 bg-white/70 px-2 text-[11px] font-medium text-text-secondary hover:bg-white hover:text-accent-primary"
+                                        >
+                                            回滚
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </section>
+
                 <section className="rounded-2xl border border-black/[0.04] bg-white/55 p-4 shadow-[0_10px_30px_-22px_rgba(0,0,0,0.25)]">
                     <div className="mb-2 flex items-center justify-between gap-3">
                         <button
@@ -1616,7 +1882,9 @@ export function AdvisorModal({
     ) => Promise<void>;
     onClose: () => void;
 }) {
-    const [mode, setMode] = useState<AdvisorCreateMode>(advisor ? 'manual' : (defaultMode || 'manual'));
+    const [mode, setMode] = useState<AdvisorCreateMode>(
+        advisor ? 'manual' : defaultMode === 'youtube' ? 'manual' : (defaultMode || 'manual')
+    );
     const [name, setName] = useState(advisor?.name || '');
     const [avatar, setAvatar] = useState(advisor?.avatar || AVATAR_OPTIONS[0]);
     const [personality, setPersonality] = useState(advisor?.personality || '');
@@ -1627,11 +1895,6 @@ export function AdvisorModal({
     const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
     const [templateLoadError, setTemplateLoadError] = useState('');
     const [pendingKnowledgeFiles, setPendingKnowledgeFiles] = useState<PendingKnowledgeFile[]>([]);
-
-    // yt-dlp 状态检查
-    const [ytdlpStatus, setYtdlpStatus] = useState<{ installed: boolean; version?: string } | null>(null);
-    const [isCheckingYtdlp, setIsCheckingYtdlp] = useState(false);
-    const [isInstallingYtdlp, setIsInstallingYtdlp] = useState(false);
 
     // YouTube specific
     const [youtubeUrl, setYoutubeUrl] = useState('');
@@ -1667,52 +1930,15 @@ export function AdvisorModal({
         }
     }, []);
 
-    // 切换到 YouTube 模式时检查 yt-dlp
-    useEffect(() => {
-        if (mode === 'youtube' && ytdlpStatus === null) {
-            checkYtdlpStatus();
-        }
-    }, [mode]);
-
     useEffect(() => {
         if (mode !== 'template') return;
         if (templates.length > 0 || isLoadingTemplates) return;
         void loadTemplates();
     }, [mode, templates.length, isLoadingTemplates, loadTemplates]);
 
-    const checkYtdlpStatus = async () => {
-        setIsCheckingYtdlp(true);
-        try {
-            const status = await window.ipcRenderer.checkYtdlp();
-            setYtdlpStatus(status);
-        } catch (e) {
-            console.error('Failed to check yt-dlp:', e);
-            setYtdlpStatus({ installed: false });
-        } finally {
-            setIsCheckingYtdlp(false);
-        }
-    };
-
-    const handleInstallYtdlp = async () => {
-        setIsInstallingYtdlp(true);
-        try {
-            const result = await window.ipcRenderer.installYtdlp();
-            if (result.success) {
-                await checkYtdlpStatus();
-            } else {
-                void appAlert('安装失败: ' + (result.error || '未知错误'));
-            }
-        } catch (e) {
-            void appAlert('安装出错，请稍后重试');
-        } finally {
-            setIsInstallingYtdlp(false);
-        }
-    };
-
     useEffect(() => {
         const handleProgress = (_: unknown, msg: string) => setFetchMsg(msg);
-        window.ipcRenderer.onFetchYoutubeInfoProgress(handleProgress);
-        return () => window.ipcRenderer.offFetchYoutubeInfoProgress(handleProgress);
+        return subscribeYoutubeFetchInfoProgress(handleProgress);
     }, []);
 
     const handleFetchYoutube = async () => {
@@ -1736,7 +1962,7 @@ export function AdvisorModal({
             }
         } catch (e) {
             console.error(e);
-            void appAlert('获取失败，请检查 ytdlp 是否安装以及网络连接');
+            void appAlert('YouTube 导入已停用');
         } finally {
             setIsLoadingInfo(false);
         }
@@ -1762,7 +1988,7 @@ export function AdvisorModal({
         }
 
         if (!name.trim()) return;
-        if (mode === 'manual' && pendingKnowledgeFiles.length === 0) {
+        if (!advisor && mode === 'manual' && pendingKnowledgeFiles.length === 0) {
             void appAlert('手动创建成员时必须导入至少一个知识库文件');
             return;
         }
@@ -1889,6 +2115,40 @@ export function AdvisorModal({
         }
     };
 
+    const handlePickKnowledgeFolder = async () => {
+        try {
+            const result = await window.ipcRenderer.advisors.pickKnowledgeFolder<{
+                success?: boolean;
+                files?: Array<{ path?: string; name?: string }>;
+                error?: string;
+            }>();
+            const nextFiles = Array.isArray(result?.files)
+                ? result.files
+                    .map((file) => ({
+                        path: String(file?.path || '').trim(),
+                        name: String(file?.name || '').trim() || String(file?.path || '').split('/').pop() || '未命名文件',
+                    }))
+                    .filter((file) => file.path)
+                : [];
+            if (nextFiles.length === 0) {
+                if (result?.error) void appAlert(result.error);
+                return;
+            }
+            setPendingKnowledgeFiles((prev) => {
+                const merged = [...prev];
+                nextFiles.forEach((file) => {
+                    if (!merged.some((item) => item.path === file.path)) {
+                        merged.push(file);
+                    }
+                });
+                return merged;
+            });
+        } catch (error) {
+            console.error('Failed to pick knowledge folder:', error);
+            void appAlert('选择知识库文件夹失败，请稍后重试');
+        }
+    };
+
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
             <div className="w-full max-w-lg mx-4 bg-surface-primary rounded-xl border border-border shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
@@ -1922,118 +2182,11 @@ export function AdvisorModal({
                             >
                                 从模板创建
                             </button>
-                            <button
-                                onClick={() => setMode('youtube')}
-                                className={clsx(
-                                    "flex-1 text-xs font-medium py-1.5 rounded-md transition-all",
-                                    mode === 'youtube' ? "bg-surface-primary shadow-sm text-text-primary" : "text-text-tertiary hover:text-text-secondary"
-                                )}
-                            >
-                                从YouTube导入
-                            </button>
                         </div>
                     </div>
                 )}
 
                 <div className="px-6 py-4 space-y-4 overflow-auto flex-1">
-                    {mode === 'youtube' && (
-                        <div className="bg-surface-secondary/30 p-4 rounded-lg border border-border space-y-3">
-                            {/* yt-dlp 状态检查 */}
-                            {isCheckingYtdlp ? (
-                                <div className="flex items-center gap-2 text-xs text-text-tertiary p-3 bg-surface-primary rounded-lg border border-border">
-                                    <RefreshCw className="w-4 h-4 animate-spin" />
-                                    检查 yt-dlp 安装状态...
-                                </div>
-                            ) : ytdlpStatus && !ytdlpStatus.installed ? (
-                                <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                                    <div className="flex items-start gap-3">
-                                        <div className="p-2 bg-amber-100 rounded-full shrink-0">
-                                            <AlertCircle className="w-5 h-5 text-amber-600" />
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <h4 className="text-sm font-medium text-amber-800">需要安装 yt-dlp</h4>
-                                            <p className="text-xs text-amber-700 mt-1">
-                                                从 YouTube 导入智囊团需要 yt-dlp 工具来获取频道信息和下载字幕。
-                                            </p>
-                                            <button
-                                                onClick={handleInstallYtdlp}
-                                                disabled={isInstallingYtdlp}
-                                                className="mt-3 flex items-center gap-2 px-4 py-2 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50"
-                                            >
-                                                {isInstallingYtdlp ? (
-                                                    <>
-                                                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                                                        安装中...
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <Download className="w-3.5 h-3.5" />
-                                                        一键安装 yt-dlp
-                                                    </>
-                                                )}
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            ) : ytdlpStatus?.installed ? (
-                                /* yt-dlp 已安装，显示正常的 YouTube 导入界面 */
-                                <>
-                                    <div>
-                                        <label className="block text-xs font-medium text-text-secondary mb-1.5">YouTube 频道链接</label>
-                                        <div className="flex gap-2">
-                                            <input
-                                                type="text"
-                                                value={youtubeUrl}
-                                                onChange={(e) => setYoutubeUrl(e.target.value)}
-                                                placeholder="https://www.youtube.com/@channel"
-                                                className="flex-1 bg-surface-primary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                            />
-                                            <button
-                                                onClick={handleFetchYoutube}
-                                                disabled={isLoadingInfo || !youtubeUrl}
-                                                className="px-3 py-2 bg-accent-primary/10 text-accent-primary text-xs font-medium rounded-lg hover:bg-accent-primary/20 disabled:opacity-50 min-w-[80px]"
-                                            >
-                                                {isLoadingInfo ? (
-                                                    <div className="flex items-center gap-1">
-                                                        <RefreshCw className="w-3 h-3 animate-spin" />
-                                                        <span>{fetchMsg || '获取中...'}</span>
-                                                    </div>
-                                                ) : '获取信息'}
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    {youtubeInfo && (
-                                        <div className="flex items-start gap-3 bg-surface-primary p-3 rounded-lg border border-border">
-                                            <img src={resolveAssetUrl(youtubeInfo.avatarUrl)} alt="" className="w-10 h-10 rounded-full object-cover shrink-0" />
-                                            <div className="min-w-0">
-                                                <div className="text-sm font-medium text-text-primary">{youtubeInfo.channelName}</div>
-                                                <div className="text-xs text-text-tertiary line-clamp-2">{youtubeInfo.channelDescription}</div>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    <div>
-                                        <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                                            下载最近视频字幕作为知识库: <span className="text-accent-primary">{subtitleCount}</span> 个
-                                        </label>
-                                        <input
-                                            type="range"
-                                            min="0"
-                                            max="50"
-                                            value={subtitleCount}
-                                            onChange={(e) => setSubtitleCount(parseInt(e.target.value))}
-                                            className="w-full h-1 bg-border rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-accent-primary [&::-webkit-slider-thumb]:rounded-full"
-                                        />
-                                        <p className="text-[10px] text-text-tertiary mt-1">
-                                            {subtitleCount === 0 ? '不下载字幕' : `将自动下载最近发布的 ${subtitleCount} 个视频字幕文件 (.vtt -> .txt)`}
-                                        </p>
-                                    </div>
-                                </>
-                            ) : null}
-                        </div>
-                    )}
-
                     {mode === 'template' && (
                         <div className="bg-surface-secondary/30 p-4 rounded-lg border border-border space-y-3">
                             <div className="flex items-center justify-between gap-3">
@@ -2221,14 +2374,24 @@ export function AdvisorModal({
                                                 创建成员时可直接导入资料，创建完成后会自动写入该成员的专属知识库。
                                             </p>
                                         </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => void handlePickKnowledgeFiles()}
-                                            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-accent-primary/30 px-3 py-1.5 text-xs text-accent-primary hover:bg-accent-primary/10"
-                                        >
-                                            <Upload className="w-3 h-3" />
-                                            选择文件
-                                        </button>
+                                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => void handlePickKnowledgeFolder()}
+                                                className="flex items-center gap-1.5 rounded-lg border border-accent-primary/30 px-3 py-1.5 text-xs text-accent-primary hover:bg-accent-primary/10"
+                                            >
+                                                <FolderOpen className="w-3 h-3" />
+                                                选择文件夹
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handlePickKnowledgeFiles()}
+                                                className="flex items-center gap-1.5 rounded-lg border border-accent-primary/30 px-3 py-1.5 text-xs text-accent-primary hover:bg-accent-primary/10"
+                                            >
+                                                <Upload className="w-3 h-3" />
+                                                选择文件
+                                            </button>
+                                        </div>
                                     </div>
 
                                     {pendingKnowledgeFiles.length === 0 ? (

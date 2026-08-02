@@ -626,8 +626,8 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
         void (async () => {
             try {
                 const result = await window.ipcRenderer.cover.generate({
-                    templateImage: templateImage?.dataUrl || undefined,
-                    baseImage: baseImage?.dataUrl || undefined,
+                    templateImage: templateImage.dataUrl,
+                    baseImage: baseImage.dataUrl,
                     titles: normalizedTitles,
                     titleMode: titleInputMode,
                     titlePrompt: titleInputMode === 'prompt' ? normalizedTitlePrompt : undefined,

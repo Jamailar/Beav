@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useOfficialAuthState } from '../../hooks/useOfficialAuthState';
-import { normalizeMembershipState } from './membershipModel';
+import { canUseEntitlement, normalizeMembershipState } from './membershipModel';
 import type { EntitlementKey } from './entitlementKeys';
 
 export function useMembership() {
@@ -11,6 +11,6 @@ export function useMembership() {
     bootstrapped,
     snapshot,
     state,
-    can: (_entitlement: EntitlementKey | string) => true,
+    can: (entitlement: EntitlementKey | string) => canUseEntitlement(state, entitlement),
   };
 }

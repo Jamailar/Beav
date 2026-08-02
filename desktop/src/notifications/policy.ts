@@ -40,7 +40,6 @@ type RuntimeCliEscalationPayload = {
   escalationId?: string;
   executionId?: string;
   reviewDocketId?: string;
-  requestId?: string;
   title: string;
   description: string;
   reason?: string;
@@ -183,15 +182,6 @@ export function mapRuntimeCliEscalationToNotification(
 ): NotificationEnvelope | null {
   if (!settings.rules.runtimeNeedsApproval) return null;
   const createdAt = Date.now();
-  const approvalRequestId = payload.requestId || payload.reviewDocketId || payload.escalationId || '';
-  const navigatePayload = approvalRequestId
-    ? {
-        view: 'approval' as const,
-        requestId: approvalRequestId,
-        docketId: payload.reviewDocketId,
-        escalationId: payload.escalationId,
-      }
-    : { view: 'redclaw' as const };
   const notification: NotificationEnvelope = {
     id: makeNotificationId('runtime', payload.sessionId || 'runtime', 'cli-escalation', createdAt),
     source: 'runtime',
@@ -206,9 +196,13 @@ export function mapRuntimeCliEscalationToNotification(
     actions: [
       {
         id: 'open-runtime',
-        label: approvalRequestId ? '去审批' : '去处理',
+        label: '去审批',
         action: 'navigate',
-        payload: navigatePayload,
+        payload: {
+          view: 'approval',
+          docketId: payload.reviewDocketId,
+          escalationId: payload.escalationId,
+        },
       },
     ],
     meta: {
@@ -216,7 +210,6 @@ export function mapRuntimeCliEscalationToNotification(
       executionId: payload.executionId,
       escalationId: payload.escalationId,
       reviewDocketId: payload.reviewDocketId,
-      requestId: approvalRequestId || undefined,
     },
   };
   return { ...notification, sound: resolveSound(notification.level, notification.source, context, settings) };

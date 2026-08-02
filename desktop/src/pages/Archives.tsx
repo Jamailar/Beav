@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { appConfirm } from '../utils/appDialogs';
 import { clsx } from 'clsx';
-import { dispatchAppIntent } from '../features/app-shell/appIntent';
+import { APP_BRAND } from '../config/brand';
 
 interface ArchiveProfileRecord {
     id: string;
@@ -73,15 +73,16 @@ interface ArchiveSample {
     createdAt: number;
 }
 
-interface RedClawProfileBundleSnapshot {
-    profileRoot?: string;
-    user?: string;
-    creatorProfile?: string;
-    files?: {
-        user?: string;
-        creatorProfile?: string;
-    };
-    onboardingState?: Record<string, unknown>;
+interface AccountSummaryRecord {
+    id: string;
+    platform?: string;
+    platformUserId?: string;
+    username?: string;
+    homepageUrl?: string;
+    postCount?: number;
+    lastImportedAt?: string;
+    lastLearnedAt?: string;
+    updatedAt?: string;
 }
 
 const normalizeProfile = (profile: ArchiveProfileRecord): ArchiveProfile => ({
@@ -116,25 +117,10 @@ const formatDate = (sample: ArchiveSample) => {
     return Number.isNaN(date.valueOf()) ? '' : date.toISOString().slice(0, 10);
 };
 
-const profileMarkdownExcerpt = (markdown: string, fallback: string): string => {
-    const normalized = markdown
-        .replace(/^#{1,6}\s*/gm, '')
-        .replace(/\*\*/g, '')
-        .replace(/\[[^\]]+\]\([^)]+\)/g, (match) => match.replace(/^\[|\]\([^)]+\)$/g, ''))
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .join('\n');
-    if (!normalized) return fallback;
-    return normalized.length > 320 ? `${normalized.slice(0, 320).trim()}...` : normalized;
-};
-
 export function Archives({ isActive = true }: { isActive?: boolean }) {
     const [profiles, setProfiles] = useState<ArchiveProfile[]>([]);
     const [samples, setSamples] = useState<ArchiveSample[]>([]);
-    const [creatorProfileBundle, setCreatorProfileBundle] = useState<RedClawProfileBundleSnapshot | null>(null);
-    const [isLoadingCreatorProfile, setIsLoadingCreatorProfile] = useState(false);
-    const [creatorProfileError, setCreatorProfileError] = useState('');
+    const [accounts, setAccounts] = useState<AccountSummaryRecord[]>([]);
     const [selectedProfileId, setSelectedProfileId] = useState('');
     const [selectedSampleId, setSelectedSampleId] = useState('');
     const [isLoadingProfiles, setIsLoadingProfiles] = useState(true);
@@ -150,7 +136,6 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
     const hasLoadedSamplesSnapshotRef = useRef(false);
     const loadProfilesRequestRef = useRef(0);
     const loadSamplesRequestRef = useRef(0);
-    const loadCreatorProfileRequestRef = useRef(0);
 
     const [profileForm, setProfileForm] = useState({
         name: '',
@@ -200,7 +185,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
             setIsLoadingProfiles(true);
         }
         try {
-            const result = await window.ipcRenderer.archives.list<ArchiveProfileRecord[]>();
+            const result = await window.ipcRenderer.archives.list() as ArchiveProfileRecord[];
             if (requestId !== loadProfilesRequestRef.current) return;
             const list = (result || []).map(normalizeProfile);
             setProfiles(list);
@@ -226,23 +211,12 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
         }
     }, []);
 
-    const loadCreatorProfileBundle = useCallback(async () => {
-        const requestId = loadCreatorProfileRequestRef.current + 1;
-        loadCreatorProfileRequestRef.current = requestId;
-        setIsLoadingCreatorProfile(true);
-        setCreatorProfileError('');
+    const loadAccounts = useCallback(async () => {
         try {
-            const bundle = await window.ipcRenderer.redclawProfile.getBundle() as RedClawProfileBundleSnapshot;
-            if (requestId !== loadCreatorProfileRequestRef.current) return;
-            setCreatorProfileBundle(bundle || null);
+            const result = await window.ipcRenderer.accounts.list() as { accounts?: AccountSummaryRecord[] };
+            setAccounts(Array.isArray(result?.accounts) ? result.accounts : []);
         } catch (error) {
-            if (requestId !== loadCreatorProfileRequestRef.current) return;
-            console.error('Failed to load creator profile bundle:', error);
-            setCreatorProfileError(error instanceof Error ? error.message : '加载长期创作档案失败');
-        } finally {
-            if (requestId === loadCreatorProfileRequestRef.current) {
-                setIsLoadingCreatorProfile(false);
-            }
+            console.error('Failed to load account profiles:', error);
         }
     }, []);
 
@@ -255,7 +229,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
             setIsLoadingSamples(true);
         }
         try {
-            const result = await window.ipcRenderer.archives.samples.list<ArchiveSampleRecord[]>(profileId);
+            const result = await window.ipcRenderer.archives.samples.list(profileId) as ArchiveSampleRecord[];
             if (requestId !== loadSamplesRequestRef.current) return;
             const list = (result || []).map(normalizeSample);
             setSamples(list);
@@ -274,8 +248,8 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
     useEffect(() => {
         if (!isActive) return;
         void loadProfiles();
-        void loadCreatorProfileBundle();
-    }, [isActive, loadCreatorProfileBundle, loadProfiles]);
+        void loadAccounts();
+    }, [isActive, loadAccounts, loadProfiles]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -341,14 +315,14 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
                 toneTags
             });
         } else {
-            const created = await window.ipcRenderer.archives.create<ArchiveProfileRecord>({
+            const created = await window.ipcRenderer.archives.create({
                 name: profileForm.name.trim(),
                 platform: profileForm.platform.trim(),
                 goal: profileForm.goal.trim(),
                 domain: profileForm.domain.trim(),
                 audience: profileForm.audience.trim(),
                 toneTags
-            });
+            }) as ArchiveProfileRecord;
             const normalized = created ? normalizeProfile(created) : null;
             if (normalized) {
                 setSelectedProfileId(normalized.id);
@@ -449,13 +423,6 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
         });
         await loadSamples(selectedProfile.id);
     };
-
-    const userProfileMarkdown = String(creatorProfileBundle?.user || creatorProfileBundle?.files?.user || '').trim();
-    const creatorProfileMarkdown = String(creatorProfileBundle?.creatorProfile || creatorProfileBundle?.files?.creatorProfile || '').trim();
-    const profileDocsReadyCount = [userProfileMarkdown, creatorProfileMarkdown].filter(Boolean).length;
-    const onboardingCompleted = Boolean((creatorProfileBundle?.onboardingState as { completed?: boolean } | undefined)?.completed);
-    const userProfileExcerpt = profileMarkdownExcerpt(userProfileMarkdown, '暂无用户档案。建议在设置里补充个人目标、内容边界和账号背景。');
-    const creatorProfileExcerpt = profileMarkdownExcerpt(creatorProfileMarkdown, '暂无创作档案。建议记录内容定位、受众痛点、视觉风格和运营策略。');
 
     return (
         <div className="flex h-full min-h-0">
@@ -560,84 +527,56 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
 
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                     <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
-                        <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center justify-between gap-3">
                             <div>
                                 <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
                                     <Sparkles className="w-4 h-4 text-accent-primary" />
-                                    长期创作档案
+                                    运营账号学习
                                 </div>
                                 <div className="mt-1 text-xs text-text-tertiary">
-                                    RedClaw 会读取用户档案和创作档案，为选题、标题、正文和素材判断提供长期上下文。
+                                    通过浏览器插件绑定账号后，{APP_BRAND.displayName} 会自动更新创作档案、写作风格和待确认长期偏好。
                                 </div>
                             </div>
-                            <div className="flex shrink-0 items-center gap-2">
-                                <button
-                                    onClick={() => void loadCreatorProfileBundle()}
-                                    className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-primary transition-colors disabled:opacity-50"
-                                    disabled={isLoadingCreatorProfile}
-                                >
-                                    {isLoadingCreatorProfile ? '刷新中' : '刷新'}
-                                </button>
-                                <button
-                                    onClick={() => dispatchAppIntent({ type: 'settings.open', tab: 'profile' })}
-                                    className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-primary transition-colors"
-                                >
-                                    编辑档案
-                                </button>
-                            </div>
+                            <button
+                                onClick={loadAccounts}
+                                className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-primary transition-colors"
+                            >
+                                刷新
+                            </button>
                         </div>
-
-                        {creatorProfileError ? (
-                            <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600">
-                                {creatorProfileError}
-                            </div>
-                        ) : null}
-
-                        <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-3">
-                            <div className="rounded-lg border border-border bg-surface-primary p-3">
-                                <div className="text-xs text-text-tertiary">档案完整度</div>
-                                <div className="mt-1 text-lg font-semibold text-text-primary">{profileDocsReadyCount}/2</div>
-                                <div className="mt-1 text-[11px] text-text-tertiary">
-                                    {profileDocsReadyCount === 2 ? '用户档案和创作档案已建立' : '建议补齐用户档案和创作档案'}
+                        <div className="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-3">
+                            {accounts.length === 0 ? (
+                                <div className="xl:col-span-3 rounded-lg border border-dashed border-border bg-surface-primary px-4 py-5 text-sm text-text-secondary">
+                                    当前空间还没有绑定运营账号。打开小红书账号主页，在插件侧边栏点击“绑定并学习这个账号”。
                                 </div>
-                            </div>
-                            <div className="rounded-lg border border-border bg-surface-primary p-3">
-                                <div className="text-xs text-text-tertiary">初始化状态</div>
-                                <div className="mt-1 text-lg font-semibold text-text-primary">{onboardingCompleted ? '已完成' : '待完善'}</div>
-                                <div className="mt-1 text-[11px] text-text-tertiary">
-                                    {creatorProfileBundle?.profileRoot ? '本地 profile 目录已就绪' : '等待创建本地 profile 目录'}
-                                </div>
-                            </div>
-                            <div className="rounded-lg border border-border bg-surface-primary p-3">
-                                <div className="text-xs text-text-tertiary">档案位置</div>
-                                <div className="mt-1 truncate text-sm font-medium text-text-primary" title={creatorProfileBundle?.profileRoot || undefined}>
-                                    {creatorProfileBundle?.profileRoot || '未加载'}
-                                </div>
-                                <div className="mt-1 text-[11px] text-text-tertiary">
-                                    CreatorProfile.md / user.md
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
-                            <div className="rounded-lg border border-border bg-surface-primary p-3">
-                                <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
-                                    <UserRound className="h-4 w-4 text-text-secondary" />
-                                    用户档案
-                                </div>
-                                <p className="mt-3 line-clamp-6 whitespace-pre-line text-xs leading-6 text-text-secondary">
-                                    {userProfileExcerpt}
-                                </p>
-                            </div>
-                            <div className="rounded-lg border border-border bg-surface-primary p-3">
-                                <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
-                                    <Sparkles className="h-4 w-4 text-accent-primary" />
-                                    创作档案
-                                </div>
-                                <p className="mt-3 line-clamp-6 whitespace-pre-line text-xs leading-6 text-text-secondary">
-                                    {creatorProfileExcerpt}
-                                </p>
-                            </div>
+                            ) : (
+                                accounts.map(account => (
+                                    <div key={account.id} className="rounded-lg border border-border bg-surface-primary p-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="min-w-0">
+                                                <div className="truncate text-sm font-semibold text-text-primary">{account.username || '未命名账号'}</div>
+                                                <div className="mt-1 text-xs text-text-tertiary">{account.platform || '-'} · {account.platformUserId || account.id}</div>
+                                            </div>
+                                            <span className="shrink-0 rounded bg-accent-primary/10 px-2 py-1 text-[10px] font-medium text-accent-primary">
+                                                已绑定
+                                            </span>
+                                        </div>
+                                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                                            <div className="rounded bg-surface-secondary px-2 py-1.5">
+                                                <div className="text-text-tertiary">历史内容</div>
+                                                <div className="mt-0.5 font-medium text-text-primary">{Number(account.postCount || 0)} 条</div>
+                                            </div>
+                                            <div className="rounded bg-surface-secondary px-2 py-1.5">
+                                                <div className="text-text-tertiary">写作风格</div>
+                                                <div className="mt-0.5 font-medium text-text-primary">{account.lastLearnedAt ? '已更新' : '待学习'}</div>
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 text-[11px] leading-4 text-text-tertiary">
+                                            {account.lastImportedAt ? `最近导入 ${account.lastImportedAt.slice(0, 10)}` : '等待首次导入'}
+                                        </div>
+                                    </div>
+                                ))
+                            )}
                         </div>
                     </div>
 

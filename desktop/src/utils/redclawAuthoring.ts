@@ -5,7 +5,6 @@ export type AuthoringFormatTarget = 'markdown' | 'wechat_rich_text';
 
 export interface AuthoringTaskHints {
     intent?: string;
-    taskIntent?: string;
     forceMultiAgent?: boolean;
     forceLongRunningTask?: boolean;
     activeSkills?: string[];
@@ -24,11 +23,9 @@ export interface AuthoringTaskHints {
     requireSkillInvocations?: string[];
     taskBrief?: TaskBriefSeed;
     forbiddenFinalPhrases?: string[];
-    teamAutoCreateConfirmed?: boolean;
-    teamObjective?: string;
     deferredDiscovery?: boolean;
     teamEscalation?: 'disabled' | 'allowed';
-    saveArtifact?: 'folder' | 'redpost' | 'redarticle';
+    saveArtifact?: 'folder';
     saveSubdir?: string;
     platform?: AuthoringPlatform;
     taskType?: AuthoringTaskType;
@@ -101,23 +98,7 @@ const TASK_LABEL: Record<AuthoringTaskType, string> = {
     expand_from_xhs: '小红书扩写公众号',
 };
 
-export const AUTHORING_ALLOWED_TOOLS = ['redbox_fs', 'app_cli'];
-
-export const AUTHORING_ALLOWED_APP_CLI_ACTIONS = [
-    'image.generate',
-    'memory.add',
-    'memory.list',
-    'memory.search',
-    'manuscripts.createProject',
-    'manuscripts.list',
-    'manuscripts.writeCurrent',
-    'redclaw.profile.bundle',
-    'redclaw.profile.read',
-    'skills.invoke',
-    'skills.list',
-    'subjects.get',
-    'subjects.search',
-];
+export const AUTHORING_ALLOWED_TOOLS = ['resource', 'workflow'];
 
 export const AUTHORING_ALLOWED_OPERATE_ACTIONS = [
     'taskBrief.get',
@@ -178,8 +159,8 @@ export function buildTaskBriefPromptSection(seed: TaskBriefSeed) {
 }
 
 const PLATFORM_SAVE_RULE: Record<AuthoringPlatform, string> = {
-    xiaohongshu: '如需新建稿件工程，优先用 `app_cli(action="manuscripts.createProject", payload={ "kind": "redpost", "title": "<标题>" })` 获取规范工程路径。创建成功后，直接用 `app_cli(action="manuscripts.writeCurrent", payload={ "content": "<完整正文>" })` 保存，不要把标题直接当文件名，也不要重复传 path。正文只保留正常内容结构，不要插入控制字符、占位分隔线或额外格式标记。',
-    wechat_official_account: '如需新建稿件工程，优先用 `app_cli(action="manuscripts.createProject", payload={ "kind": "redarticle", "title": "<标题>" })` 获取规范工程路径。创建成功后，直接用 `app_cli(action="manuscripts.writeCurrent", payload={ "content": "<完整正文>" })` 保存，不要把标题直接当文件名，也不要重复传 path。正文只保留正常内容结构，不要插入控制字符、占位分隔线或额外格式标记。',
+    xiaohongshu: '如需新建稿件工程，优先用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "post", "title": "<标题>" })` 获取规范文件夹工程路径。创建成功后，直接用 `Write(path="manuscripts://current", content="<完整正文>")` 保存，不要把标题直接当文件名，也不要重复传 path。正文只保留正常内容结构，不要插入控制字符、占位分隔线或额外格式标记。',
+    wechat_official_account: '如需新建稿件工程，优先用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "article", "title": "<标题>" })` 获取规范文件夹工程路径。创建成功后，直接用 `Write(path="manuscripts://current", content="<完整正文>")` 保存，不要把标题直接当文件名，也不要重复传 path。正文只保留正常内容结构，不要插入控制字符、占位分隔线或额外格式标记。',
 };
 
 export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) {
@@ -222,7 +203,6 @@ export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) 
             requiredSkill: 'writing-style',
             activeSkills: ['writing-style'],
             allowedTools: AUTHORING_ALLOWED_TOOLS,
-            allowedAppCliActions: AUTHORING_ALLOWED_APP_CLI_ACTIONS,
             allowedOperateActions: AUTHORING_ALLOWED_OPERATE_ACTIONS,
             allowedWriteTargets: ['manuscripts://current'],
             requireSourceRead: Boolean(input.sourceMode && input.sourceMode !== 'manual'),
@@ -230,7 +210,7 @@ export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) 
             requireSave: true,
             deferredDiscovery: false,
             teamEscalation: 'disabled',
-            saveArtifact: input.platform === 'xiaohongshu' ? 'redpost' : 'redarticle',
+            saveArtifact: 'folder',
             platform: input.platform,
             taskType: input.taskType,
             formatTarget: 'markdown' as const,

@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Archive, ArrowRight, Bell, Clapperboard, FileText, Folder, Image, ImagePlus, Lightbulb, Loader2, MessageSquareText, PenLine, RefreshCw, Send, Sparkles, X } from 'lucide-react';
-import { Approval as ApprovalPanel } from './Approval';
+import { AlertCircle, Archive, ArrowRight, Bell, Clapperboard, FileText, Folder, Image, ImagePlus, Lightbulb, Loader2, MessageSquareText, Mic2, PenLine, RefreshCw, Send, Sparkles, X } from 'lucide-react';
+import { ApprovalPanel } from './Approval';
 import { subscribeDataChanged } from '../bridge/appEvents';
 import { formatTimestampDate, parseTimestampMs } from '../utils/time';
-import type { GenerationIntent } from '../features/app-shell/types';
 import type { ThrivePluginHomeAction, ThrivePluginHomeResponse, ThrivePluginHomeWidget } from '../types';
 
 interface HomeProps {
     isActive?: boolean;
     onNavigateToCoverStudio?: () => void;
-    onNavigateToGenerationStudio?: (intent: GenerationIntent) => void;
+    onNavigateToGenerationStudio?: (mode: 'image' | 'video' | 'audio' | 'cover') => void;
     onOpenManuscript?: (filePath: string) => void;
     onNavigateToRedClaw?: (message: {
         content: string;
@@ -460,13 +459,6 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
         });
     }, [onNavigateToRedClaw]);
 
-    const openGenerationStudio = useCallback((mode: 'image' | 'video') => {
-        onNavigateToGenerationStudio?.({
-            mode,
-            source: 'standalone',
-        });
-    }, [onNavigateToGenerationStudio]);
-
     const runPluginHomeCommand = useCallback((command: PluginHomeCommand) => {
         const prompt = typeof command.prompt === 'string' ? command.prompt.trim() : '';
         const label = 'label' in command && typeof command.label === 'string'
@@ -478,12 +470,12 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
         }
         if ('target' in command) {
             if (command.target === 'coverStudio') {
-                onNavigateToCoverStudio?.();
+                onNavigateToGenerationStudio?.('cover');
             } else if (command.target === 'generationStudio') {
-                openGenerationStudio(command.mode === 'video' ? 'video' : 'image');
+                onNavigateToGenerationStudio?.(command.mode === 'video' ? 'video' : 'image');
             }
         }
-    }, [onNavigateToCoverStudio, openGenerationStudio, sendAiSuggestion]);
+    }, [onNavigateToCoverStudio, onNavigateToGenerationStudio, sendAiSuggestion]);
 
     return (
         <main className="h-full min-h-0 overflow-y-auto px-6 py-5" aria-label="主页">
@@ -542,21 +534,28 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                             description="生成适合发布的视觉封面"
                             icon={ImagePlus}
                             tintClassName="bg-emerald-500/10 text-emerald-700"
-                            onClick={() => onNavigateToCoverStudio?.()}
+                            onClick={() => onNavigateToGenerationStudio?.('cover')}
                         />
                         <QuickAppButton
                             label="生图"
                             description="用提示词生成素材图片"
                             icon={Sparkles}
                             tintClassName="bg-sky-500/10 text-sky-700"
-                            onClick={() => openGenerationStudio('image')}
+                            onClick={() => onNavigateToGenerationStudio?.('image')}
                         />
                         <QuickAppButton
                             label="生视频"
                             description="把想法推进成视频片段"
                             icon={Clapperboard}
                             tintClassName="bg-violet-500/10 text-violet-700"
-                            onClick={() => openGenerationStudio('video')}
+                            onClick={() => onNavigateToGenerationStudio?.('video')}
+                        />
+                        <QuickAppButton
+                            label="生音频"
+                            description="用角色音色合成旁白"
+                            icon={Mic2}
+                            tintClassName="bg-amber-500/10 text-amber-700"
+                            onClick={() => onNavigateToGenerationStudio?.('audio')}
                         />
                     </section>
 

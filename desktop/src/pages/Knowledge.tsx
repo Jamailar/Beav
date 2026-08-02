@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
-import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, Download, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square, Info, Copy, Check } from 'lucide-react';
+import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, Download, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square, Info } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import type { PendingChatMessage } from '../features/app-shell/types';
@@ -10,7 +10,6 @@ import { buildRedClawAuthoringMessage } from '../utils/redclawAuthoring';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { formatTimestampDateTime } from '../utils/time';
 import { SelectMenu } from '../components/ui/SelectMenu';
-import { CaptureJobsBar } from '../features/capture/CaptureJobsBar';
 import { APP_BRAND } from '../config/brand';
 import {
     Note,
@@ -70,65 +69,6 @@ interface SettingsShape {
 
 const BROWSER_PLUGIN_DOWNLOAD_URL = APP_BRAND.downloadUrl || 'https://redbox.ziz.hk/download';
 
-const copyTextWithClipboard = async (text: string): Promise<boolean> => {
-    try {
-        await navigator.clipboard.writeText(text);
-        return true;
-    } catch {
-        try {
-            const textarea = document.createElement('textarea');
-            textarea.value = text;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.focus();
-            textarea.select();
-            const ok = document.execCommand('copy');
-            document.body.removeChild(textarea);
-            return ok;
-        } catch {
-            return false;
-        }
-    }
-};
-
-function stripVisualProjectionKeywords(text: string): string {
-    return text.replace(/\n关键词:[\s\S]*$/u, '').trim();
-}
-
-function isVisibleTextEvidence(evidence: NonNullable<VisualSemanticBlock['visualEvidence']>[number]): boolean {
-    const kind = String(evidence.kind || '').trim().toLowerCase();
-    const id = String(evidence.id || '').trim().toLowerCase();
-    const title = String(evidence.title || '').trim().toLowerCase();
-    return kind === 'visible_text'
-        || id.includes('visible_text')
-        || title.includes('visible_text')
-        || title.includes('可见文字')
-        || title.includes('ocr');
-}
-
-function buildVisibleTextBlocksText(blocks?: VisualSemanticBlock[]): string {
-    if (!Array.isArray(blocks) || blocks.length === 0) return '';
-    const seen = new Set<string>();
-    const chunks: string[] = [];
-    for (const block of blocks) {
-        const evidenceText = (block.visualEvidence || [])
-            .filter(isVisibleTextEvidence)
-            .map((evidence) => String(evidence.text || '').trim())
-            .filter(Boolean)
-            .join('\n');
-        const fallbackText = block.blockType === 'image.visible_text'
-            ? stripVisualProjectionKeywords(String(block.text || '').trim())
-            : '';
-        const text = (evidenceText || fallbackText).trim();
-        if (!text || seen.has(text)) continue;
-        seen.add(text);
-        const prefix = typeof block.page === 'number' ? `P${block.page} ` : '';
-        chunks.push(`${prefix}${text}`);
-    }
-    return chunks.join('\n\n');
-}
-
 function ObsidianIcon({ className }: { className?: string }) {
     return (
         <svg
@@ -170,7 +110,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     const [isVisualIndexSettingSaving, setIsVisualIndexSettingSaving] = useState(false);
     const [showSubtitle, setShowSubtitle] = useState(false);
     const [showTranscript, setShowTranscript] = useState(false);
-    const [copiedExtractionId, setCopiedExtractionId] = useState<string | null>(null);
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [isSubtitleLoading, setIsSubtitleLoading] = useState(false);
     const [isRefreshingYoutubeSummaries, setIsRefreshingYoutubeSummaries] = useState(false);
@@ -558,20 +497,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         setSelectedNote(null);
     }, [isExpandableXiaohongshuNote, onNavigateToRedClaw]);
 
-    const handleCopyExtractionText = useCallback(async (copyId: string, text: string) => {
-        const normalizedText = text.trim();
-        if (!normalizedText) return;
-        const ok = await copyTextWithClipboard(normalizedText);
-        if (!ok) {
-            void appAlert('复制失败，请手动选择文本复制。');
-            return;
-        }
-        setCopiedExtractionId(copyId);
-        window.setTimeout(() => {
-            setCopiedExtractionId((current) => current === copyId ? null : current);
-        }, 1400);
-    }, []);
-
     const refreshIndexStatus = useCallback(async () => {
         try {
             const status = await window.ipcRenderer.knowledge.getIndexStatus<KnowledgeIndexStatus>();
@@ -640,7 +565,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                 cursor: reset ? null : nextCursorRef.current,
                 limit: 200,
                 kind: resolveKnowledgeBackendKind(selectedTypeFilter),
-                typeFilter: selectedTypeFilter === 'all' ? undefined : selectedTypeFilter,
                 query: debouncedSearchQuery || undefined,
                 sort: sortOrder,
             });
@@ -705,7 +629,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     }, []);
 
     const openNoteDetail = useCallback(async (note: Note) => {
-        setShowTranscript(false);
         setSelectedNote(note);
         const detail = await loadKnowledgeDetail(note.id, note.knowledgeKind || note.captureKind || 'redbook-note');
         if (detail && loadDetailRequestRef.current > 0) {
@@ -922,27 +845,32 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
 
     const typeFilters = useMemo(() => {
         const counts: Record<Exclude<KnowledgeTypeFilter, 'all'>, number> = {
-            'xhs-image': Number(kindCounts['xhs-image'] || 0),
-            'xhs-video': Number(kindCounts['xhs-video'] || 0),
-            'xhs-blogger': Number(kindCounts['xhs-blogger'] || 0),
-            'xhs-comments': Number(kindCounts['xhs-comments'] || 0),
-            'douyin-video': Number(kindCounts['douyin-video'] || 0),
-            'bilibili': Number(kindCounts.bilibili || 0),
-            'kuaishou': Number(kindCounts.kuaishou || 0),
-            'tiktok': Number(kindCounts.tiktok || 0),
-            'reddit': Number(kindCounts.reddit || 0),
-            'x': Number(kindCounts.x || 0),
-            'instagram': Number(kindCounts.instagram || 0),
-            'link-article': Number(kindCounts['link-article'] || 0),
-            'wechat-article': Number(kindCounts['wechat-article'] || 0),
-            'zhihu-answer': Number(kindCounts['zhihu-answer'] || 0),
-            'zhihu-article': Number(kindCounts['zhihu-article'] || 0),
-            'youtube': Number(kindCounts.youtube || kindCounts['youtube-video'] || 0),
-            'docs': Number(kindCounts.docs || kindCounts['document-source'] || 0),
+            'xhs-image': 0,
+            'xhs-video': 0,
+            'xhs-blogger': 0,
+            'xhs-comments': 0,
+            'douyin-video': 0,
+            'bilibili': 0,
+            'kuaishou': 0,
+            'tiktok': 0,
+            'reddit': 0,
+            'x': 0,
+            'instagram': 0,
+            'link-article': 0,
+            'wechat-article': 0,
+            'zhihu-answer': 0,
+            'zhihu-article': 0,
+            'youtube': Number(kindCounts['youtube-video'] || 0),
+            'docs': Number(kindCounts['document-source'] || 0),
         };
-        const totalCount = Number(kindCounts.all || knowledgeItems.length);
+        knowledgeItems.forEach((item) => {
+            if (item.kind === 'youtube' || item.kind === 'docs') {
+                return;
+            }
+            counts[item.kind] += 1;
+        });
         return [
-            { key: 'all' as const, label: '全部', count: totalCount },
+            { key: 'all' as const, label: '全部', count: knowledgeItems.length },
             { key: 'xhs-image' as const, label: '小红书图文', count: counts['xhs-image'] },
             { key: 'xhs-video' as const, label: '小红书视频', count: counts['xhs-video'] },
             { key: 'xhs-blogger' as const, label: '小红书博主', count: counts['xhs-blogger'] },
@@ -961,7 +889,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             { key: 'youtube' as const, label: 'YouTube', count: counts.youtube },
             { key: 'docs' as const, label: '文档', count: counts.docs },
         ].filter((item) => item.key === 'all' || item.count > 0);
-    }, [kindCounts, knowledgeItems.length]);
+    }, [kindCounts, knowledgeItems]);
 
     const youtubeSummaryPendingCount = useMemo(() => {
         return youtubeVideos.filter((video) => video.hasSubtitle && !String(video.summary || '').trim()).length;
@@ -1585,6 +1513,20 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         }
     };
 
+    const getKnowledgeTagClass = (tag: string) => {
+        switch (tag) {
+            case '公众号文章':
+                return 'text-emerald-700 bg-emerald-50 border-emerald-200';
+            case '网页文章':
+                return 'text-sky-700 bg-sky-50 border-sky-200';
+            case '知乎回答':
+            case '知乎文章':
+                return 'text-blue-700 bg-blue-50 border-blue-200';
+            default:
+                return 'text-accent-primary bg-accent-primary/5 border-accent-primary/10';
+        }
+    };
+
     const renderNoteBody = (note: Note) => {
         const isMarkdownArticle = (note.type === 'link-article' || note.captureKind === 'zhihu-answer' || note.captureKind === 'zhihu-article') && note.captureKind !== 'wechat-article';
         if (isMarkdownArticle) {
@@ -1696,67 +1638,32 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         );
     };
 
-    const renderKnowledgeExtractionFoldout = (note: Note, compact = false) => {
-        const transcript = String(note.transcript || '').trim();
-        const ocrText = transcript ? '' : buildVisibleTextBlocksText(note.visualBlocks);
-        const contentText = transcript || ocrText;
-        if (!contentText && !note.video) return null;
+    const renderXhsTranscriptionModule = (note: Note) => {
+        if (!note.video) return null;
+
         const isCurrentNoteTranscribing = isTranscribing && selectedNote?.id === note.id;
         const isProcessing = note.transcriptionStatus === 'processing' || isCurrentNoteTranscribing;
-        const isFailed = note.transcriptionStatus === 'failed' && !transcript;
-        const title = transcript ? '转录内容' : ocrText ? 'OCR内容' : '转录内容';
-        const statusLabel = contentText
-            ? `${title}已生成`
-            : isProcessing ? '转录中' : isFailed ? '转录失败' : '等待转录';
-        const Icon = transcript || note.video ? FileText : Image;
-        const canTranscribe = Boolean(note.video && !transcript);
-        const copyId = `${note.id}:${transcript ? 'transcript' : 'ocr'}`;
-        const isCopied = copiedExtractionId === copyId;
+        const hasTranscript = Boolean(note.transcript?.trim());
+        const isFailed = note.transcriptionStatus === 'failed' && !hasTranscript;
+        const statusLabel = hasTranscript ? '转录完成' : isProcessing ? '转录中' : isFailed ? '转录失败' : '等待转录';
+        const progressWidth = hasTranscript ? '100%' : isProcessing ? '62%' : isFailed ? '100%' : '0%';
+        const progressClass = hasTranscript
+            ? 'bg-emerald-500'
+            : isFailed
+                ? 'bg-rose-500'
+                : 'bg-accent-primary';
 
         return (
-            <div className={clsx(
-                'overflow-hidden rounded-2xl border bg-black/[0.02]',
-                compact ? 'border-black/[0.06]' : 'border-black/[0.03]',
-            )}>
-                <div className="flex items-center justify-between gap-2 px-4 py-3">
-                    <button
-                        type="button"
-                        onClick={() => contentText && setShowTranscript(!showTranscript)}
-                        disabled={!contentText}
-                        className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left disabled:cursor-default"
-                    >
-                        <span className="min-w-0">
-                            <span className={clsx(
-                                'flex items-center gap-2 font-extrabold text-text-primary',
-                                compact ? 'text-[13px]' : 'text-[14px]',
-                            )}>
-                                <Icon className="h-4 w-4 text-accent-primary" />
-                                {title}
-                            </span>
-                            <span className="mt-1 block text-[12px] font-medium text-text-tertiary">{statusLabel}</span>
-                        </span>
-                        {contentText && (
-                            <ChevronRight className={clsx(
-                                'h-4 w-4 shrink-0 text-text-tertiary transition-transform duration-300',
-                                showTranscript && 'rotate-90 text-accent-primary',
-                            )} />
-                        )}
-                    </button>
-                    {contentText && (
-                        <button
-                            type="button"
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                void handleCopyExtractionText(copyId, contentText);
-                            }}
-                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-black/[0.06] bg-white text-text-secondary transition hover:bg-black/[0.03] hover:text-text-primary"
-                            title={isCopied ? '已复制' : `复制${title}`}
-                            aria-label={isCopied ? '已复制' : `复制${title}`}
-                        >
-                            {isCopied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                        </button>
-                    )}
-                    {canTranscribe && (
+            <div className="rounded-2xl border border-black/[0.06] bg-black/[0.02] p-4">
+                <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-[13px] font-bold text-text-primary">
+                            <FileText className="h-4 w-4 text-text-secondary" />
+                            视频转录
+                        </div>
+                        <div className="mt-1 text-[12px] font-medium text-text-tertiary">{statusLabel}</div>
+                    </div>
+                    {!hasTranscript && (
                         <button
                             type="button"
                             onClick={() => handleTranscribeNote(note.id)}
@@ -1768,18 +1675,19 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                         </button>
                     )}
                 </div>
-                {contentText && showTranscript && (
-                    <div className={clsx('px-4 pb-4 animate-in slide-in-from-top-2 duration-300', compact ? 'pt-0' : 'pt-1')}>
-                        <pre className={clsx(
-                            'overflow-auto whitespace-pre-wrap rounded-xl bg-white font-sans leading-relaxed text-text-secondary ring-1 ring-black/[0.04] custom-scrollbar',
-                            compact ? 'max-h-[240px] px-3 py-3 text-[13px]' : 'max-h-[400px] p-5 text-[13px]',
-                        )}>
-                            {contentText}
-                        </pre>
-                    </div>
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-black/[0.06]">
+                    <div
+                        className={clsx('h-full rounded-full transition-all duration-500', progressClass, isProcessing && 'animate-pulse')}
+                        style={{ width: progressWidth }}
+                    />
+                </div>
+                {hasTranscript && (
+                    <pre className="mt-4 max-h-[220px] overflow-auto whitespace-pre-wrap rounded-xl bg-white px-3 py-3 font-sans text-[13px] leading-relaxed text-text-secondary ring-1 ring-black/[0.04] custom-scrollbar">
+                        {note.transcript}
+                    </pre>
                 )}
-                {!contentText && isFailed && (
-                    <div className="px-4 pb-4 text-[12px] font-medium text-rose-600">转录没有完成，可以重试。</div>
+                {isFailed && (
+                    <div className="mt-3 text-[12px] font-medium text-rose-600">转录没有完成，可以重试。</div>
                 )}
             </div>
         );
@@ -1907,8 +1815,8 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                         {tags.map((tag) => <span key={tag} className="text-[14px] font-semibold text-[#24599a]">#{tag}</span>)}
                                     </div>
                                 )}
-                                {renderKnowledgeExtractionFoldout(note, true)}
                                 <div className="pt-1 text-[12px] font-medium text-text-tertiary">{formatTimestampDateTime(note.createdAt)}</div>
+                                {renderXhsTranscriptionModule(note)}
                             </div>
 
                             <div className="border-t border-black/[0.06] px-5 py-5">
@@ -2214,6 +2122,21 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                 扩写公众号
                             </button>
                         )}
+                        {selectedNote.video && !selectedNote.transcript && (
+                            <button
+                                onClick={() => handleTranscribeNote(selectedNote.id)}
+                                disabled={isTranscribing || selectedNote.transcriptionStatus === 'processing'}
+                                className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-text-primary bg-surface-secondary border border-border rounded hover:bg-surface-hover disabled:opacity-50 transition-colors"
+                                title="提取文字"
+                            >
+                                {isTranscribing || selectedNote.transcriptionStatus === 'processing' ? (
+                                    <RefreshCw className="w-3 h-3 animate-spin" />
+                                ) : (
+                                    <FileText className="w-3 h-3" />
+                                )}
+                                {selectedNote.transcriptionStatus === 'processing' || isTranscribing ? '转录中...' : '提取文字'}
+                            </button>
+                        )}
                     </div>
                 </div>
 
@@ -2318,7 +2241,27 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                     {selectedNote.content}
                 </div>
 
-                {renderKnowledgeExtractionFoldout(selectedNote)}
+                {selectedNote.video && selectedNote.transcript && (
+                    <div className="bg-surface-secondary/50 rounded-lg border border-border overflow-hidden">
+                        <button
+                            onClick={() => setShowTranscript(!showTranscript)}
+                            className="w-full px-3 py-2 flex items-center justify-between text-xs font-semibold text-text-primary hover:bg-surface-secondary/80 transition-colors"
+                        >
+                            <span className="flex items-center gap-2">
+                                <FileText className="w-3.5 h-3.5" />
+                                视频转录
+                            </span>
+                            <ChevronRight className={`w-3.5 h-3.5 transition-transform ${showTranscript ? 'rotate-90' : ''}`} />
+                        </button>
+                        {showTranscript && (
+                            <div className="px-3 pb-3">
+                                <pre className="text-xs text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-60 overflow-auto">
+                                    {selectedNote.transcript}
+                                </pre>
+                            </div>
+                        )}
+                    </div>
+                )}
 
             </div>
         );
@@ -2354,7 +2297,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                             <Play className="w-12 h-12" />
                         </div>
                     )}
-                    <button 
+                    <button
                         onClick={() => openYouTube(selectedVideo.videoUrl)}
                         className="absolute inset-0 flex items-center justify-center bg-black/10 group-hover:bg-black/30 transition-colors"
                     >
@@ -2365,7 +2308,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                 </div>
 
                 <h1 className="text-lg font-bold text-text-primary mb-2 leading-snug">{selectedVideo.title}</h1>
-                
+
                 {selectedVideo.description && (
                     <div className="bg-surface-secondary/50 rounded p-3 mb-4">
                         <div className="text-xs text-text-tertiary mb-1">视频简介</div>
@@ -2409,8 +2352,6 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                         </div>
                         {!isEmbedded && topControls}
                     </div>
-
-                    {!isEmbedded && <CaptureJobsBar />}
 
                     {!isEmbedded && (allTags.length > 0 || filteredKnowledgeItems.length > 0) && (
                         <div ref={allTagsDrawerRef} className="relative py-0.5">
@@ -2717,6 +2658,9 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                     if (item.kind === 'docs' && item.doc) {
                                         const source = item.doc;
                                         const hasVisualIndexSamples = source.sampleFiles.some(isVisualIndexFilePath);
+                                        const visualPreviewUrl = source.visualSearchThumbnailPath && hasRenderableAssetUrl(source.visualSearchThumbnailPath)
+                                            ? resolveAssetUrl(source.visualSearchThumbnailPath)
+                                            : '';
                                         return (
                                             <div
                                                 key={item.id}
@@ -2730,7 +2674,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                     }
                                                 }}
                                                 className={clsx(
-                                                    'relative mb-3 break-inside-avoid rounded-lg border bg-white shadow-sm p-4 transition-all',
+                                                    'relative mb-3 break-inside-avoid rounded-2xl border bg-white shadow-sm p-4 transition-all',
                                                     isSelected ? 'border-accent-primary ring-2 ring-accent-primary/15' : 'border-black/[0.04]'
                                                 )}
                                             >
@@ -2754,6 +2698,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                                 </span>
                                                             )}
                                                         </div>
+                                                        <div className="mt-1.5 text-[10px] font-bold text-text-tertiary/60 break-all uppercase tracking-tighter">{source.rootPath}</div>
                                                     </div>
                                                     <button
                                                         type="button"
@@ -2767,6 +2712,73 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                         <Trash2 className="w-3.5 h-3.5" />
                                                     </button>
                                                 </div>
+                                                <div className="mt-3.5 flex flex-wrap gap-1.5 text-[10px] font-bold">
+                                                    <span className="inline-flex items-center gap-1 rounded-lg bg-black/[0.03] px-2.5 py-1.5 text-text-secondary border border-black/[0.02]">
+                                                        <FileText className="w-3 h-3 opacity-60" />
+                                                        {source.fileCount} DOCUMENTS
+                                                    </span>
+                                                </div>
+                                                {source.visualSearchSummary && (
+                                                    <div className="mt-3.5 overflow-hidden rounded-xl border border-sky-100 bg-sky-50/70">
+                                                        <div className="flex gap-3 p-2.5">
+                                                            {visualPreviewUrl ? (
+                                                                <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-white border border-sky-100">
+                                                                    <img
+                                                                        src={visualPreviewUrl}
+                                                                        alt={source.visualSearchPath || source.name}
+                                                                        className="h-full w-full object-cover"
+                                                                        loading="lazy"
+                                                                        decoding="async"
+                                                                    />
+                                                                </div>
+                                                            ) : (
+                                                                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg bg-white text-sky-500 border border-sky-100">
+                                                                    <Image className="h-5 w-5" />
+                                                                </div>
+                                                            )}
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="flex flex-wrap items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest text-sky-600">
+                                                                    <span>Visual Match</span>
+                                                                    {typeof source.visualSearchPage === 'number' && (
+                                                                        <span className="rounded-md bg-white/80 px-1.5 py-0.5 border border-sky-100">
+                                                                            PAGE {source.visualSearchPage}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                                <div className="mt-1 text-[11px] font-semibold leading-relaxed text-sky-950 line-clamp-3">
+                                                                    {source.visualSearchSummary}
+                                                                </div>
+                                                                {source.visualSearchPath && (
+                                                                    <div className="mt-1 text-[9px] font-bold text-sky-700/60 break-all line-clamp-1">
+                                                                        {source.visualSearchPath}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                {source.sampleFiles.length > 0 && (
+                                                    <div className="mt-3.5 flex flex-wrap gap-1.5">
+                                                        {source.sampleFiles.slice(0, 6).map((file) => {
+                                                            const isVisualFile = isVisualIndexFilePath(file);
+                                                            const FileIcon = isVisualFile ? Image : FileText;
+                                                            return (
+                                                                <span
+                                                                    key={`${source.id}-${file}`}
+                                                                    className={clsx(
+                                                                        'inline-flex max-w-full items-start gap-1 text-[10px] font-medium px-2.5 py-1 rounded-lg border',
+                                                                        isVisualFile
+                                                                            ? 'bg-sky-50 text-sky-700 border-sky-100'
+                                                                            : 'bg-black/[0.02] text-text-tertiary border-black/[0.01]',
+                                                                    )}
+                                                                >
+                                                                    <FileIcon className="w-3 h-3 shrink-0 mt-0.5 opacity-60" />
+                                                                    <span className="min-w-0 break-all leading-relaxed line-clamp-1">{file}</span>
+                                                                </span>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     }
@@ -2780,7 +2792,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                 key={item.id}
                                                 onClick={() => void openVideoDetail(video)}
                                                 className={clsx(
-                                                    'group relative mb-4 break-inside-avoid w-full text-left bg-white border rounded-lg overflow-hidden shadow-sm transition-all duration-300',
+                                                    'group relative mb-4 break-inside-avoid w-full text-left bg-white border rounded-[20px] overflow-hidden shadow-sm transition-all duration-300',
                                                     isSelected ? 'border-accent-primary ring-2 ring-accent-primary/15' : isProcessing ? 'border-yellow-400 animate-pulse' : isFailed ? 'border-red-400' : 'border-black/[0.04]'
                                                 )}
                                             >
@@ -2809,7 +2821,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                             )}
                                                         </div>
                                                     )}
-                                                    
+
                                                     {!isProcessing && !isFailed && (
                                                         <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity">
                                                             <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-md border border-white/30 flex items-center justify-center text-white shadow-xl">
@@ -2817,10 +2829,31 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                             </div>
                                                         </div>
                                                     )}
-                                                    
+
+                                                    {video.summary && !isProcessing && (
+                                                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-4 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+                                                            <div className="text-[11px] leading-relaxed text-white/90 line-clamp-3 font-medium">
+                                                                {video.summary}
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                 </div>
                                                 <div className="p-4">
                                                     <div className="text-[14px] font-extrabold text-text-primary line-clamp-2 leading-tight tracking-tight group-hover:text-accent-primary transition-colors">{video.title}</div>
+                                                    <div className="mt-2 text-[11px] font-bold text-text-tertiary/70 line-clamp-2 leading-relaxed">
+                                                        {isProcessing ? '正在智能解析内容细节...' : (video.summary || video.description || '暂无描述信息')}
+                                                    </div>
+                                                    <div className="mt-3.5 flex items-center justify-between gap-2 text-[10px] font-bold text-text-tertiary/50 uppercase tracking-tighter border-t border-black/[0.02] pt-3">
+                                                        <span>{new Date(video.createdAt).toLocaleDateString()}</span>
+                                                        <div className="flex items-center gap-2">
+                                                            {video.hasSubtitle && !isProcessing && (
+                                                                <span className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md border border-emerald-100">
+                                                                    SUBTITLES
+                                                                </span>
+                                                            )}
+                                                            {isFailed && <span className="text-red-500">FAILED</span>}
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             </button>
                                         );
@@ -2834,14 +2867,16 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                     const orderedImages = orderImages(note.images || []);
                                     const coverImage = note.cover || orderedImages[0];
                                     const isTextArticleCard = (item.kind === 'link-article' || item.kind === 'wechat-article' || item.kind === 'zhihu-answer' || item.kind === 'zhihu-article') && !coverImage && !note.video;
+                                    const notePreviewText = note.excerpt || note.content || note.sourceUrl || '暂无摘要';
                                     const isNoteTranscribing = Boolean(note.video && !note.transcript && note.transcriptionStatus === 'processing');
+                                    const canExpandToWechat = SHOW_WECHAT_KNOWLEDGE_ACTIONS && isExpandableXiaohongshuNote(note) && Boolean(onNavigateToRedClaw);
 
                                     return (
                                         <button
                                             key={item.id}
                                             onClick={() => void openNoteDetail(note)}
                                             className={clsx(
-                                                'relative mb-4 break-inside-avoid w-full text-left bg-white border rounded-lg shadow-sm transition-all duration-300',
+                                                'relative mb-4 break-inside-avoid w-full text-left bg-white border rounded-[20px] shadow-sm transition-all duration-300',
                                                 isSelected ? 'border-accent-primary ring-2 ring-accent-primary/15' : 'border-black/[0.04]',
                                                 isTextArticleCard ? 'overflow-visible p-5' : 'overflow-hidden'
                                             )}
@@ -2849,9 +2884,12 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                             {selectionButton}
                                             {isTextArticleCard ? (
                                                 <div className="min-w-0">
-                                                    <div className="mb-2 flex items-center gap-2">
+                                                    <div className="mb-2 flex items-center justify-between gap-2">
                                                         <span className={clsx('shrink-0 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm border border-black/[0.02]', getKnowledgeKindBadgeClass(item.kind))}>
                                                             {getKnowledgeKindLabel(item.kind)}
+                                                        </span>
+                                                        <span className="min-w-0 truncate text-[10px] font-bold text-text-tertiary/50 uppercase tracking-tighter">
+                                                            {note.siteName || note.author || new Date(note.createdAt).toLocaleDateString()}
                                                         </span>
                                                     </div>
                                                     <div className={clsx(
@@ -2859,6 +2897,26 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                         embeddedUsesCompactCard ? 'text-[14px] line-clamp-4' : 'text-[15px] line-clamp-3',
                                                     )}>
                                                         {note.title}
+                                                    </div>
+                                                    <div className={clsx(
+                                                        'mt-2.5 text-text-tertiary leading-relaxed font-medium',
+                                                        embeddedUsesCompactCard ? 'text-[12px] line-clamp-6' : 'text-[12px] line-clamp-5',
+                                                    )}>
+                                                        {notePreviewText}
+                                                    </div>
+                                                    <div className="mt-4 flex items-center gap-2.5 text-[10px] font-bold text-text-tertiary/60 flex-wrap uppercase tracking-tighter">
+                                                        <span>{new Date(note.createdAt).toLocaleDateString()}</span>
+                                                        {note.sourceUrl && (
+                                                            <span className="flex min-w-0 items-center gap-1 max-w-full">
+                                                                <ExternalLink className="w-3 h-3 shrink-0 opacity-40" />
+                                                                {renderAuthorInline(note, 'truncate max-w-[180px]')}
+                                                            </span>
+                                                        )}
+                                                        {note.tags?.slice(0, 2).map((tag) => (
+                                                            <span key={tag} className={clsx('px-1.5 py-0.5 rounded-md border border-black/[0.02] bg-black/[0.01]', getKnowledgeTagClass(tag))}>
+                                                                #{tag}
+                                                            </span>
+                                                        ))}
                                                     </div>
                                                 </div>
                                             ) : coverImage ? (
@@ -2919,6 +2977,71 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                             {!isTextArticleCard && (
                                                 <div className="p-4">
                                                     <div className="text-[14px] font-extrabold text-text-primary line-clamp-2 leading-tight tracking-tight group-hover:text-accent-primary transition-colors">{note.title}</div>
+                                                    <div
+                                                        className={clsx(
+                                                            'text-[11px] font-medium text-text-tertiary/70 leading-relaxed',
+                                                            (item.kind === 'link-article' || item.kind === 'wechat-article') ? 'mt-1.5 line-clamp-4' : 'mt-1.5 line-clamp-2'
+                                                        )}
+                                                    >
+                                                        {notePreviewText}
+                                                    </div>
+                                                    {!isEmbedded && note.tags && note.tags.length > 0 && (
+                                                        <div className="mt-2.5 flex flex-wrap gap-1">
+                                                            {note.tags.slice(0, 3).map((tag) => (
+                                                                <span key={tag} className={clsx('text-[9px] font-bold px-1.5 py-0.5 rounded border border-black/[0.02] bg-black/[0.01]', getKnowledgeTagClass(tag))}>
+                                                                    #{tag}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    <div className="mt-3.5 flex items-center gap-3 text-[9px] font-bold text-text-tertiary/40 flex-wrap uppercase tracking-tighter border-t border-black/[0.02] pt-3">
+                                                        <span>{new Date(note.createdAt).toLocaleDateString()}</span>
+
+                                                        {item.kind !== 'link-article' && (
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="flex items-center gap-1">
+                                                                    <Heart className="w-3 h-3 opacity-60" />
+                                                                    {note.stats?.likes || 0}
+                                                                </span>
+                                                                {typeof note.stats?.collects === 'number' && (
+                                                                    <span className="flex items-center gap-1">
+                                                                        <Star className="w-3 h-3 opacity-60" />
+                                                                        {note.stats.collects}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        )}
+
+                                                        {note.images?.length > 0 && (
+                                                            <span className="flex items-center gap-1">
+                                                                <Image className="w-3 h-3 opacity-60" />
+                                                                {note.images.length}
+                                                            </span>
+                                                        )}
+
+                                                        {(item.kind === 'link-article' || item.kind === 'wechat-article') && note.sourceUrl && (
+                                                            <span className="flex items-center gap-1 max-w-full">
+                                                                <ExternalLink className="w-3 h-3 opacity-40" />
+                                                                {renderAuthorInline(note, 'truncate max-w-[120px]')}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    {canExpandToWechat && (
+                                                        <div className="mt-3">
+                                                            <span
+                                                                role="button"
+                                                                tabIndex={0}
+                                                                onClick={(event) => {
+                                                                    event.stopPropagation();
+                                                                    handleExpandToWechat(note);
+                                                                }}
+                                                                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[10px] font-extrabold text-emerald-700 transition-all hover:bg-emerald-100 active:scale-95 shadow-sm"
+                                                            >
+                                                                <Sparkles className="w-3.5 h-3.5" />
+                                                                扩写为公众号
+                                                            </span>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
                                         </button>
@@ -3031,6 +3154,16 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                 >
                                     <FolderOpen className="w-3.5 h-3.5" /> 在目录中查看
                                 </button>
+                                {selectedNote.video && !selectedNote.transcript && (
+                                    <button
+                                        onClick={() => handleTranscribeNote(selectedNote.id)}
+                                        disabled={isTranscribing || selectedNote.transcriptionStatus === 'processing'}
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500 text-white text-[11px] font-bold hover:bg-blue-600 transition-all disabled:opacity-40"
+                                    >
+                                        {isTranscribing || selectedNote.transcriptionStatus === 'processing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                                        提取文字
+                                    </button>
+                                )}
                             </div>
 
                             {selectedNote.video && (
@@ -3139,7 +3272,29 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                 </div>
                             )}
 
-                            {renderKnowledgeExtractionFoldout(selectedNote)}
+                            {selectedNote.video && selectedNote.transcript && (
+                                <div className="bg-black/[0.02] rounded-2xl border border-black/[0.03] overflow-hidden transition-all hover:bg-black/[0.03]">
+                                    <button
+                                        onClick={() => setShowTranscript(!showTranscript)}
+                                        className="w-full px-6 py-4 flex items-center justify-between text-[14px] font-extrabold text-text-primary transition-colors"
+                                    >
+                                        <span className="flex items-center gap-2.5">
+                                            <FileText className="w-4 h-4 text-accent-primary" />
+                                            视频转录文本
+                                        </span>
+                                        <ChevronRight className={`w-4 h-4 transition-transform duration-300 ${showTranscript ? 'rotate-90 text-accent-primary' : 'text-text-tertiary'}`} />
+                                    </button>
+                                    {showTranscript && (
+                                        <div className="px-6 pb-6 animate-in slide-in-from-top-2 duration-300">
+                                            <div className="bg-white rounded-xl p-5 border border-black/[0.02] shadow-inner">
+                                                <pre className="text-[13px] text-text-secondary whitespace-pre-wrap font-sans leading-relaxed max-h-[400px] overflow-auto custom-scrollbar">
+                                                    {selectedNote.transcript}
+                                                </pre>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         <div className="px-8 py-5 border-t border-black/[0.04] flex items-center justify-between bg-black/[0.01]" onClick={(event) => event.stopPropagation()}>

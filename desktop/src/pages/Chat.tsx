@@ -1,15 +1,15 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { flushSync } from 'react-dom';
-import { Trash2, Plus, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit } from 'lucide-react';
+import { Sparkles, Trash2, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { supportsAttachmentKindDirectInput } from '../../shared/modelCapabilities';
+import { subscribeSettingsUpdated } from '../bridge/appEvents';
 import {
   CliEscalationDialog,
   type CliEscalationRequestModel,
   type CliEscalationScope,
 } from '../components/CliEscalationDialog';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
-import { subscribeDataChanged, subscribeSettingsUpdated } from '../bridge/appEvents';
 import {
   buildChatModelOptions,
   ChatComposer,
@@ -25,63 +25,85 @@ import {
 import {
   MessageItem,
   Message,
-  type ChatMessageAssetReference,
-  type ChatMessageMemberActor,
-  type ChatMessageSkillReference,
   ToolEvent,
   SkillEvent,
+  type ChatMessageMemberActor,
   type ChatMessageLinkRenderMode,
   type ChatMessageLinkTarget,
 } from '../components/MessageItem';
 import type { ProcessItem, ProcessItemType } from '../components/ProcessTimeline';
-import { ChatAttachmentActionOverlay } from './chat/ChatAttachmentActionOverlay';
-import { ChatDropOverlay } from './chat/ChatDropOverlay';
-import type { ChatAttachmentActionKind } from './chat/attachment-actions/types';
-import { REDCLAW_ATTACHMENT_ACTIONS_BY_SCENE } from './chat/attachment-actions/redclawAttachmentActions';
 import type { PendingChatMessage } from '../features/app-shell/types';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { type AudioRecordingClip } from '../features/audio-input/audioInput';
 import { resolveUsableTranscript } from '../features/audio-input/transcriptionResult';
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
 import { subscribeRuntimeEventStream, type ToolConfirmRequestPayload } from '../runtime/runtimeEventStream';
-import { appConfirm } from '../utils/appDialogs';
+import { dispatchAppIntent } from '../features/app-shell/appIntent';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 import { useDocumentThemeMode } from '../hooks/useDocumentThemeMode';
-import { resolveAssetUrl } from '../utils/pathManager';
+import { ChatDropOverlay } from './chat/ChatDropOverlay';
+import { ChatAttachmentActionOverlay } from './chat/ChatAttachmentActionOverlay';
 import { useChatAttachments } from './chat/useChatAttachments';
 
-interface Session {
+interface AdvisorMentionRecord {
   id: string;
-  title: string;
-  updatedAt: string;
+  name?: string;
+  avatar?: string;
+  personality?: string;
 }
 
-// 群聊接口
-interface ChatRoom {
-  id: string;
-  name: string;
-  advisorIds: string[];
-  createdAt: string;
+interface KnowledgeMentionCatalogRecord {
+  itemId?: string;
+  id?: string;
+  kind?: string;
+  noteType?: string;
+  captureKind?: string;
+  title?: string;
+  sourceUrl?: string;
+  folderPath?: string;
+  rootPath?: string;
+  coverUrl?: string;
+  thumbnailUrl?: string;
+  previewText?: string;
+  updatedAt?: string;
+  tags?: string[];
+  fileCount?: number;
+  hasTranscript?: boolean;
 }
 
-function parseMessageMetadataObject(metadata: unknown): Record<string, unknown> | null {
-  if (!metadata) return null;
-  if (typeof metadata === 'string') {
-    try {
-      const parsed = JSON.parse(metadata);
-      if (!parsed || typeof parsed !== 'object') return null;
-      return parsed as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  }
-  if (typeof metadata === 'object') return metadata as Record<string, unknown>;
-  return null;
+interface SkillMentionCatalogRecord {
+  name?: string;
+  description?: string;
+  location?: string;
+  aliases?: string[];
+  sourceScope?: string;
+  isBuiltin?: boolean;
+  disabled?: boolean;
+}
+
+interface AssetMentionCatalogRecord {
+  id?: string;
+  name?: string;
+  description?: string;
+  tags?: string[];
+  categoryId?: string;
+  imagePaths?: string[];
+  absoluteImagePaths?: string[];
+  previewUrls?: string[];
+  primaryPreviewUrl?: string;
+  voicePath?: string;
+  absoluteVoicePath?: string;
+}
+
+interface KnowledgeMentionListPageResponse {
+  items?: KnowledgeMentionCatalogRecord[];
+  nextCursor?: string | null;
+  total?: number;
 }
 
 function memberActorFromMessageMetadata(metadata: unknown): ChatMessageMemberActor | undefined {
-  const object = parseMessageMetadataObject(metadata);
-  if (!object) return undefined;
+  if (!metadata || typeof metadata !== 'object') return undefined;
+  const object = metadata as Record<string, unknown>;
   const actor = object.replyActor && typeof object.replyActor === 'object'
     ? object.replyActor as Record<string, unknown>
     : object.activeSpeaker && typeof object.activeSpeaker === 'object'
@@ -101,9 +123,79 @@ function memberActorFromMessageMetadata(metadata: unknown): ChatMessageMemberAct
   };
 }
 
+function normalizeKnowledgeMentionRecord(item: KnowledgeMentionCatalogRecord): ChatKnowledgeMentionOption | null {
+  const id = String(item.itemId || item.id || '').trim();
+  if (!id) return null;
+  const sourceKind = String(item.kind || item.captureKind || item.noteType || '').trim();
+  return {
+    id,
+    title: String(item.title || '未命名内容').trim(),
+    sourceKind,
+    summary: String(item.previewText || '').trim() || undefined,
+    cover: String(item.coverUrl || item.thumbnailUrl || '').trim() || undefined,
+    sourceUrl: String(item.sourceUrl || '').trim() || undefined,
+    folderPath: String(item.folderPath || '').trim() || undefined,
+    rootPath: String(item.rootPath || '').trim() || undefined,
+    tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : [],
+    updatedAt: String(item.updatedAt || '').trim() || undefined,
+    fileCount: typeof item.fileCount === 'number' ? item.fileCount : undefined,
+    hasTranscript: Boolean(item.hasTranscript),
+  };
+}
+
+function normalizeSkillMentionRecord(item: SkillMentionCatalogRecord): ChatSkillMentionOption | null {
+  const name = String(item.name || '').trim();
+  if (!name || item.disabled) return null;
+  return {
+    name,
+    description: String(item.description || '').trim() || undefined,
+    location: String(item.location || '').trim() || undefined,
+    sourceScope: String(item.sourceScope || '').trim() || undefined,
+    isBuiltin: Boolean(item.isBuiltin),
+    aliases: Array.isArray(item.aliases) ? item.aliases.map((alias) => String(alias || '').trim()).filter(Boolean) : [],
+  };
+}
+
+function normalizeAssetMentionRecord(item: AssetMentionCatalogRecord): ChatAssetMentionOption | null {
+  const id = String(item.id || '').trim();
+  const name = String(item.name || '').trim();
+  if (!id || !name) return null;
+  return {
+    id,
+    name,
+    description: String(item.description || '').trim() || undefined,
+    categoryId: String(item.categoryId || '').trim() || undefined,
+    tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : [],
+    imagePaths: Array.isArray(item.imagePaths) ? item.imagePaths.map((path) => String(path || '').trim()).filter(Boolean) : [],
+    absoluteImagePaths: Array.isArray(item.absoluteImagePaths) ? item.absoluteImagePaths.map((path) => String(path || '').trim()).filter(Boolean) : [],
+    previewUrls: Array.isArray(item.previewUrls) ? item.previewUrls.map((url) => String(url || '').trim()).filter(Boolean) : [],
+    primaryPreviewUrl: String(item.primaryPreviewUrl || '').trim() || undefined,
+    voicePath: String(item.voicePath || '').trim() || undefined,
+    absoluteVoicePath: String(item.absoluteVoicePath || '').trim() || undefined,
+  };
+}
+
+function mergeSkillMentionsIntoTaskHints(
+  taskHints: unknown,
+  skillMentions: ChatSkillMentionOption[],
+): unknown {
+  const skillNames = skillMentions
+    .map((item) => item.name.trim())
+    .filter(Boolean);
+  if (skillNames.length === 0) return taskHints;
+  const base = taskHints && typeof taskHints === 'object' && !Array.isArray(taskHints)
+    ? { ...(taskHints as Record<string, unknown>) }
+    : {};
+  const existing = Array.isArray(base.activeSkills)
+    ? base.activeSkills.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  base.activeSkills = Array.from(new Set([...existing, ...skillNames]));
+  return base;
+}
+
 function knowledgeReferencesFromMessageMetadata(metadata: unknown): ChatKnowledgeMentionOption[] {
-  const object = parseMessageMetadataObject(metadata);
-  if (!object) return [];
+  if (!metadata || typeof metadata !== 'object') return [];
+  const object = metadata as Record<string, unknown>;
   const rawReferences = Array.isArray(object.explicitKnowledgeRefs)
     ? object.explicitKnowledgeRefs
     : Array.isArray(object.references)
@@ -119,7 +211,7 @@ function knowledgeReferencesFromMessageMetadata(metadata: unknown): ChatKnowledg
       const item = raw as Record<string, unknown>;
       const id = String(item.knowledgeId || item.id || '').trim();
       if (!id) return null;
-      return {
+      const reference: ChatKnowledgeMentionOption = {
         id,
         title: String(item.title || '未命名内容').trim(),
         sourceKind: String(item.sourceKind || '').trim() || undefined,
@@ -128,115 +220,14 @@ function knowledgeReferencesFromMessageMetadata(metadata: unknown): ChatKnowledg
         sourceUrl: String(item.sourceUrl || '').trim() || undefined,
         folderPath: String(item.folderPath || '').trim() || undefined,
         rootPath: String(item.rootPath || '').trim() || undefined,
-        tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : undefined,
+        tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : [],
         updatedAt: String(item.updatedAt || '').trim() || undefined,
         fileCount: typeof item.fileCount === 'number' ? item.fileCount : undefined,
-        hasTranscript: typeof item.hasTranscript === 'boolean' ? item.hasTranscript : undefined,
+        hasTranscript: Boolean(item.hasTranscript),
       };
+      return reference;
     })
     .filter((item): item is ChatKnowledgeMentionOption => Boolean(item));
-}
-
-function assetReferencesFromMessageMetadata(metadata: unknown): ChatMessageAssetReference[] {
-  const object = parseMessageMetadataObject(metadata);
-  if (!object) return [];
-  const rawReferences = Array.isArray(object.explicitAssetRefs)
-    ? object.explicitAssetRefs
-    : Array.isArray(object.references)
-      ? object.references.filter((item) => (
-        item
-        && typeof item === 'object'
-        && String((item as Record<string, unknown>).type || '').trim() === 'asset'
-      ))
-      : [];
-  return rawReferences
-    .map((raw) => {
-      if (!raw || typeof raw !== 'object') return null;
-      const item = raw as Record<string, unknown>;
-      const id = String(item.assetId || item.id || '').trim();
-      const name = String(item.name || '').trim();
-      if (!id || !name) return null;
-      return {
-        id,
-        name,
-        description: String(item.description || '').trim() || undefined,
-        primaryPreviewUrl: String(item.primaryPreviewUrl || '').trim() || undefined,
-        tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : undefined,
-      };
-    })
-    .filter((item): item is ChatMessageAssetReference => Boolean(item));
-}
-
-function skillReferencesFromMessageMetadata(metadata: unknown): ChatMessageSkillReference[] {
-  const object = parseMessageMetadataObject(metadata);
-  if (!object || !Array.isArray(object.activeSkills)) return [];
-  return Array.from(new Set(
-    object.activeSkills
-      .map((item) => String(item || '').trim())
-      .filter(Boolean),
-  ))
-    .slice(0, 12)
-    .map((name) => ({ name }));
-}
-
-function uploadedAttachmentsFromMessageMetadata(metadata: unknown): UploadedFileAttachment[] {
-  const object = parseMessageMetadataObject(metadata);
-  if (!object || !Array.isArray(object.uploadedAttachments)) return [];
-  return object.uploadedAttachments
-    .map((raw) => {
-      if (!raw || typeof raw !== 'object') return null;
-      const item = raw as Record<string, unknown>;
-      if (String(item.type || '').trim() !== 'uploaded-file') return null;
-      const name = String(item.name || '').trim();
-      if (!name) return null;
-      return {
-        type: 'uploaded-file',
-        name,
-        attachmentId: String(item.attachmentId || '').trim() || undefined,
-        workspaceRelativePath: String(item.workspaceRelativePath || '').trim() || undefined,
-        toolPath: String(item.toolPath || '').trim() || undefined,
-        absolutePath: String(item.absolutePath || '').trim() || undefined,
-        originalAbsolutePath: String(item.originalAbsolutePath || '').trim() || undefined,
-        localUrl: String(item.localUrl || '').trim() || undefined,
-        inlineDataUrl: String(item.inlineDataUrl || '').trim() || undefined,
-        thumbnailDataUrl: String(item.thumbnailDataUrl || '').trim() || undefined,
-        thumbnailUrl: String(item.thumbnailUrl || '').trim() || undefined,
-        kind: String(item.kind || '').trim() || undefined,
-        mimeType: String(item.mimeType || '').trim() || undefined,
-        size: typeof item.size === 'number' ? item.size : undefined,
-        ext: String(item.ext || '').trim() || undefined,
-        storageMode: String(item.storageMode || '').trim() || undefined,
-        directUploadEligible: typeof item.directUploadEligible === 'boolean' ? item.directUploadEligible : undefined,
-        processingStrategy: String(item.processingStrategy || '').trim() || undefined,
-        deliveryMode: String(item.deliveryMode || '').trim() || undefined,
-        intakeStatus: String(item.intakeStatus || '').trim() || undefined,
-        capabilities: item.capabilities && typeof item.capabilities === 'object' ? item.capabilities as Record<string, boolean | undefined> : undefined,
-        deliveryPlan: item.deliveryPlan && typeof item.deliveryPlan === 'object' ? item.deliveryPlan as Record<string, unknown> : undefined,
-        summary: String(item.summary || '').trim() || undefined,
-        requiresMultimodal: typeof item.requiresMultimodal === 'boolean' ? item.requiresMultimodal : undefined,
-        attachmentLifecycle: String(item.attachmentLifecycle || '').trim() || undefined,
-      };
-    })
-    .filter((item): item is UploadedFileAttachment => Boolean(item));
-}
-
-function normalizePendingKnowledgeReferences(items: PendingChatMessage['knowledgeReferences'] | undefined): ChatKnowledgeMentionOption[] {
-  return (items || [])
-    .filter((item) => item && item.id)
-    .map((item) => ({
-      id: item.id,
-      title: item.title || '未命名内容',
-      sourceKind: item.sourceKind,
-      summary: item.summary,
-      cover: item.cover,
-      sourceUrl: item.sourceUrl,
-      folderPath: item.folderPath,
-      rootPath: item.rootPath,
-      tags: item.tags,
-      updatedAt: item.updatedAt,
-      fileCount: item.fileCount,
-      hasTranscript: item.hasTranscript,
-    }));
 }
 
 function knowledgeReferencePrimaryPath(item: ChatKnowledgeMentionOption): string {
@@ -256,11 +247,14 @@ function buildKnowledgeReferenceRuntimeContext(items: ChatKnowledgeMentionOption
     if (primaryPath) {
       lines.push(`   primaryPath: ${primaryPath}`);
     }
+    if (item.folderPath || item.rootPath) {
+      lines.push(`   folderPath: ${item.folderPath || ''}; rootPath: ${item.rootPath || ''}`);
+    }
     if (item.sourceUrl) {
       lines.push(`   sourceUrl: ${item.sourceUrl}`);
     }
     if (item.summary) {
-      lines.push(`   summary: ${item.summary.slice(0, 240)}`);
+      lines.push(`   summary: ${item.summary.slice(0, 700)}`);
     }
   });
   return lines.join('\n');
@@ -271,7 +265,6 @@ export interface ChatShortcut {
   text: string;
   displayContent?: string;
   action?: 'send' | 'inject';
-  attachment?: UploadedFileAttachment;
   attachments?: UploadedFileAttachment[];
 }
 
@@ -286,127 +279,8 @@ export interface ChatShortcutContext {
 
 export type ChatShortcutProvider = ChatShortcut[] | ((context: ChatShortcutContext) => ChatShortcut[]);
 
-function resolveChatShortcutProvider(
-  provider: ChatShortcutProvider | undefined,
-  fallback: ChatShortcut[],
-  context: ChatShortcutContext,
-): ChatShortcut[] {
-  return provider
-    ? (typeof provider === 'function' ? provider(context) : provider)
-    : fallback;
-}
-
-interface AdvisorMentionRecord {
-  id: string;
-  name?: string;
-  avatar?: string;
-  personality?: string;
-}
-
-interface KnowledgeMentionCatalogRecord {
-  id?: string;
-  itemId?: string;
-  title?: string;
-  kind?: string;
-  sourceKind?: string;
-  previewText?: string;
-  summary?: string;
-  cover?: string;
-  coverUrl?: string;
-  thumbnailUrl?: string;
-  sourceUrl?: string;
-  folderPath?: string;
-  rootPath?: string;
-  tags?: string[];
-  updatedAt?: string;
-  fileCount?: number;
-  hasTranscript?: boolean;
-}
-
-interface KnowledgeMentionListPageResponse {
-  items?: KnowledgeMentionCatalogRecord[];
-  nextCursor?: string | null;
-  total?: number;
-}
-
-interface SkillMentionCatalogRecord {
-  name?: string;
-  description?: string;
-  location?: string;
-  sourceScope?: string;
-  isBuiltin?: boolean;
-  aliases?: string[];
-}
-
-interface AssetMentionCatalogRecord {
-  id?: string;
-  name?: string;
-  description?: string;
-  tags?: string[];
-  categoryId?: string;
-  category_id?: string;
-  primaryPreviewUrl?: string;
-  previewUrls?: string[];
-  imagePaths?: string[];
-  image_paths?: string[];
-  absoluteImagePaths?: string[];
-  absolute_image_paths?: string[];
-  voicePath?: string;
-  voice_path?: string;
-  absoluteVoicePath?: string;
-  absolute_voice_path?: string;
-}
-
-function normalizeKnowledgeMentionRecord(item: KnowledgeMentionCatalogRecord): ChatKnowledgeMentionOption | null {
-  const id = String(item.id || item.itemId || '').trim();
-  if (!id) return null;
-  const title = String(item.title || item.sourceUrl || id).trim() || '未命名内容';
-  return {
-    id,
-    title,
-    sourceKind: String(item.sourceKind || item.kind || '').trim() || undefined,
-    summary: String(item.summary || item.previewText || '').trim() || undefined,
-    cover: String(item.cover || item.coverUrl || item.thumbnailUrl || '').trim() || undefined,
-    sourceUrl: String(item.sourceUrl || '').trim() || undefined,
-    folderPath: String(item.folderPath || '').trim() || undefined,
-    rootPath: String(item.rootPath || '').trim() || undefined,
-    tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : undefined,
-    updatedAt: String(item.updatedAt || '').trim() || undefined,
-    fileCount: typeof item.fileCount === 'number' ? item.fileCount : undefined,
-    hasTranscript: typeof item.hasTranscript === 'boolean' ? item.hasTranscript : undefined,
-  };
-}
-
-function normalizeSkillMentionRecord(item: SkillMentionCatalogRecord): ChatSkillMentionOption | null {
-  const name = String(item.name || '').trim();
-  if (!name) return null;
-  return {
-    name,
-    description: String(item.description || '').trim() || undefined,
-    location: String(item.location || '').trim() || undefined,
-    sourceScope: String(item.sourceScope || '').trim() || undefined,
-    isBuiltin: Boolean(item.isBuiltin),
-    aliases: Array.isArray(item.aliases) ? item.aliases.map((value) => String(value || '').trim()).filter(Boolean) : undefined,
-  };
-}
-
-function normalizeAssetMentionRecord(item: AssetMentionCatalogRecord): ChatAssetMentionOption | null {
-  const id = String(item.id || '').trim();
-  const name = String(item.name || '').trim();
-  if (!id || !name) return null;
-  return {
-    id,
-    name,
-    description: String(item.description || '').trim() || undefined,
-    tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : undefined,
-    categoryId: String(item.categoryId || item.category_id || '').trim() || undefined,
-    primaryPreviewUrl: String(item.primaryPreviewUrl || '').trim() || undefined,
-    previewUrls: Array.isArray(item.previewUrls) ? item.previewUrls.map((url) => String(url || '').trim()).filter(Boolean) : undefined,
-    imagePaths: Array.isArray(item.imagePaths || item.image_paths) ? (item.imagePaths || item.image_paths || []).map((path) => String(path || '').trim()).filter(Boolean) : undefined,
-    absoluteImagePaths: Array.isArray(item.absoluteImagePaths || item.absolute_image_paths) ? (item.absoluteImagePaths || item.absolute_image_paths || []).map((path) => String(path || '').trim()).filter(Boolean) : undefined,
-    voicePath: String(item.voicePath || item.voice_path || '').trim() || undefined,
-    absoluteVoicePath: String(item.absoluteVoicePath || item.absolute_voice_path || '').trim() || undefined,
-  };
+interface EnsureSessionForSendOptions {
+  onCreated?: (sessionId: string) => void;
 }
 
 // 选中文字菜单状态
@@ -420,12 +294,11 @@ interface SelectionMenu {
 interface ChatProps {
   isActive?: boolean;
   onExecutionStateChange?: (active: boolean) => void;
-  defaultCollapsed?: boolean;
   pendingMessage?: PendingChatMessage | null;
   onMessageConsumed?: () => void;
   fixedSessionId?: string | null;
-  initialChatModelKey?: string;
-  onChatModelKeyChange?: (key: string) => void;
+  fixedSessionDraft?: boolean;
+  onEnsureSessionForSend?: (defaultTitle?: string, options?: EnsureSessionForSendOptions) => Promise<string | null>;
   showClearButton?: boolean;
   fixedSessionBannerText?: string;
   shortcuts?: ChatShortcutProvider;
@@ -457,13 +330,17 @@ interface ChatProps {
   showComposer?: boolean;
   showMessageAttachments?: boolean;
   collapseEmptyFixedSession?: boolean;
-  placeholder?: string;
+  fixedSessionTaskHints?: unknown;
   messageLinkRenderMode?: ChatMessageLinkRenderMode;
   onMessageLinkPreview?: (target: ChatMessageLinkTarget) => void;
   activePreviewHref?: string | null;
+  inlineSidePanel?: React.ReactNode;
   keepComposerInputActive?: boolean;
   messageListHeader?: React.ReactNode;
+  placeholder?: string;
   fixedMemberMention?: ChatMemberMentionOption | null;
+  onSessionActivity?: (sessionId: string, updatedAt: string) => void;
+  clearSignal?: number;
 }
 
 interface ChatContextUsage {
@@ -507,7 +384,16 @@ interface StructuredChatErrorNotice {
   hint?: string;
   detail?: string;
   metaParts?: string[];
+  tone: 'neutral' | 'warning' | 'danger';
+  kind: 'billing' | 'auth' | 'rate-limit' | 'network' | 'model' | 'attachment' | 'critical' | 'generic';
+  action?: {
+    label: string;
+    target: 'settings-login';
+  };
 }
+
+const CHAT_ERROR_NOTICE_AUTO_DISMISS_MS = 6500;
+const CHAT_ERROR_NOTICE_ACTION_AUTO_DISMISS_MS = 15000;
 
 function stripTransientAttachmentPreview(
   attachment?: UploadedFileAttachment,
@@ -523,6 +409,10 @@ function stripTransientMessageAttachmentPreview(
   if (!attachment) return undefined;
   if (attachment.type !== 'uploaded-file') return attachment;
   return stripTransientAttachmentPreview(attachment as UploadedFileAttachment) as Message['attachment'];
+}
+
+function defaultSessionTitleFromMessage(message: string): string {
+  return Array.from(String(message || '').trim()).slice(0, 15).join('');
 }
 
 function attachmentKind(attachment: UploadedFileAttachment | undefined): string {
@@ -618,11 +508,15 @@ function applyAttachmentsDeliveryMode(
     .filter((attachment): attachment is UploadedFileAttachment => Boolean(attachment));
 }
 
-function commitAttachmentsForSend(attachments: UploadedFileAttachment[]): UploadedFileAttachment[] {
-  return attachments.map((attachment) => ({
+function commitAttachmentForSend(attachment: UploadedFileAttachment): UploadedFileAttachment {
+  return {
     ...attachment,
     attachmentLifecycle: 'committed',
-  }));
+  };
+}
+
+function commitAttachmentsForSend(attachments: UploadedFileAttachment[]): UploadedFileAttachment[] {
+  return attachments.map(commitAttachmentForSend);
 }
 
 function attachmentSendBlockReason(attachment: UploadedFileAttachment | undefined): string {
@@ -644,38 +538,14 @@ function attachmentsSendBlockReason(attachments: UploadedFileAttachment[]): stri
   return '';
 }
 
+function uploadedFileAttachmentsFromMessageAttachment(attachment: Message['attachment'] | undefined): UploadedFileAttachment[] {
+  if (!attachment || attachment.type !== 'uploaded-file') return [];
+  return [attachment as UploadedFileAttachment];
+}
+
 function createAttachmentPayload(attachments: UploadedFileAttachment[]): Message['attachment'] | undefined {
   if (attachments.length === 0) return undefined;
   return attachments[0] as Message['attachment'];
-}
-
-function inferAttachmentActionKind(attachment: UploadedFileAttachment | null | undefined): ChatAttachmentActionKind {
-  const kind = attachmentKind(attachment || undefined);
-  const mimeType = String(attachment?.mimeType || '').trim().toLowerCase();
-  const ext = String(attachment?.ext || '').trim().replace(/^\./, '').toLowerCase();
-  if (kind === 'image' || mimeType.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp', 'gif', 'heic'].includes(ext)) return 'image';
-  if (kind === 'video' || mimeType.startsWith('video/') || ['mp4', 'mov', 'webm', 'm4v', 'avi', 'mkv'].includes(ext)) return 'video';
-  return 'file';
-}
-
-function attachmentActionKey(attachment: UploadedFileAttachment | UploadedFileAttachment[] | null | undefined): string {
-  const items = Array.isArray(attachment)
-    ? attachment
-    : attachment
-      ? [attachment]
-      : [];
-  if (items.length === 0) return '';
-  return items.map((item) => [
-    item.attachmentId,
-    item.name,
-    item.workspaceRelativePath,
-    item.toolPath,
-    item.absolutePath,
-    item.originalAbsolutePath,
-    item.size,
-    item.kind,
-    item.mimeType,
-  ].map((value) => String(value || '')).join('|')).join('\n');
 }
 
 function uploadedAttachmentsFromMessage(message: Message): UploadedFileAttachment[] {
@@ -689,24 +559,15 @@ function uploadedAttachmentsFromMessage(message: Message): UploadedFileAttachmen
   ));
 }
 
-function latestReusableVideoAttachment(messages: Message[]): UploadedFileAttachment | null {
+function latestReusableVideoAttachments(messages: Message[]): UploadedFileAttachment[] {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const attachment = uploadedAttachmentsFromMessage(messages[index])
-      .find((item) => inferAttachmentActionKind(item) === 'video');
-    if (attachment) {
-      return attachment;
+    const videoAttachments = uploadedAttachmentsFromMessage(messages[index])
+      .filter((attachment) => attachmentShortcutKind(attachment) === 'video');
+    if (videoAttachments.length > 0) {
+      return videoAttachments;
     }
   }
-  return null;
-}
-
-function attachmentActionsFor(kind: ChatAttachmentActionKind): ChatShortcut[] {
-  const scene = kind === 'video'
-    ? 'uploaded_video'
-    : kind === 'image'
-      ? 'uploaded_image'
-      : 'uploaded_file';
-  return REDCLAW_ATTACHMENT_ACTIONS_BY_SCENE[scene];
+  return [];
 }
 
 type FixedSessionWarmSnapshot = {
@@ -717,7 +578,180 @@ type FixedSessionWarmSnapshot = {
 
 const FIXED_SESSION_SNAPSHOT_TTL_MS = 30_000;
 const fixedSessionWarmSnapshots = new Map<string, FixedSessionWarmSnapshot>();
-const fixedSessionInflightLoads = new Map<string, Promise<[unknown[], ChatRuntimeState | null]>>();
+const fixedSessionInflightLoads = new Map<string, Promise<[unknown[], ChatRuntimeState | null, unknown[]]>>();
+
+function shouldPreserveFixedSessionWarmMessages(
+  warm: FixedSessionWarmSnapshot | null,
+  history: unknown[],
+): warm is FixedSessionWarmSnapshot {
+  if (!warm?.messages.length) return false;
+  const hasActivePlaceholder = warm.messages.some((message) => message.role === 'ai' && message.isStreaming);
+  return hasActivePlaceholder && history.length < warm.messages.length;
+}
+
+function resolveChatShortcutProvider(
+  provider: ChatShortcutProvider | undefined,
+  fallback: ChatShortcut[],
+  context: ChatShortcutContext,
+): ChatShortcut[] {
+  return provider ? (typeof provider === 'function' ? provider(context) : provider) : fallback;
+}
+
+function attachmentShortcutKind(attachment: UploadedFileAttachment | null): 'image' | 'video' | 'file' | null {
+  if (!attachment) return null;
+  const kind = attachmentKind(attachment);
+  const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
+  const ext = String(attachment.ext || '').trim().toLowerCase();
+  if (kind === 'image' || mimeType.startsWith('image/')) return 'image';
+  if (kind === 'video' || mimeType.startsWith('video/')) return 'video';
+  if (kind === 'audio' || mimeType.startsWith('audio/')) return 'file';
+  if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'].includes(ext)) return 'image';
+  if (['mp4', 'mov', 'mkv', 'avi', 'webm'].includes(ext)) return 'video';
+  return 'file';
+}
+
+function attachmentActionIdentity(attachment: UploadedFileAttachment): string {
+  return String(
+    attachment.attachmentId
+    || attachment.workspaceRelativePath
+    || attachment.toolPath
+    || attachment.absolutePath
+    || attachment.originalAbsolutePath
+    || attachment.inlineDataUrl
+    || attachment.name
+  ).trim();
+}
+
+function attachmentActionKey(attachments: UploadedFileAttachment[]): string {
+  return attachments
+    .map((attachment) => attachmentActionIdentity(attachment))
+    .filter(Boolean)
+    .join('|');
+}
+
+function defaultComposerShortcuts(context: ChatShortcutContext): ChatShortcut[] {
+  const attachmentKind = attachmentShortcutKind(context.attachment);
+  const attachment = context.attachment || undefined;
+  if (attachmentKind === 'image' && attachmentCapability(attachment, 'imageVision')) {
+    return [
+      {
+        label: '生成电商套图',
+        text: [
+          '请基于我上传的图片执行「电商套图生成」工作流。',
+          '',
+          '工作流要求：',
+          '1. 先分析图片主体、可售卖点、适用人群、使用场景、画面风格和潜在转化诉求。',
+          '2. 判断这张图最适合做主图、卖点图、场景图、细节图还是对比图，并说明判断依据。',
+          '3. 设计一套 5 张左右的电商套图：每张图都要包含画面目标、构图、主标题、副文案、素材需求、视觉风格和注意事项。',
+          '4. 为每张图输出可直接用于生成图片的提示词，提示词要包含主体、背景、构图、光线、材质、色彩、比例和风格约束。',
+          '5. 最后给出最推荐先生成的 1 张图，并说明原因。',
+        ].join('\n'),
+      },
+      {
+        label: '生成封面图',
+        text: [
+          '请基于我上传的图片执行「封面图生成」工作流。',
+          '',
+          '工作流要求：',
+          '1. 先分析图片里最适合作为封面钩子的主体、情绪、反差、场景和视觉焦点。',
+          '2. 给出 3 个封面方向，每个方向包含目标受众、主标题、辅助文案、构图、字体感觉、色彩和视觉重心。',
+          '3. 标出原图里必须保留、可以弱化、应该避开的元素。',
+          '4. 为最推荐方向输出一条可直接生成封面图的完整提示词。',
+          '5. 最终回复用简洁结构输出，不要写成泛泛建议。',
+        ].join('\n'),
+      },
+      {
+        label: '生成同款图',
+        text: [
+          '请基于我上传的图片执行「同款视觉生成」工作流。',
+          '',
+          '工作流要求：',
+          '1. 拆解原图的构图、镜头距离、光线、色彩、材质、主体姿态、背景层次和整体风格。',
+          '2. 提炼可复用的视觉 DNA，但不要要求复制原图、商标、人物身份或受版权保护的具体元素。',
+          '3. 生成 3 组同款视觉方案，分别偏产品展示、生活方式、社媒封面。',
+          '4. 每组都给出完整图片生成提示词和负面约束。',
+          '5. 说明哪一组最适合继续商业化使用。',
+        ].join('\n'),
+      },
+      {
+        label: '提取卖点文案',
+        text: [
+          '请基于我上传的图片执行「卖点文案提取」工作流。',
+          '',
+          '工作流要求：',
+          '1. 先识别图片里的产品、场景、用户利益、情绪价值和视觉证据。',
+          '2. 提炼可用于转化的卖点，不要编造图片无法支持的参数、功效或事实。',
+          '3. 输出 10 条短标题、5 条详情页卖点文案、5 条社媒投放短文案。',
+          '4. 每条文案都要标注适用位置：主图、详情页、封面、广告、社媒正文。',
+          '5. 最后给出最推荐的一组标题 + 副文案组合。',
+        ].join('\n'),
+      },
+    ];
+  }
+  if (attachmentKind === 'video' && (attachmentCapability(attachment, 'videoAnalyze') || attachmentCapability(attachment, 'videoEdit'))) {
+    return [
+      {
+        label: '爆款分析',
+        text: [
+          '请基于我上传的视频执行「爆款分析」工作流。',
+          '',
+          '工作流要求：',
+          '1. 先调用视频分析能力完整读取视频内容，不要只凭文件名或封面判断。',
+          '2. 分析前 3 秒钩子、核心主题、情绪曲线、节奏变化、内容结构、视觉记忆点和可复用金句。',
+          '3. 标出最可能带来完播、收藏、评论或转发的片段，并说明原因。',
+          '4. 判断当前视频的主要问题：开头、节奏、信息密度、表达顺序、画面素材、字幕或结尾行动号召。',
+          '5. 输出一版爆款改造方案：新标题、开头重写、结构调整、剪辑节奏、字幕策略和发布建议。',
+          '6. 不要声称分析报告已保存；只有在工具成功写入文件并返回路径后，才能输出“已保存”和对应路径。',
+        ].join('\n'),
+      },
+      {
+        label: '字幕提取',
+        text: [
+          '请基于我上传的视频执行「字幕提取」工作流。',
+          '',
+          '工作流要求：',
+          '1. 优先调用可用的字幕/语音识别能力提取视频字幕或语音内容。',
+          '2. 尽量保留时间顺序；如果工具能生成 SRT/VTT/TXT 字幕文件，请生成并输出文件路径。',
+          '3. 对听不清、多人重叠、疑似错字或需要人工确认的片段单独标注。',
+          '4. 输出一版可直接复制使用的清洁字幕文本。',
+          '5. 最后总结视频的核心内容，方便我确认字幕是否覆盖完整。',
+        ].join('\n'),
+      },
+      {
+        label: '剪辑切片',
+        text: [
+          '请基于我上传的视频执行「剪辑切片」工作流。',
+          '',
+          '工作流要求：',
+          '1. 先调用视频分析能力完整分析视频，找出最精彩、最适合独立发布的切片片段。',
+          '2. 每个候选片段都要给出开始时间、结束时间、片段主题、爆点理由、适合平台和推荐标题。',
+          '3. 选择最值得产出的片段，调用可用的视频处理能力把这些片段剪辑成独立视频文件。',
+          '4. 每个成片都要尽量保留上下文完整性，不要只剪一句没有前后语义的话。',
+          '5. 最终输出切片清单、生成后的文件路径、推荐发布顺序和每个切片的标题建议。',
+          '6. 只使用工具返回的真实文件路径，不要编造只有文件名的链接。',
+        ].join('\n'),
+      },
+    ];
+  }
+  if (attachmentKind === 'file' && (
+    attachmentCapability(attachment, 'workspaceRead')
+    || attachmentCapability(attachment, 'textExtract')
+    || attachmentCapability(attachment, 'documentExtract')
+  )) {
+    return [
+      { label: '变成口播稿', text: '请把这个文件内容改写成一篇自然、有节奏的口播稿。' },
+      { label: '变成讲解漫画', text: '请把这个文件内容改编成讲解漫画脚本，包括分镜、画面说明和对白。' },
+      { label: '做成AI视频', text: '请把这个文件内容改编成 AI 视频方案，包括脚本、镜头和画面提示词。' },
+      { label: '改写成短文', text: '请把这个文件内容改写成一篇适合社交平台发布的短文。' },
+    ];
+  }
+  return [
+    { label: '📝 总结内容', text: '请总结以上内容，提炼核心要点。' },
+    { label: '💡 提炼观点', text: '请提炼其中的关键观点和洞察。' },
+    { label: '✂️ 润色优化', text: '请润色这段内容，使其更具吸引力。' },
+    { label: '❓ 延伸提问', text: '基于以上内容，提出3个值得思考的延伸问题。' },
+  ];
+}
 
 function readFixedSessionWarmSnapshot(sessionId: string | null | undefined): FixedSessionWarmSnapshot | null {
   const key = String(sessionId || '').trim();
@@ -743,6 +777,13 @@ function writeFixedSessionWarmSnapshot(
     contextUsage: next.contextUsage ?? previous?.contextUsage ?? null,
     capturedAt: Date.now(),
   });
+}
+
+export function clearFixedSessionWarmSnapshot(sessionId: string | null | undefined): void {
+  const key = String(sessionId || '').trim();
+  if (!key) return;
+  fixedSessionWarmSnapshots.delete(key);
+  fixedSessionInflightLoads.delete(key);
 }
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 80;
@@ -775,6 +816,10 @@ function mergeAssistantContent(currentContent: string, incomingContent: string):
   if (incoming.startsWith(current)) return incoming;
   if (current.endsWith(incoming)) return current;
   return `${current}${incoming}`;
+}
+
+function normalizeTimelineCommentarySegment(content: string): string {
+  return String(content || '').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function mergeThoughtDelta(currentThought: string, incomingThought: string): string {
@@ -859,6 +904,13 @@ function findLastRunningThinkingIndex(messages: Message[]): number {
   return -1;
 }
 
+function findLastRunningTimelineThoughtIndex(timeline: ProcessItem[]): number {
+  return findLatestTimelineItemIndex(
+    timeline,
+    (item) => item.type === 'thought' && item.status === 'running',
+  );
+}
+
 function findLastRunningTimelineCommentaryIndex(timeline: ProcessItem[]): number {
   return findLatestTimelineItemIndex(
     timeline,
@@ -924,23 +976,388 @@ function normalizeChatErrorNotice(payload: ChatErrorEventPayload | string | null
     ? payload
     : `${String(payload?.message || '').trim()}\n${String(payload?.raw || '').trim()}`);
   const data = typeof payload === 'string' ? embedded : { ...embedded, ...(payload || {}) };
-  const title = String(data.title || data.message || '').trim() || '请求失败';
+  const sourceTitle = String(data.title || data.message || '').trim();
   const detail = String(data.detail || data.raw || '').trim();
   const hint = String(data.hint || '').trim();
   const layer = String(data.layer || data.category || '').trim();
+  const statusCode = data.httpStatus || data.statusCode;
+  const errorCode = String(data.errorCode || '').trim();
+  const searchable = [
+    sourceTitle,
+    detail,
+    hint,
+    layer,
+    errorCode,
+  ].join(' ').replace(/\s+/g, ' ').trim();
+  const normalizedSearchable = searchable.replace(/\s+/g, '').toLowerCase();
+  const includesAny = (patterns: Array<string | RegExp>) => patterns.some((pattern) => (
+    typeof pattern === 'string'
+      ? normalizedSearchable.includes(pattern.toLowerCase())
+      : pattern.test(searchable)
+  ));
+  const isBilling = includesAny([
+    '余额不足',
+    '积分不足',
+    '额度不足',
+    'insufficientbalance',
+    'insufficientcredit',
+    'insufficientquota',
+    'notenoughpoints',
+    'pointsnotenough',
+  ]);
+  const isAuth = includesAny(['登陆失效', '登录失效', '未登录', '请先登录', 'unauthorized', 'invalidtoken', 'tokenexpired']);
+  const isRateLimit = statusCode === 429 || includesAny(['ratelimit', 'toomanyrequests', '请求过于频繁', '限流']);
+  const isNetwork = [408, 500, 502, 503, 504].includes(Number(statusCode || 0))
+    || includesAny(['timeout', 'timedout', 'fetchfailed', 'badgateway', 'gatewaytimeout', 'serviceunavailable', 'operationwasaborted', '网络']);
+  const isModel = includesAny(['modelnotfound', 'unsupportedmodel', '模型不可用', '模型不支持', 'modelunavailable']);
+  const isAttachment = includesAny(['attachment', 'filetoolarge', 'unsupportedfile', '不支持该文件', '附件']);
+  const isCritical = !isBilling && !isAuth && !isRateLimit && !isNetwork && !isModel && !isAttachment
+    && includesAny(['permissiondenied', 'forbidden', '安全策略', '数据损坏', 'fatal', 'panic']);
+  const kind: StructuredChatErrorNotice['kind'] = isBilling
+    ? 'billing'
+    : isAuth
+      ? 'auth'
+      : isRateLimit
+        ? 'rate-limit'
+        : isNetwork
+          ? 'network'
+          : isModel
+            ? 'model'
+            : isAttachment
+              ? 'attachment'
+              : isCritical
+                ? 'critical'
+                : 'generic';
+  const tone: StructuredChatErrorNotice['tone'] = kind === 'critical' ? 'danger' : kind === 'billing' || kind === 'rate-limit' ? 'warning' : 'neutral';
+  const title = (() => {
+    if (kind === 'billing') return '余额不足';
+    if (kind === 'auth') return '账号需要确认';
+    if (kind === 'rate-limit') return '请求太频繁';
+    if (kind === 'network') return '服务暂时不可用';
+    if (kind === 'model') return '当前模型不可用';
+    if (kind === 'attachment') return '附件暂时无法处理';
+    return sourceTitle || '请求没有完成';
+  })();
+  const friendlyHint = (() => {
+    if (hint) return hint;
+    if (kind === 'billing') return '积分不够，本次请求没有继续执行。';
+    if (kind === 'auth') return '登录状态可能已过期，确认账号后可以继续。';
+    if (kind === 'rate-limit') return '稍等一下再试即可。';
+    if (kind === 'network') return '上游服务短暂不可用，可以稍后重试。';
+    if (kind === 'model') return '换一个可用模型后再发送。';
+    if (kind === 'attachment') return '可以换一个模型或移除这个附件后重试。';
+    return '';
+  })();
   const metaParts = [
-    (data.httpStatus || data.statusCode) ? `HTTP ${data.httpStatus || data.statusCode}` : '',
-    data.errorCode ? String(data.errorCode) : '',
+    statusCode ? `HTTP ${statusCode}` : '',
+    errorCode,
     layer || '',
     data.transportMode ? `transport:${String(data.transportMode)}` : '',
     data.retryable ? '可重试' : '',
   ].filter(Boolean);
   return {
     title,
-    hint: hint || undefined,
+    hint: friendlyHint || undefined,
     detail: detail || undefined,
+    tone,
+    kind,
     metaParts: metaParts.length > 0 ? metaParts : undefined,
+    action: kind === 'billing'
+      ? { label: '去充值', target: 'settings-login' }
+      : kind === 'auth'
+      ? { label: '查看账号', target: 'settings-login' }
+      : undefined,
   };
+}
+
+function truncateErrorDetail(value: string, maxLength = 900): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1)}...`;
+}
+
+function buildChatErrorTimelineItem(
+  payload: ChatErrorEventPayload | string,
+  notice: StructuredChatErrorNotice,
+): ProcessItem {
+  const rawDetail = typeof payload === 'string'
+    ? payload
+    : String(payload.detail || payload.raw || payload.message || '').trim();
+  const detailParts = [
+    notice.metaParts?.join(' · ') || '',
+    notice.hint || '',
+    rawDetail,
+  ].filter(Boolean);
+  const now = Date.now();
+  return {
+    id: `chat-error_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    type: 'error',
+    title: notice.title || 'AI 请求失败',
+    content: truncateErrorDetail(detailParts.join(' · ')),
+    status: 'failed',
+    timestamp: now,
+  };
+}
+
+function buildRuntimeResumeTimelineItem(sessionId: string): ProcessItem {
+  const now = Date.now();
+  return {
+    id: `runtime_resume_${sessionId}_${now}`,
+    type: 'tool-call',
+    title: '断点恢复',
+    content: '正在继续这个会话上次未完成的回复，不是当前新消息单独触发的工具链。',
+    status: 'running',
+    timestamp: now,
+    toolData: {
+      callId: `runtime-resume:${sessionId}`,
+      name: 'runtime',
+      input: {
+        action: 'runtime.resume',
+        sessionId,
+      },
+    },
+  };
+}
+
+type PersistedRuntimeEvent = {
+  id?: string;
+  eventType?: string;
+  event_type?: string;
+  payload?: unknown;
+  createdAt?: number | string;
+  created_at?: number | string;
+  toolCallId?: string | null;
+  tool_call_id?: string | null;
+};
+
+function runtimeObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function runtimeText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function runtimeEventType(event: PersistedRuntimeEvent): string {
+  return runtimeText(event.eventType || event.event_type);
+}
+
+function runtimeEventCreatedAt(event: PersistedRuntimeEvent): number {
+  const raw = event.createdAt ?? event.created_at;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric)) return numeric;
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now();
+}
+
+function runtimeEventId(event: PersistedRuntimeEvent, fallback: string): string {
+  return runtimeText(event.id) || fallback;
+}
+
+function stringifyRuntimePreview(value: unknown, maxLength = 420): string {
+  if (typeof value === 'string') return value.slice(0, maxLength);
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized.length > maxLength ? `${serialized.slice(0, maxLength - 1)}...` : serialized;
+  } catch {
+    return '';
+  }
+}
+
+function persistedRuntimeTargetAssistantIndex(
+  messages: Message[],
+  messageTimes: Array<number | undefined>,
+  eventCreatedAt: number,
+): number {
+  let fallback = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index].role !== 'ai') continue;
+    fallback = index;
+    const messageTime = messageTimes[index];
+    if (typeof messageTime !== 'number' || eventCreatedAt <= messageTime + 1_500) {
+      return index;
+    }
+  }
+  return fallback;
+}
+
+function pushOrMergeNarrationItem(
+  timeline: ProcessItem[],
+  type: 'commentary' | 'thought',
+  content: string,
+  timestamp: number,
+  id: string,
+) {
+  const normalized = normalizeTimelineCommentarySegment(content);
+  if (!normalized) return;
+  const last = timeline[timeline.length - 1];
+  if (last?.type === type && last.status === 'done') {
+    last.content = type === 'thought'
+      ? mergeThoughtDelta(last.content || '', normalized)
+      : mergeAssistantContent(last.content || '', normalized);
+    return;
+  }
+  timeline.push({
+    id,
+    type,
+    content: normalized,
+    status: 'done',
+    timestamp,
+    duration: 0,
+  });
+}
+
+function upsertPersistedToolItem(
+  timeline: ProcessItem[],
+  eventType: string,
+  payload: Record<string, unknown>,
+  timestamp: number,
+  eventId: string,
+  recordToolCallId?: string | null,
+) {
+  const output = runtimeObject(payload.output);
+  const callId = runtimeText(payload.callId || payload.toolCallId || payload.tool_call_id || recordToolCallId || eventId);
+  const name = runtimeText(payload.name || payload.toolName || payload.tool_name) || 'tool_call';
+  const isTerminal = eventType === 'runtime:tool-end' || eventType === 'tool_result';
+  const partial = output.partial === true || payload.partial === true;
+  const failed = output.success === false || runtimeText(output.status) === 'error' || runtimeText(payload.status) === 'error';
+  const status: ProcessItem['status'] = failed ? 'failed' : isTerminal && !partial ? 'done' : 'running';
+  const outputText = runtimeText(output.content)
+    || runtimeText(output.summary)
+    || runtimeText(output.summaryText)
+    || runtimeText(output.resultText)
+    || stringifyRuntimePreview(output);
+  const existingIndex = timeline.findIndex((item) => item.type === 'tool-call' && item.toolData?.callId === callId);
+  const nextItem: ProcessItem = {
+    id: existingIndex === -1 ? `tool_${callId || eventId}` : timeline[existingIndex].id,
+    type: 'tool-call',
+    title: name,
+    content: runtimeText(payload.description) || outputText,
+    status,
+    timestamp: existingIndex === -1 ? timestamp : timeline[existingIndex].timestamp,
+    duration: existingIndex === -1 ? undefined : Math.max(0, timestamp - timeline[existingIndex].timestamp),
+    toolData: {
+      callId,
+      name,
+      input: payload.input ?? {},
+      output: outputText,
+    },
+  };
+  if (existingIndex === -1) {
+    timeline.push(nextItem);
+  } else {
+    timeline[existingIndex] = {
+      ...timeline[existingIndex],
+      ...nextItem,
+      toolData: {
+        ...timeline[existingIndex].toolData,
+        ...nextItem.toolData,
+      },
+    };
+  }
+}
+
+function applyPersistedRuntimeEventsToMessages(
+  messages: Message[],
+  messageTimes: Array<number | undefined>,
+  eventsRaw: unknown,
+): Message[] {
+  const events = Array.isArray(eventsRaw)
+    ? (eventsRaw as PersistedRuntimeEvent[])
+        .filter((event) => runtimeEventType(event))
+        .sort((left, right) => runtimeEventCreatedAt(left) - runtimeEventCreatedAt(right))
+    : [];
+  if (events.length === 0) return messages;
+
+  const next = messages.map((message) => ({
+    ...message,
+    timeline: [...(message.timeline || [])],
+  }));
+
+  events.forEach((event, index) => {
+    const eventType = runtimeEventType(event);
+    const timestamp = runtimeEventCreatedAt(event);
+    const targetIndex = persistedRuntimeTargetAssistantIndex(next, messageTimes, timestamp);
+    if (targetIndex === -1) return;
+
+    const payload = runtimeObject(event.payload);
+    const timeline = next[targetIndex].timeline;
+    const eventId = runtimeEventId(event, `runtime_event_${timestamp}_${index}`);
+
+    if (eventType === 'runtime:text-delta' || eventType === 'text_delta') {
+      const content = runtimeText(payload.content);
+      const stream = runtimeText(payload.stream || 'response');
+      const messagePhase = runtimeText(payload.messagePhase || (stream === 'thought' ? 'thought' : 'final_answer'));
+      if (messagePhase === 'commentary') {
+        pushOrMergeNarrationItem(timeline, 'commentary', content, timestamp, `commentary_${eventId}`);
+      } else if (messagePhase === 'thought' || stream === 'thought') {
+        pushOrMergeNarrationItem(timeline, 'thought', content, timestamp, `thought_${eventId}`);
+      }
+      return;
+    }
+
+    if (
+      eventType === 'runtime:tool-start'
+      || eventType === 'runtime:tool-update'
+      || eventType === 'runtime:tool-end'
+      || eventType === 'tool_request'
+      || eventType === 'tool_result'
+    ) {
+      upsertPersistedToolItem(timeline, eventType, payload, timestamp, eventId, event.toolCallId || event.tool_call_id);
+      return;
+    }
+
+    if (eventType === 'runtime:checkpoint' || eventType === 'task_checkpoint_saved') {
+      const checkpointType = runtimeText(payload.checkpointType || payload.checkpoint_type);
+      const checkpointPayload = runtimeObject(payload.payload);
+      if (checkpointType === 'chat.error') {
+        const detail = runtimeText(checkpointPayload.detail || checkpointPayload.message || checkpointPayload.raw)
+          || stringifyRuntimePreview(checkpointPayload);
+        if (detail) {
+          timeline.push({
+            id: `error_${eventId}`,
+            type: 'error',
+            title: '处理失败',
+            content: truncateErrorDetail(detail),
+            status: 'failed',
+            timestamp,
+          });
+        }
+      } else if (checkpointType === 'chat.skill_activated') {
+        const name = runtimeText(checkpointPayload.name);
+        if (name) {
+          timeline.push({
+            id: `skill_${eventId}`,
+            type: 'skill',
+            content: runtimeText(checkpointPayload.description),
+            status: 'done',
+            timestamp,
+            skillData: {
+              name,
+              description: runtimeText(checkpointPayload.description),
+            },
+          });
+        }
+      }
+      return;
+    }
+
+    if (eventType === 'runtime:done') {
+      const failed = runtimeText(payload.status) === 'error' || runtimeText(payload.reason) === 'error';
+      next[targetIndex].timeline = timeline.map((item) => (
+        item.status === 'running'
+          ? { ...item, status: failed ? 'failed' : 'done', duration: Math.max(0, timestamp - item.timestamp) }
+          : item
+      ));
+    }
+  });
+
+  return next;
 }
 
 export function Chat({
@@ -948,10 +1365,9 @@ export function Chat({
   onExecutionStateChange,
   pendingMessage,
   onMessageConsumed,
-  defaultCollapsed = true,
   fixedSessionId,
-  initialChatModelKey = '',
-  onChatModelKeyChange,
+  fixedSessionDraft = false,
+  onEnsureSessionForSend,
   showClearButton = true,
   fixedSessionBannerText = '当前对话已关联到文档',
   shortcuts: shortcutsProp,
@@ -983,16 +1399,19 @@ export function Chat({
   showComposer = true,
   showMessageAttachments = true,
   collapseEmptyFixedSession = false,
-  placeholder,
+  fixedSessionTaskHints,
   messageLinkRenderMode = 'default',
   onMessageLinkPreview,
   activePreviewHref = null,
+  inlineSidePanel,
   keepComposerInputActive = false,
   messageListHeader,
+  placeholder,
   fixedMemberMention = null,
+  onSessionActivity,
+  clearSignal = 0,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
-  const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => fixedSessionId ?? null);
   const [messages, setMessages] = useState<Message[]>(() => (
     readFixedSessionWarmSnapshot(fixedSessionId)?.messages || []
@@ -1001,19 +1420,8 @@ export function Chat({
   const [isProcessing, setIsProcessing] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ToolConfirmRequest | null>(null);
   const [cliEscalationRequest, setCliEscalationRequest] = useState<CliEscalationRequestModel | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    const saved = localStorage.getItem("chat:sidebarCollapsed");
-    return saved ? JSON.parse(saved) : defaultCollapsed;
-  });
-
-  useEffect(() => {
-    localStorage.setItem("chat:sidebarCollapsed", JSON.stringify(sidebarCollapsed));
-  }, [sidebarCollapsed]);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenu>({ visible: false, x: 0, y: 0, text: '' });
-  const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
-  const [showRoomPicker, setShowRoomPicker] = useState(false);
-  const [isRoomPickerLoading, setIsRoomPickerLoading] = useState(false);
   const [contextUsage, setContextUsage] = useState<ChatContextUsage | null>(() => (
     readFixedSessionWarmSnapshot(fixedSessionId)?.contextUsage || null
   ));
@@ -1021,18 +1429,46 @@ export function Chat({
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
   const [memberMentionOptions, setMemberMentionOptions] = useState<ChatMemberMentionOption[]>([]);
   const [selectedMemberMention, setSelectedMemberMention] = useState<ChatMemberMentionOption | null>(null);
-  const [knowledgeMentionOptions, setKnowledgeMentionOptions] = useState<ChatKnowledgeMentionOption[]>([]);
-  const [selectedKnowledgeMentions, setSelectedKnowledgeMentions] = useState<ChatKnowledgeMentionOption[]>([]);
   const [skillMentionOptions, setSkillMentionOptions] = useState<ChatSkillMentionOption[]>([]);
   const [selectedSkillMentions, setSelectedSkillMentions] = useState<ChatSkillMentionOption[]>([]);
   const [assetMentionOptions, setAssetMentionOptions] = useState<ChatAssetMentionOption[]>([]);
   const [selectedAssetMentions, setSelectedAssetMentions] = useState<ChatAssetMentionOption[]>([]);
+  const [knowledgeMentionOptions, setKnowledgeMentionOptions] = useState<ChatKnowledgeMentionOption[]>([]);
+  const [selectedKnowledgeMentions, setSelectedKnowledgeMentions] = useState<ChatKnowledgeMentionOption[]>([]);
+  const [dismissedAttachmentActionKey, setDismissedAttachmentActionKey] = useState('');
   const documentThemeMode = useDocumentThemeMode();
-  const attachmentDraftScopeId = fixedSessionId || currentSessionId || '__new__';
+  const fixedSessionMode = Boolean(fixedSessionId) || fixedSessionDraft;
+  const attachmentDraftScopeId = fixedSessionId || currentSessionId || (fixedSessionDraft ? '__fixed_draft__' : '__new__');
 
   useEffect(() => {
     onExecutionStateChange?.(isProcessing);
   }, [isProcessing, onExecutionStateChange]);
+
+  useEffect(() => {
+    if (!clearSignal || !fixedSessionId) return;
+    clearFixedSessionWarmSnapshot(fixedSessionId);
+    localMessageMutationRef.current += 1;
+    missedChunksRef.current = '';
+    flushPendingStreamingUpdates();
+    setIsProcessing(false);
+    setConfirmRequest(null);
+    setCliEscalationRequest(null);
+    setErrorNotice(null);
+    setMessages([]);
+    setContextUsage(null);
+  }, [clearSignal, fixedSessionId]);
+
+  useEffect(() => {
+    if (!errorNotice) return undefined;
+    const structuredNotice = typeof errorNotice === 'string' ? null : errorNotice;
+    const dismissAfter = structuredNotice?.action
+      ? CHAT_ERROR_NOTICE_ACTION_AUTO_DISMISS_MS
+      : CHAT_ERROR_NOTICE_AUTO_DISMISS_MS;
+    const timer = window.setTimeout(() => {
+      setErrorNotice(null);
+    }, dismissAfter);
+    return () => window.clearTimeout(timer);
+  }, [errorNotice]);
 
   useEffect(() => {
     debugUi('processing_state', {
@@ -1047,15 +1483,11 @@ export function Chat({
       onExecutionStateChange?.(false);
     };
   }, [onExecutionStateChange]);
-  const [selectedChatModelKey, setSelectedChatModelKeyState] = useState(() => String(initialChatModelKey || '').trim());
+  const [selectedChatModelKey, setSelectedChatModelKey] = useState('');
   const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
-  const [dismissedAttachmentActionKey, setDismissedAttachmentActionKey] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const currentSessionIdRef = useRef<string | null>(fixedSessionId ?? null);
-  const chatModelOptionsRef = useRef<ChatModelOption[]>([]);
-  const selectedChatModelKeyRef = useRef(String(initialChatModelKey || '').trim());
-  const hasManualChatModelSelectionRef = useRef(Boolean(String(initialChatModelKey || '').trim()));
   const chatInstanceIdRef = useRef(
     `chat-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
   );
@@ -1064,8 +1496,8 @@ export function Chat({
     attachFiles,
     clearPendingAttachment,
     dragHandlers,
-    isFileDragActive,
     isAttachmentUploading,
+    isFileDragActive,
     pendingAttachment,
     pendingAttachments,
     pickAttachment,
@@ -1082,19 +1514,33 @@ export function Chat({
     isProcessing,
     setErrorNotice,
   });
+
+  useEffect(() => {
+    if (pendingAttachments.length > 0) return;
+    setDismissedAttachmentActionKey('');
+  }, [pendingAttachments.length]);
   
   // Throttle buffer for streaming updates
   const pendingUpdateRef = useRef<{ content: string; messagePhase: string } | null>(null);
+  const openResponseSegmentRef = useRef('');
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingThoughtUpdateRef = useRef<{ content: string } | null>(null);
+  const thoughtUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingCliLogUpdatesRef = useRef<Record<string, string>>({});
+  const cliLogUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastStreamChunkRef = useRef<{ content: string; at: number }>({ content: '', at: 0 });
   const localMessageMutationRef = useRef(0);
-  const chatRoomsRequestIdRef = useRef(0);
-  const sessionsRequestIdRef = useRef(0);
+  const skipNextFixedSessionLoadRef = useRef<string | null>(null);
+  const handledFixedSessionIdRef = useRef<string | null>(fixedSessionId ?? null);
+  const lastFixedSessionIdRef = useRef<string | null>(fixedSessionId ?? null);
   const isActiveRef = useRef(isActive);
   const coldRecoveryPendingRef = useRef(true);
   const streamStatsRef = useRef<{ startedAt: number; chunks: number; chars: number } | null>(null);
   const responseCompletedRef = useRef(false);
   const responseFinalizeSeqRef = useRef(0);
+  const knowledgeMentionSearchSeqRef = useRef(0);
+  const knowledgeMentionSearchTimerRef = useRef<number | null>(null);
+  const knowledgeMentionSearchQueryRef = useRef('');
   const pendingResponseFinalizeRef = useRef<{
     ticket: number;
     source: string;
@@ -1103,12 +1549,20 @@ export function Chat({
   const suppressComposerFocusUntilRef = useRef(0);
   const [composerSuppressed, setComposerSuppressed] = useState(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     currentSessionIdRef.current = currentSessionId;
   }, [currentSessionId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!fixedSessionId) return;
+    if (lastFixedSessionIdRef.current !== fixedSessionId) {
+      lastFixedSessionIdRef.current = fixedSessionId;
+      const warm = readFixedSessionWarmSnapshot(fixedSessionId);
+      localMessageMutationRef.current += 1;
+      setMessages(warm?.messages || []);
+      setContextUsage(warm?.contextUsage || null);
+      setErrorNotice(null);
+    }
     if (currentSessionIdRef.current === fixedSessionId) return;
     currentSessionIdRef.current = fixedSessionId;
     setCurrentSessionId(fixedSessionId);
@@ -1197,6 +1651,15 @@ export function Chat({
       composerRef.current?.syncHeight();
     });
   }, [debugUi]);
+  const activateComposerInput = useCallback((source: 'empty' | 'composer' = 'composer') => {
+    suppressComposerFocusUntilRef.current = 0;
+    setComposerSuppressed(false);
+    debugUi('activate_composer_input', { source });
+    requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      composerRef.current?.syncHeight();
+    });
+  }, [debugUi]);
   const handleComposerFocus = useCallback((source: 'empty' | 'composer') => {
     const now = performance.now();
     if (now < suppressComposerFocusUntilRef.current) {
@@ -1227,7 +1690,17 @@ export function Chat({
       updateTimerRef.current = null;
     }
     pendingUpdateRef.current = null;
-    setShowRoomPicker(false);
+    openResponseSegmentRef.current = '';
+    if (thoughtUpdateTimerRef.current) {
+      clearTimeout(thoughtUpdateTimerRef.current);
+      thoughtUpdateTimerRef.current = null;
+    }
+    pendingThoughtUpdateRef.current = null;
+    if (cliLogUpdateTimerRef.current) {
+      clearTimeout(cliLogUpdateTimerRef.current);
+      cliLogUpdateTimerRef.current = null;
+    }
+    pendingCliLogUpdatesRef.current = {};
     setSelectionMenu((prev) => ({ ...prev, visible: false }));
     setComposerSuppressed(false);
   }, [blurComposer, debugUi, isActive, suppressComposerFocus]);
@@ -1239,6 +1712,7 @@ export function Chat({
   const centeredContent = contentLayout === 'center-2-3';
   const wideContent = contentLayout === 'wide';
   const narrowContent = contentWidthPreset === 'narrow';
+  const hasInlineSidePanel = Boolean(inlineSidePanel);
   const contentWidthClass = 'w-full';
   const contentMaxWidthClass = narrowContent
     ? wideContent
@@ -1247,7 +1721,14 @@ export function Chat({
     : wideContent
       ? 'max-w-[920px]'
       : 'max-w-[780px]';
+  const splitContentMaxWidthClass = wideContent ? 'max-w-[1360px]' : 'max-w-[1240px]';
   const contentOuterPaddingClass = wideContent ? 'px-2 md:px-3 lg:px-4 xl:px-5' : 'px-2 md:px-3 lg:px-4 xl:px-5';
+  const splitOuterPaddingClass = hasInlineSidePanel
+    ? 'px-6 md:px-8 lg:px-12 xl:px-16 2xl:px-20'
+    : contentOuterPaddingClass;
+  const paneOuterPaddingClass = hasInlineSidePanel ? 'px-0' : contentOuterPaddingClass;
+  const messageContentMaxWidthClass = hasInlineSidePanel ? 'max-w-none' : contentMaxWidthClass;
+  const composerMaxWidthClass = hasInlineSidePanel ? splitContentMaxWidthClass : contentMaxWidthClass;
   const emptySessionWidthClass = centeredContent
     ? 'w-2/3 mx-auto'
     : wideContent
@@ -1284,11 +1765,6 @@ export function Chat({
 
   const selectedChatModel = chatModelOptions.find((item) => item.key === selectedChatModelKey) || null;
 
-  const applyChatModelOptions = useCallback((options: ChatModelOption[]) => {
-    chatModelOptionsRef.current = options;
-    setChatModelOptions(options);
-  }, []);
-
   const buildPendingAssistantTimeline = useCallback((label: string): ProcessItem[] => ([
     {
       id: `phase_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -1302,42 +1778,10 @@ export function Chat({
 
   useEffect(() => {
     setSelectedMemberMention(null);
-    setSelectedKnowledgeMentions([]);
     setSelectedSkillMentions([]);
     setSelectedAssetMentions([]);
+    setSelectedKnowledgeMentions([]);
   }, [currentSessionId]);
-
-  useEffect(() => {
-    setDismissedAttachmentActionKey('');
-  }, [pendingAttachment]);
-
-  useEffect(() => {
-    const next = String(initialChatModelKey || '').trim();
-    hasManualChatModelSelectionRef.current = Boolean(next);
-    if (!next) {
-      if (!selectedChatModelKeyRef.current) return;
-      selectedChatModelKeyRef.current = '';
-      setSelectedChatModelKeyState('');
-      return;
-    }
-    if (next === selectedChatModelKeyRef.current) return;
-    selectedChatModelKeyRef.current = next;
-    setSelectedChatModelKeyState(next);
-  }, [initialChatModelKey]);
-
-  const handleSelectedChatModelKeyChange = useCallback((key: string) => {
-    const next = String(key || '').trim();
-    hasManualChatModelSelectionRef.current = Boolean(next);
-    selectedChatModelKeyRef.current = next;
-    setSelectedChatModelKeyState(next);
-    onChatModelKeyChange?.(next);
-  }, [onChatModelKeyChange]);
-
-  const resolveSelectedChatModelFromRefs = useCallback(() => {
-    const options = chatModelOptionsRef.current.length > 0 ? chatModelOptionsRef.current : chatModelOptions;
-    const key = selectedChatModelKeyRef.current || selectedChatModelKey;
-    return options.find((item) => item.key === key) || null;
-  }, [chatModelOptions, selectedChatModelKey]);
 
   const loadChatModelOptions = useCallback(async () => {
     if (!isActiveRef.current) return;
@@ -1346,23 +1790,15 @@ export function Chat({
         window.ipcRenderer.getSettings() as Promise<ChatSettingsSnapshot | undefined>
       ));
       const options = buildChatModelOptions(settings);
-      applyChatModelOptions(options);
-      setSelectedChatModelKeyState((current) => {
-        const preferred = hasManualChatModelSelectionRef.current
-          ? selectedChatModelKeyRef.current || current
-          : '';
-        if (preferred && options.some((item) => item.key === preferred)) {
-          selectedChatModelKeyRef.current = preferred;
-          return preferred;
-        }
-        const next = options.find((item) => item.isDefault)?.key || options[0]?.key || '';
-        selectedChatModelKeyRef.current = next;
-        return next;
+      setChatModelOptions(options);
+      setSelectedChatModelKey((current) => {
+        if (current && options.some((item) => item.key === current)) return current;
+        return options.find((item) => item.isDefault)?.key || options[0]?.key || '';
       });
     } catch (error) {
       console.error('Failed to load chat model options:', error);
     }
-  }, [applyChatModelOptions]);
+  }, []);
 
   const normalizeMemberMentionOptions = useCallback((records: AdvisorMentionRecord[] | null | undefined): ChatMemberMentionOption[] => (
     (records || [])
@@ -1381,28 +1817,10 @@ export function Chat({
       const advisors = await window.ipcRenderer.advisors.list<AdvisorMentionRecord>();
       setMemberMentionOptions(normalizeMemberMentionOptions(advisors));
     } catch (error) {
-      console.error('Failed to load chat member mention options:', error);
+      console.error('Failed to load member mention options:', error);
+      setMemberMentionOptions([]);
     }
   }, [normalizeMemberMentionOptions]);
-
-  const loadKnowledgeMentionOptions = useCallback(async () => {
-    if (!isActiveRef.current) return;
-    try {
-      const response = await window.ipcRenderer.knowledge.listPage<KnowledgeMentionListPageResponse>({
-        limit: 300,
-        sort: 'updated-desc',
-      });
-      const records = Array.isArray(response?.items) ? response.items : [];
-      setKnowledgeMentionOptions(
-        records
-          .map(normalizeKnowledgeMentionRecord)
-          .filter((item): item is ChatKnowledgeMentionOption => Boolean(item)),
-      );
-    } catch (error) {
-      console.error('Failed to load chat knowledge mention options:', error);
-      setKnowledgeMentionOptions([]);
-    }
-  }, []);
 
   const loadSkillMentionOptions = useCallback(async () => {
     if (!isActiveRef.current) return;
@@ -1414,7 +1832,7 @@ export function Chat({
           .filter((item): item is ChatSkillMentionOption => Boolean(item)),
       );
     } catch (error) {
-      console.error('Failed to load chat skill mention options:', error);
+      console.error('Failed to load skill mention options:', error);
       setSkillMentionOptions([]);
     }
   }, []);
@@ -1422,7 +1840,7 @@ export function Chat({
   const loadAssetMentionOptions = useCallback(async () => {
     if (!isActiveRef.current) return;
     try {
-      const result = await window.ipcRenderer.subjects.list({ limit: 500 }) as { subjects?: AssetMentionCatalogRecord[]; assets?: AssetMentionCatalogRecord[] };
+      const result = await window.ipcRenderer.subjects.list({ limit: 500 });
       const records = Array.isArray(result?.subjects)
         ? result.subjects
         : Array.isArray(result?.assets)
@@ -1430,22 +1848,106 @@ export function Chat({
           : [];
       setAssetMentionOptions(
         records
-          .map((item) => normalizeAssetMentionRecord(item))
+          .map((item) => normalizeAssetMentionRecord(item as AssetMentionCatalogRecord))
           .filter((item): item is ChatAssetMentionOption => Boolean(item)),
       );
     } catch (error) {
-      console.error('Failed to load chat asset mention options:', error);
+      console.error('Failed to load asset mention options:', error);
       setAssetMentionOptions([]);
     }
   }, []);
 
+  useEffect(() => {
+    if (!isActive) return;
+    void loadMemberMentionOptions();
+    void loadSkillMentionOptions();
+    void loadAssetMentionOptions();
+    const handleAdvisorsChanged = () => {
+      void loadMemberMentionOptions();
+    };
+    window.ipcRenderer.advisors.onChanged(handleAdvisorsChanged);
+    return () => {
+      window.ipcRenderer.advisors.offChanged(handleAdvisorsChanged);
+    };
+  }, [isActive, loadAssetMentionOptions, loadMemberMentionOptions, loadSkillMentionOptions]);
+
+  const loadKnowledgeMentionOptions = useCallback(async (query = '') => {
+    if (!isActiveRef.current) return;
+    const requestId = ++knowledgeMentionSearchSeqRef.current;
+    const normalizedQuery = query.trim();
+    try {
+      const records: KnowledgeMentionCatalogRecord[] = [];
+      let cursor: string | null | undefined = null;
+      const seenCursors = new Set<string>();
+      for (let pageIndex = 0; pageIndex < 250; pageIndex += 1) {
+        const response = await window.ipcRenderer.knowledge.listPage<KnowledgeMentionListPageResponse>({
+          cursor,
+          limit: 200,
+          query: normalizedQuery || undefined,
+          sort: 'updated-desc',
+        });
+        if (!isActiveRef.current || requestId !== knowledgeMentionSearchSeqRef.current) return;
+        records.push(...(Array.isArray(response?.items) ? response.items : []));
+        const nextCursor = typeof response?.nextCursor === 'string' && response.nextCursor.trim()
+          ? response.nextCursor.trim()
+          : null;
+        if (!nextCursor || seenCursors.has(nextCursor)) {
+          break;
+        }
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      }
+      if (requestId !== knowledgeMentionSearchSeqRef.current) return;
+      setKnowledgeMentionOptions(
+        records
+          .map(normalizeKnowledgeMentionRecord)
+          .filter((item): item is ChatKnowledgeMentionOption => Boolean(item)),
+      );
+    } catch (error) {
+      console.error('Failed to load knowledge mention options:', error);
+      setKnowledgeMentionOptions([]);
+    }
+  }, []);
+
+  const handleKnowledgeMentionSearchQueryChange = useCallback((query: string) => {
+    const normalizedQuery = query.trim();
+    if (knowledgeMentionSearchQueryRef.current === normalizedQuery) return;
+    knowledgeMentionSearchQueryRef.current = normalizedQuery;
+    if (knowledgeMentionSearchTimerRef.current) {
+      window.clearTimeout(knowledgeMentionSearchTimerRef.current);
+      knowledgeMentionSearchTimerRef.current = null;
+    }
+    knowledgeMentionSearchTimerRef.current = window.setTimeout(() => {
+      void loadKnowledgeMentionOptions(normalizedQuery);
+    }, 160);
+  }, [loadKnowledgeMentionOptions]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    void loadKnowledgeMentionOptions(knowledgeMentionSearchQueryRef.current);
+    const handleKnowledgeChanged = () => {
+      void loadKnowledgeMentionOptions(knowledgeMentionSearchQueryRef.current);
+    };
+    window.ipcRenderer.knowledge.onChanged(handleKnowledgeChanged);
+    window.ipcRenderer.knowledge.onCatalogUpdated(handleKnowledgeChanged);
+    return () => {
+      window.ipcRenderer.knowledge.offChanged(handleKnowledgeChanged);
+      window.ipcRenderer.knowledge.offCatalogUpdated(handleKnowledgeChanged);
+      if (knowledgeMentionSearchTimerRef.current) {
+        window.clearTimeout(knowledgeMentionSearchTimerRef.current);
+        knowledgeMentionSearchTimerRef.current = null;
+      }
+    };
+  }, [isActive, loadKnowledgeMentionOptions]);
+
   const ensureChatModelConfig = useCallback(async () => {
-    const currentModel = resolveSelectedChatModelFromRefs() || selectedChatModel;
-    if (currentModel) {
+    if (selectedChatModel) {
       return {
-        apiKey: currentModel.apiKey,
-        baseURL: currentModel.baseURL,
-        modelName: currentModel.modelName,
+        apiKey: selectedChatModel.apiKey,
+        baseURL: selectedChatModel.baseURL,
+        modelName: selectedChatModel.modelName,
+        sourceId: selectedChatModel.sourceId,
+        presetId: selectedChatModel.presetId,
       };
     }
     const settings = await uiMeasure('chat', 'ensure_chat_model_config', async () => (
@@ -1455,16 +1957,11 @@ export function Chat({
     if (options.length === 0) {
       return undefined;
     }
-    applyChatModelOptions(options);
+    setChatModelOptions(options);
     const resolvedKey = options.find((item) => item.isDefault)?.key || options[0]?.key || '';
     if (resolvedKey) {
-      setSelectedChatModelKeyState((current) => {
-        const preferred = selectedChatModelKeyRef.current || current;
-        if (preferred && options.some((item) => item.key === preferred)) {
-          selectedChatModelKeyRef.current = preferred;
-          return preferred;
-        }
-        selectedChatModelKeyRef.current = resolvedKey;
+      setSelectedChatModelKey((current) => {
+        if (current && options.some((item) => item.key === current)) return current;
         return resolvedKey;
       });
     }
@@ -1476,34 +1973,10 @@ export function Chat({
       apiKey: resolved.apiKey,
       baseURL: resolved.baseURL,
       modelName: resolved.modelName,
+      sourceId: resolved.sourceId,
+      presetId: resolved.presetId,
     };
-  }, [applyChatModelOptions, resolveSelectedChatModelFromRefs, selectedChatModel]);
-
-  const loadChatRooms = useCallback(async (options?: { silent?: boolean }) => {
-    if (fixedSessionId) return;
-    const requestId = ++chatRoomsRequestIdRef.current;
-    const silent = Boolean(options?.silent);
-    if (!silent) {
-      setIsRoomPickerLoading(true);
-    }
-    try {
-      const rooms = await uiMeasure('chat', 'load_chat_rooms', async () => (
-        window.ipcRenderer.chatrooms.list<ChatRoom[]>()
-      ), { silent });
-      if (requestId !== chatRoomsRequestIdRef.current) {
-        return;
-      }
-      if (Array.isArray(rooms)) {
-        setChatRooms(rooms);
-      }
-    } catch (error) {
-      console.error('Failed to load chat rooms:', error);
-    } finally {
-      if (requestId === chatRoomsRequestIdRef.current && !silent) {
-        setIsRoomPickerLoading(false);
-      }
-    }
-  }, [fixedSessionId]);
+  }, [selectedChatModel]);
 
   // 判断是否是空会话（新建或无消息）
   const isEmptySession = messages.length === 0;
@@ -1521,11 +1994,15 @@ export function Chat({
   useEffect(() => {
     if (!isActive) return;
     void loadChatModelOptions();
-    void loadMemberMentionOptions();
-    void loadKnowledgeMentionOptions();
-    void loadSkillMentionOptions();
-    void loadAssetMentionOptions();
-  }, [isActive, loadAssetMentionOptions, loadChatModelOptions, loadKnowledgeMentionOptions, loadMemberMentionOptions, loadSkillMentionOptions]);
+  }, [isActive, loadChatModelOptions]);
+
+  const handleOpenSettingsLogin = useCallback(() => {
+    dispatchAppIntent({
+      type: 'settings.open',
+      tab: 'ai',
+      aiModelSubTab: 'login',
+    });
+  }, []);
 
   useEffect(() => {
     if (!isActive || messages.length === 0) return;
@@ -1549,31 +2026,13 @@ export function Chat({
     void loadContextUsage(currentSessionId);
   }, [fixedSessionId, currentSessionId, isActive, messages.length, isProcessing, loadContextUsage]);
 
-  // Load sessions on mount
   useEffect(() => {
     if (!isActive) return;
-    if (!fixedSessionId) {
-      void loadChatRooms({ silent: true });
-    }
 
-    // Handle fixed session (File-Bound Mode)
     if (fixedSessionId) {
-       setSidebarCollapsed(true);
-       selectSession(fixedSessionId);
-       return;
+      selectSession(fixedSessionId);
     }
-
-    // 只有没有 pendingMessage 时才自动选择会话
-    if (!pendingMessage) {
-      loadSessions();
-    } else {
-      // 有 pendingMessage 时只加载列表，不选择
-      window.ipcRenderer.chat.getSessions().then((list: Session[]) => {
-        debugUi('load_sessions:pending_message_done', { count: Array.isArray(list) ? list.length : 0 });
-        setSessions(list);
-      }).catch(console.error);
-    }
-  }, [fixedSessionId, isActive, loadChatRooms]); // Add fixedSessionId dependency
+  }, [fixedSessionId, isActive]);
 
   const dispatchChatSend = useCallback((payload: {
     sessionId?: string;
@@ -1581,29 +2040,30 @@ export function Chat({
     displayContent: string;
     attachment?: Message['attachment'];
     attachments?: UploadedFileAttachment[];
-    knowledgeReferences?: ChatKnowledgeMentionOption[];
-    assetReferences?: Array<{ id: string; name: string }>;
     memberMention?: {
       type: 'advisor';
       advisorId: string;
       name: string;
       avatar?: string;
     };
+    knowledgeReferences?: ChatKnowledgeMentionOption[];
+    assetReferences?: ChatAssetMentionOption[];
     modelConfig?: {
       apiKey?: string;
       baseURL?: string;
       modelName?: string;
+      sourceId?: string;
+      presetId?: string;
     };
     taskHints?: unknown;
   }) => {
     debugUi('dispatch_send:queued', {
       sessionId: payload.sessionId || null,
       chars: payload.message.length,
-      hasAttachment: Boolean(payload.attachment),
+      hasAttachment: Boolean(payload.attachment) || Boolean(payload.attachments?.length),
       attachmentCount: payload.attachments?.length || (payload.attachment ? 1 : 0),
       targetAdvisorId: payload.memberMention?.advisorId || null,
       knowledgeReferenceCount: payload.knowledgeReferences?.length || 0,
-      assetReferenceCount: payload.assetReferences?.length || 0,
     });
     const schedule = typeof window.requestAnimationFrame === 'function'
       ? window.requestAnimationFrame.bind(window)
@@ -1618,6 +2078,12 @@ export function Chat({
     });
   }, [debugUi]);
 
+  const notifySessionActivity = useCallback((sessionId: string | null | undefined, updatedAt = new Date().toISOString()) => {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) return;
+    onSessionActivity?.(safeSessionId, updatedAt);
+  }, [onSessionActivity]);
+
   // 处理从其他页面传来的待发送消息（如知识库的"AI脑爆"）
   useEffect(() => {
     // 已处理过或正在处理中，跳过
@@ -1631,19 +2097,31 @@ export function Chat({
 
     // 标记为已处理
     pendingMessageHandledRef.current = true;
-
-    const pendingKnowledgeReferences = normalizePendingKnowledgeReferences(pendingMessage.knowledgeReferences);
-    const pendingMessageAttachments = (
-      pendingMessage.attachments && pendingMessage.attachments.length > 0
-        ? pendingMessage.attachments
-        : pendingMessage.attachment?.type === 'uploaded-file'
-          ? [pendingMessage.attachment as UploadedFileAttachment]
-          : []
-    ).filter((attachment): attachment is UploadedFileAttachment => Boolean(attachment));
+    const pendingMessagePrimaryAttachment = pendingMessage.attachment as Message['attachment'] | undefined;
+    const pendingMessageAttachments = [
+      ...((pendingMessage.attachments || []) as UploadedFileAttachment[]),
+      ...uploadedFileAttachmentsFromMessageAttachment(pendingMessagePrimaryAttachment),
+    ];
 
     if (pendingMessage.deliveryMode === 'draft') {
+      const draftKnowledgeReferences = (pendingMessage.knowledgeReferences || [])
+        .filter((item) => item.id)
+        .map((item) => ({
+          id: item.id,
+          title: item.title || '未命名内容',
+          sourceKind: item.sourceKind,
+          summary: item.summary,
+          cover: item.cover,
+          sourceUrl: item.sourceUrl,
+          folderPath: item.folderPath,
+          rootPath: item.rootPath,
+          tags: item.tags,
+          updatedAt: item.updatedAt,
+          fileCount: item.fileCount,
+          hasTranscript: item.hasTranscript,
+        }));
       setInput(String(pendingMessage.content || ''));
-      setSelectedKnowledgeMentions(pendingKnowledgeReferences);
+      setSelectedKnowledgeMentions(draftKnowledgeReferences);
       if (pendingMessageAttachments.length > 0) {
         setPendingAttachments(pendingMessageAttachments);
       }
@@ -1657,7 +2135,8 @@ export function Chat({
 
     const sendPendingMessage = async () => {
       let sessionId: string;
-      const shouldAppendToCurrentSession = Boolean(fixedSessionId);
+      const shouldReplaceLocalMessages = pendingMessage.sessionRouting === 'new';
+      const shouldAppendToCurrentSession = Boolean(fixedSessionId) && !shouldReplaceLocalMessages;
 
       if (fixedSessionId) {
         sessionId = fixedSessionId;
@@ -1676,8 +2155,7 @@ export function Chat({
             : 'AI 脑爆';
           const session = await window.ipcRenderer.chat.createSession(sessionTitle);
 
-          // 更新会话列表并选中新会话
-          setSessions(prev => [session, ...prev]);
+          currentSessionIdRef.current = session.id;
           setCurrentSessionId(session.id);
           sessionId = session.id;
 
@@ -1702,7 +2180,7 @@ export function Chat({
       );
       const committedAttachments = commitAttachmentsForSend(resolvedAttachments);
       const resolvedAttachment = createAttachmentPayload(committedAttachments)
-        || (pendingMessage.attachment?.type !== 'uploaded-file' ? pendingMessage.attachment : undefined);
+        || (pendingMessagePrimaryAttachment?.type !== 'uploaded-file' ? pendingMessagePrimaryAttachment : undefined);
       const pendingAttachmentBlockReason = attachmentsSendBlockReason(resolvedAttachments);
       if (pendingAttachmentBlockReason) {
         setErrorNotice(pendingAttachmentBlockReason);
@@ -1710,7 +2188,22 @@ export function Chat({
         onMessageConsumed?.();
         return;
       }
-
+      const pendingKnowledgeReferences = (pendingMessage.knowledgeReferences || [])
+        .filter((item) => item.id)
+        .map((item) => ({
+          id: item.id,
+          title: item.title || '未命名内容',
+          sourceKind: item.sourceKind,
+          summary: item.summary,
+          cover: item.cover,
+          sourceUrl: item.sourceUrl,
+          folderPath: item.folderPath,
+          rootPath: item.rootPath,
+          tags: item.tags,
+          updatedAt: item.updatedAt,
+          fileCount: item.fileCount,
+          hasTranscript: item.hasTranscript,
+        }));
       const pendingKnowledgeRuntimeContext = buildKnowledgeReferenceRuntimeContext(pendingKnowledgeReferences);
       const pendingRuntimeMessage = [
         pendingMessage.content,
@@ -1719,6 +2212,7 @@ export function Chat({
 
       // 构建用户消息 - 注意：attachment 和 displayContent 用于 UI 显示
       const processingStartedAt = Date.now();
+      notifySessionActivity(sessionId, new Date(processingStartedAt).toISOString());
       const userMsg: Message = {
         id: processingStartedAt.toString(),
         role: 'user',
@@ -1737,18 +2231,25 @@ export function Chat({
         messageType: 'reply',
         content: '',
         tools: [],
-        timeline: (
-          pendingMessage.taskHints?.forceMultiAgent
-        ) ? buildPendingAssistantTimeline('任务已提交') : [],
+        timeline: pendingMessage.taskHints?.forceMultiAgent
+          ? buildPendingAssistantTimeline('任务已提交')
+          : [],
         isStreaming: true,
         processingStartedAt,
       };
 
       if (shouldAppendToCurrentSession) {
         localMessageMutationRef.current += 1;
-        setMessages(prev => [...prev, userMsg, aiPlaceholder]);
+        setMessages(prev => {
+          const nextMessages = [...prev, userMsg, aiPlaceholder];
+          writeFixedSessionWarmSnapshot(sessionId, { messages: nextMessages });
+          return nextMessages;
+        });
       } else {
-        // 新会话直接设置消息
+        if (fixedSessionId) {
+          skipNextFixedSessionLoadRef.current = fixedSessionId;
+          writeFixedSessionWarmSnapshot(sessionId, { messages: [userMsg, aiPlaceholder] });
+        }
         localMessageMutationRef.current += 1;
         setMessages([userMsg, aiPlaceholder]);
       }
@@ -1760,7 +2261,7 @@ export function Chat({
         sessionId: sessionId,
         message: pendingRuntimeMessage,
         displayContent: pendingMessage.displayContent,
-        attachment: stripTransientMessageAttachmentPreview(resolvedAttachment as Message['attachment']),
+        attachment: stripTransientMessageAttachmentPreview(resolvedAttachment),
         attachments: committedAttachments.map((attachment) => stripTransientAttachmentPreview(attachment) as UploadedFileAttachment),
         knowledgeReferences: pendingKnowledgeReferences,
         modelConfig: resolvedModelConfig,
@@ -1772,35 +2273,12 @@ export function Chat({
     };
 
     sendPendingMessage();
-  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, buildPendingAssistantTimeline, dispatchChatSend, ensureChatModelConfig]);
-
-  const loadSessions = async () => {
-    if (!isActiveRef.current) return;
-    const requestId = ++sessionsRequestIdRef.current;
-    try {
-      const list = await uiMeasure('chat', 'load_sessions', async () => (
-        window.ipcRenderer.chat.getSessions()
-      ));
-      if (requestId !== sessionsRequestIdRef.current) {
-        return;
-      }
-      const normalizedList = Array.isArray(list) ? list : [];
-      setSessions(normalizedList);
-      if (
-        normalizedList.length > 0
-        && !currentSessionIdRef.current
-        && !pendingAttachment
-      ) {
-        void selectSession(normalizedList[0].id);
-      }
-    } catch (error) {
-      console.error('Failed to load sessions:', error);
-    }
-  };
+  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, buildPendingAssistantTimeline, dispatchChatSend, ensureChatModelConfig, notifySessionActivity, setPendingAttachment]);
 
   const selectSession = async (sessionId: string) => {
     if (!isActiveRef.current) return;
     setErrorNotice(null);
+    currentSessionIdRef.current = sessionId;
     setCurrentSessionId(sessionId);
     if (fixedSessionId && sessionId === fixedSessionId) {
       const warm = readFixedSessionWarmSnapshot(sessionId);
@@ -1821,7 +2299,7 @@ export function Chat({
       const shouldRecoverRuntime = coldRecoveryPendingRef.current;
       coldRecoveryPendingRef.current = false;
       debugUi('select_session:start', { sessionId, shouldRecoverRuntime });
-      const [history, runtimeStateRaw] = await uiMeasure('chat', 'select_session:load', async () => {
+      const [history, runtimeStateRaw, runtimeEventsRaw] = await uiMeasure('chat', 'select_session:load', async () => {
         if (fixedSessionId && sessionId === fixedSessionId) {
           let inflight = fixedSessionInflightLoads.get(sessionId);
           if (!inflight) {
@@ -1830,7 +2308,12 @@ export function Chat({
               shouldRecoverRuntime
                 ? window.ipcRenderer.chat.getRuntimeState(sessionId)
                 : Promise.resolve(null),
-            ]) as Promise<[unknown[], ChatRuntimeState | null]>;
+              window.ipcRenderer.runtime.getEvents({
+                sessionId,
+                limit: 500,
+                includeChildSessions: false,
+              }).catch(() => []),
+            ]) as Promise<[unknown[], ChatRuntimeState | null, unknown[]]>;
             fixedSessionInflightLoads.set(sessionId, inflight);
             void inflight.finally(() => {
               if (fixedSessionInflightLoads.get(sessionId) === inflight) {
@@ -1845,7 +2328,12 @@ export function Chat({
           shouldRecoverRuntime
             ? window.ipcRenderer.chat.getRuntimeState(sessionId)
             : Promise.resolve(null),
-        ]) as Promise<[unknown[], ChatRuntimeState | null]>;
+          window.ipcRenderer.runtime.getEvents({
+            sessionId,
+            limit: 500,
+            includeChildSessions: false,
+          }).catch(() => []),
+        ]) as Promise<[unknown[], ChatRuntimeState | null, unknown[]]>;
       }, { sessionId, shouldRecoverRuntime });
       if (requestId !== selectSessionRequestRef.current) {
         return;
@@ -1854,16 +2342,37 @@ export function Chat({
         return;
       }
       const runtimeState = runtimeStateRaw as ChatRuntimeState;
+      if (fixedSessionId && sessionId === fixedSessionId) {
+        const warm = readFixedSessionWarmSnapshot(sessionId);
+        if (shouldPreserveFixedSessionWarmMessages(warm, history)) {
+          setMessages(warm.messages);
+          setIsProcessing(true);
+          debugUi('select_session:preserve_warm_messages', {
+            sessionId,
+            warmMessageCount: warm.messages.length,
+            historyMessageCount: history.length,
+          });
+          return;
+        }
+      }
 
       // Convert DB messages to UI messages
       let lastUserCreatedAt: number | undefined;
-      let lastUserMemberActor: ChatMessageMemberActor | undefined;
-      const uiMessages: Message[] = history.map((msg: any) => {
+      const messageTimes: Array<number | undefined> = [];
+      let uiMessages: Message[] = history.map((msg: any) => {
         // 解析 attachment（数据库中存储为 JSON 字符串）
         let attachment = undefined;
+        let attachments: UploadedFileAttachment[] = [];
         if (msg.attachment) {
           try {
-            attachment = typeof msg.attachment === 'string' ? JSON.parse(msg.attachment) : msg.attachment;
+            const parsed = typeof msg.attachment === 'string' ? JSON.parse(msg.attachment) : msg.attachment;
+            if (Array.isArray(parsed)) {
+              attachments = parsed.filter((item) => item?.type === 'uploaded-file') as UploadedFileAttachment[];
+              attachment = attachments[0];
+            } else {
+              attachment = parsed;
+              attachments = uploadedFileAttachmentsFromMessageAttachment(parsed as Message['attachment'] | undefined);
+            }
           } catch (e) {
             console.error('Failed to parse attachment:', e);
           }
@@ -1875,34 +2384,23 @@ export function Chat({
         const processingFinishedAt = role === 'ai' ? createdAt : undefined;
         const memberActor = memberActorFromMessageMetadata(msg.metadata);
         const knowledgeReferences = knowledgeReferencesFromMessageMetadata(msg.metadata);
-        const assetReferences = assetReferencesFromMessageMetadata(msg.metadata);
-        const skillReferences = skillReferencesFromMessageMetadata(msg.metadata);
-        const uploadedAttachments = uploadedAttachmentsFromMessageMetadata(msg.metadata);
-        const restoredAttachments = uploadedAttachments.length > 0
-          ? uploadedAttachments
-          : attachment?.type === 'uploaded-file'
-            ? [attachment as UploadedFileAttachment]
-            : [];
-        const assistantMemberActor = role === 'ai' ? (memberActor || lastUserMemberActor) : undefined;
 
         if (role === 'user') {
           lastUserCreatedAt = createdAt;
-          lastUserMemberActor = memberActor;
         }
+        messageTimes.push(createdAt);
 
         return {
           id: msg.id,
           role, // Simplified mapping
           messageType: role === 'ai' ? 'reply' : undefined,
           content: msg.content,
-          displayContent: msg.display_content || undefined,
+          displayContent: msg.displayContent || msg.display_content || undefined,
           attachment: attachment,
-          attachments: restoredAttachments,
+          attachments,
           knowledgeReferences: role === 'user' ? knowledgeReferences : [],
-          assetReferences: role === 'user' ? assetReferences : [],
-          skillReferences: role === 'user' ? skillReferences : [],
           memberMention: role === 'user' ? memberActor : undefined,
-          memberActor: assistantMemberActor,
+          memberActor: role === 'ai' ? memberActor : undefined,
           tools: [], // History tools not fully reconstructed in this simple view yet
           timeline: [], // History timeline not fully reconstructed
           isStreaming: false,
@@ -1910,6 +2408,7 @@ export function Chat({
           processingFinishedAt,
         };
       });
+      uiMessages = applyPersistedRuntimeEventsToMessages(uiMessages, messageTimes, runtimeEventsRaw);
 
       const runtimeProcessing = Boolean(runtimeState?.success && runtimeState?.isProcessing);
       const runtimePartial = runtimeState?.partialResponse || '';
@@ -1921,6 +2420,7 @@ export function Chat({
           sessionId,
           partialChars: runtimePartial.length,
         });
+        const recoveryItem = buildRuntimeResumeTimelineItem(sessionId);
         const restoredContent = `${runtimePartial}${missedChunksRef.current || ''}`;
         missedChunksRef.current = '';
         const lastMsg = uiMessages[uiMessages.length - 1];
@@ -1931,7 +2431,7 @@ export function Chat({
             messageType: 'reply',
             content: restoredContent,
             tools: [],
-            timeline: [],
+            timeline: [recoveryItem],
             isStreaming: true,
             processingStartedAt: lastUserCreatedAt ?? Date.now(),
           });
@@ -1941,6 +2441,10 @@ export function Chat({
             messageType: 'reply',
             content: restoredContent || lastMsg.content || '',
             isStreaming: true,
+            timeline: [
+              recoveryItem,
+              ...(lastMsg.timeline || []),
+            ],
             processingStartedAt: lastMsg.processingStartedAt ?? lastUserCreatedAt ?? Date.now(),
             processingFinishedAt: undefined,
           };
@@ -1963,17 +2467,17 @@ export function Chat({
     }
   };
 
-  const createNewSession = async () => {
-    try {
-      const session = await window.ipcRenderer.chat.createSession('New Chat');
-      setSessions(prev => [session, ...prev]);
-      setCurrentSessionId(session.id);
-      setErrorNotice(null);
-      setMessages([]);
-    } catch (error) {
-      console.error('Failed to create session:', error);
+  useEffect(() => {
+    if (!isActive || !fixedSessionId) return;
+    if (handledFixedSessionIdRef.current === fixedSessionId) return;
+    handledFixedSessionIdRef.current = fixedSessionId;
+    if (skipNextFixedSessionLoadRef.current === fixedSessionId) {
+      skipNextFixedSessionLoadRef.current = null;
+      debugUi('fixed_session:skip_initial_load_after_send', { sessionId: fixedSessionId });
+      return;
     }
-  };
+    void selectSession(fixedSessionId);
+  }, [debugUi, fixedSessionId, isActive]);
 
   const clearSession = async () => {
     if (!currentSessionId) return;
@@ -1983,7 +2487,7 @@ export function Chat({
       }
       await window.ipcRenderer.chat.clearMessages(currentSessionId);
       missedChunksRef.current = '';
-      flushPendingAssistantChunk();
+      flushPendingStreamingUpdates();
       setIsProcessing(false);
       setConfirmRequest(null);
       setCliEscalationRequest(null);
@@ -1991,29 +2495,6 @@ export function Chat({
       setMessages([]);
     } catch (error) {
       console.error('Failed to clear session:', error);
-    }
-  };
-
-  const deleteSession = async (sessionId: string, e: React.MouseEvent) => {
-    e.stopPropagation(); // 防止触发选择会话
-    if (!(await appConfirm('确定要删除这个对话吗？', { title: '删除对话', confirmLabel: '删除', tone: 'danger' }))) return;
-
-    try {
-      await window.ipcRenderer.chat.deleteSession(sessionId);
-      setSessions(prev => prev.filter(s => s.id !== sessionId));
-
-      // 如果删除的是当前会话，切换到其他会话或清空
-      if (currentSessionId === sessionId) {
-        const remaining = sessions.filter(s => s.id !== sessionId);
-        if (remaining.length > 0) {
-          selectSession(remaining[0].id);
-        } else {
-          setCurrentSessionId(null);
-          setMessages([]);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to delete session:', error);
     }
   };
 
@@ -2110,33 +2591,133 @@ export function Chat({
     });
   }, []);
 
+  const appendThoughtChunk = useCallback((chunk: string) => {
+    if (!chunk) return;
+    setMessages(prev => {
+      const lastReplyIndex = findLastAssistantReplyIndex(prev);
+      if (lastReplyIndex === -1) return prev;
+      const next = [...prev];
+      const lastMsg = next[lastReplyIndex];
+      const now = Date.now();
+      const timeline = [...lastMsg.timeline];
+      const thoughtIndex = findLastRunningTimelineThoughtIndex(timeline);
+
+      if (thoughtIndex === -1) {
+        timeline.push({
+          id: `thought_${now}_${Math.random().toString(36).slice(2, 8)}`,
+          type: 'thought',
+          content: chunk,
+          status: 'running',
+          timestamp: now,
+        });
+      } else {
+        const thoughtItem = timeline[thoughtIndex];
+        timeline[thoughtIndex] = {
+          ...thoughtItem,
+          content: mergeThoughtDelta(thoughtItem.content || '', chunk),
+        };
+      }
+
+      next[lastReplyIndex] = {
+        ...lastMsg,
+        messageType: 'reply',
+        suppressPendingIndicator: true,
+        timeline,
+      };
+      return next;
+    });
+  }, []);
+
+  const appendCliLogChunks = useCallback((chunksByExecutionId: Record<string, string>) => {
+    const entries = Object.entries(chunksByExecutionId)
+      .filter(([executionId, chunk]) => Boolean(executionId && chunk));
+    if (entries.length === 0) return;
+
+    setMessages((prev) => {
+      const lastReplyIndex = findLastAssistantReplyIndex(prev);
+      if (lastReplyIndex === -1) return prev;
+      const next = [...prev];
+      const lastMsg = next[lastReplyIndex];
+      const timeline = [...lastMsg.timeline];
+      let changed = false;
+
+      for (const [executionId, chunk] of entries) {
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-exec' && item.cliData?.executionId === executionId,
+        );
+        if (existingIndex === -1) continue;
+        const target = timeline[existingIndex];
+        timeline[existingIndex] = {
+          ...target,
+          cliData: {
+            ...target.cliData,
+            logPreview: appendCliLogPreview(target.cliData?.logPreview || '', chunk),
+          },
+        };
+        changed = true;
+      }
+
+      if (!changed) return prev;
+      next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+      return next;
+    });
+  }, []);
+
   const flushPendingAssistantChunk = useCallback(() => {
     if (updateTimerRef.current) {
       clearTimeout(updateTimerRef.current);
       updateTimerRef.current = null;
     }
 
-    const pending = pendingUpdateRef.current;
-    const chunk = pending?.content || '';
-    const messagePhase = pending?.messagePhase || 'final_answer';
+    const chunk = pendingUpdateRef.current?.content || '';
+    const messagePhase = pendingUpdateRef.current?.messagePhase || 'final_answer';
     pendingUpdateRef.current = null;
     if (chunk) {
       appendAssistantChunk(chunk, messagePhase);
     }
   }, [appendAssistantChunk]);
 
+  const flushPendingThoughtChunk = useCallback(() => {
+    if (thoughtUpdateTimerRef.current) {
+      clearTimeout(thoughtUpdateTimerRef.current);
+      thoughtUpdateTimerRef.current = null;
+    }
+
+    const chunk = pendingThoughtUpdateRef.current?.content || '';
+    pendingThoughtUpdateRef.current = null;
+    if (chunk) {
+      appendThoughtChunk(chunk);
+    }
+  }, [appendThoughtChunk]);
+
+  const flushPendingCliLogChunks = useCallback(() => {
+    if (cliLogUpdateTimerRef.current) {
+      clearTimeout(cliLogUpdateTimerRef.current);
+      cliLogUpdateTimerRef.current = null;
+    }
+
+    const chunksByExecutionId = pendingCliLogUpdatesRef.current;
+    pendingCliLogUpdatesRef.current = {};
+    appendCliLogChunks(chunksByExecutionId);
+  }, [appendCliLogChunks]);
+
+  const flushPendingStreamingUpdates = useCallback(() => {
+    flushPendingThoughtChunk();
+    flushPendingCliLogChunks();
+    flushPendingAssistantChunk();
+  }, [flushPendingAssistantChunk, flushPendingCliLogChunks, flushPendingThoughtChunk]);
+
   useEffect(() => {
-    if (!isActive || fixedSessionId) return;
+    if (!isActive || fixedSessionMode) return;
     const handleSpaceChanged = () => {
-      setShowRoomPicker(false);
       setSelectionMenu(prev => ({ ...prev, visible: false }));
-      void loadChatRooms({ silent: true });
     };
     window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
     return () => {
       window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
     };
-  }, [fixedSessionId, isActive, loadChatRooms]);
+  }, [fixedSessionMode, isActive]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -2150,39 +2731,6 @@ export function Chat({
       window.ipcRenderer.auth.offDataChanged(refreshChatModels);
     };
   }, [isActive, loadChatModelOptions]);
-
-  useEffect(() => {
-    if (!isActive) return;
-    const refreshMemberMentions = () => {
-      void loadMemberMentionOptions();
-    };
-    window.ipcRenderer.advisors.onChanged(refreshMemberMentions);
-    return () => {
-      window.ipcRenderer.advisors.offChanged(refreshMemberMentions);
-    };
-  }, [isActive, loadMemberMentionOptions]);
-
-  useEffect(() => {
-    if (!isActive) return;
-    const refreshKnowledgeMentions = () => {
-      void loadKnowledgeMentionOptions();
-    };
-    window.ipcRenderer.knowledge.onChanged(refreshKnowledgeMentions);
-    window.ipcRenderer.knowledge.onCatalogUpdated(refreshKnowledgeMentions);
-    return () => {
-      window.ipcRenderer.knowledge.offChanged(refreshKnowledgeMentions);
-      window.ipcRenderer.knowledge.offCatalogUpdated(refreshKnowledgeMentions);
-    };
-  }, [isActive, loadKnowledgeMentionOptions]);
-
-  useEffect(() => {
-    if (!isActive) return;
-    const refreshAssetMentions = (_event?: unknown, payload?: { scope?: string }) => {
-      if (payload?.scope && payload.scope !== 'subjects') return;
-      void loadAssetMentionOptions();
-    };
-    return subscribeDataChanged(refreshAssetMentions);
-  }, [isActive, loadAssetMentionOptions]);
 
   const handleCancel = useCallback(() => {
     if (currentSessionId) {
@@ -2244,29 +2792,27 @@ export function Chat({
     const handleThoughtStart = (_: unknown) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
-        if (runningThinkingIndex !== -1) return prev;
-
         const lastReplyIndex = findLastAssistantReplyIndex(prev);
         if (lastReplyIndex === -1) return prev;
 
         const now = Date.now();
         const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        if (findLastRunningTimelineThoughtIndex(timeline) !== -1) return prev;
+        timeline.push({
+          id: `thought_${now}_${Math.random().toString(36).slice(2, 8)}`,
+          type: 'thought',
+          content: '',
+          status: 'running',
+          timestamp: now,
+        });
         next[lastReplyIndex] = {
-          ...next[lastReplyIndex],
+          ...lastMsg,
           messageType: 'reply',
           suppressPendingIndicator: true,
+          timeline,
         };
-        next.splice(lastReplyIndex, 0, {
-          id: `thinking_${now}_${Math.random().toString(36).slice(2, 8)}`,
-          role: 'ai',
-          messageType: 'thinking',
-          content: '',
-          tools: [],
-          timeline: [],
-          isStreaming: true,
-          processingStartedAt: now,
-        });
         return next;
       });
     };
@@ -2283,63 +2829,50 @@ export function Chat({
         });
         return;
       }
-      setMessages(prev => {
-        let runningThinkingIndex = findLastRunningThinkingIndex(prev);
-        let next = [...prev];
-
-        if (runningThinkingIndex === -1) {
-          const lastReplyIndex = findLastAssistantReplyIndex(next);
-          if (lastReplyIndex === -1) return prev;
-          const now = Date.now();
-          next[lastReplyIndex] = {
-            ...next[lastReplyIndex],
-            messageType: 'reply',
-            suppressPendingIndicator: true,
-          };
-          next.splice(lastReplyIndex, 0, {
-            id: `thinking_${now}_${Math.random().toString(36).slice(2, 8)}`,
-            role: 'ai',
-            messageType: 'thinking',
-            content,
-            tools: [],
-            timeline: [],
-            isStreaming: true,
-            processingStartedAt: now,
-          });
-          return next;
-        }
-
-        const thinkingMessage = next[runningThinkingIndex];
-        next[runningThinkingIndex] = {
-          ...thinkingMessage,
-          messageType: 'thinking',
-          content: mergeThoughtDelta(thinkingMessage.content || '', content),
-          isStreaming: true,
-        };
-        return next;
-      });
+      if (!pendingThoughtUpdateRef.current) {
+        pendingThoughtUpdateRef.current = { content: '' };
+      }
+      pendingThoughtUpdateRef.current.content = mergeThoughtDelta(
+        pendingThoughtUpdateRef.current.content,
+        content,
+      );
+      if (!thoughtUpdateTimerRef.current) {
+        thoughtUpdateTimerRef.current = setTimeout(() => {
+          thoughtUpdateTimerRef.current = null;
+          flushPendingThoughtChunk();
+        }, STREAM_UPDATE_INTERVAL_MS);
+      }
     };
 
     // 4. Thought End
     const handleThoughtEnd = (_: unknown) => {
       if (!isActiveRef.current) return;
+      flushPendingThoughtChunk();
       setMessages(prev => {
-        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
-        if (runningThinkingIndex === -1) return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
         const next = [...prev];
-        const thinkingMessage = next[runningThinkingIndex];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const thoughtIndex = findLastRunningTimelineThoughtIndex(timeline);
+        if (thoughtIndex === -1) return prev;
         const finishedAt = Date.now();
-        next[runningThinkingIndex] = {
-          ...thinkingMessage,
-          messageType: 'thinking',
-          isStreaming: false,
-          processingFinishedAt: finishedAt,
+        const thoughtItem = timeline[thoughtIndex];
+        timeline[thoughtIndex] = {
+          ...thoughtItem,
+          status: 'done',
+          duration: finishedAt - thoughtItem.timestamp,
+        };
+        next[lastReplyIndex] = {
+          ...lastMsg,
+          messageType: 'reply',
+          timeline,
         };
         return next;
       });
     };
 
-  const handleResponseChunk = (_: unknown, { content, messagePhase }: { content: string; messagePhase?: string }) => {
+    const handleResponseChunk = (_: unknown, { content, messagePhase }: { content: string; messagePhase?: string }) => {
       if (!isActiveRef.current) {
         if (import.meta.env.DEV) {
           console.warn('[ui][chat] inactive page received response chunk');
@@ -2354,6 +2887,7 @@ export function Chat({
         });
         return;
       }
+      flushPendingThoughtChunk();
       setMessages(prev => {
         const runningThinkingIndex = findLastRunningThinkingIndex(prev);
         if (runningThinkingIndex === -1) return prev;
@@ -2400,6 +2934,11 @@ export function Chat({
       if (pendingUpdateRef.current && pendingUpdateRef.current.messagePhase !== normalizedMessagePhase) {
         flushPendingAssistantChunk();
       }
+      if (normalizedMessagePhase === 'final_answer') {
+        openResponseSegmentRef.current += content;
+      } else if (normalizedMessagePhase === 'commentary') {
+        openResponseSegmentRef.current = '';
+      }
 
       // 1. Accumulate content
       if (!pendingUpdateRef.current) {
@@ -2418,6 +2957,9 @@ export function Chat({
 
     const handleToolStart = (_: unknown, toolData: { callId: string; name: string; input: unknown; description?: string }) => {
       if (!isActiveRef.current) return;
+      flushPendingAssistantChunk();
+      const commentarySegment = openResponseSegmentRef.current;
+      openResponseSegmentRef.current = '';
       setMessages(prev => {
         const runningThinkingIndex = findLastRunningThinkingIndex(prev);
         const lastReplyIndex = findLastAssistantReplyIndex(prev);
@@ -2435,6 +2977,26 @@ export function Chat({
 
         const newTimeline = [...lastMsg.timeline];
         const now = Date.now();
+        const normalizedCommentarySegment = normalizeTimelineCommentarySegment(commentarySegment);
+        if (normalizedCommentarySegment) {
+          newTimeline.push({
+            id: `commentary_${now}_${Math.random().toString(36).slice(2, 8)}`,
+            type: 'commentary',
+            content: normalizedCommentarySegment,
+            status: 'done',
+            timestamp: now,
+            duration: 0,
+          });
+        }
+        const runningThoughtIndex = findLastRunningTimelineThoughtIndex(newTimeline);
+        if (runningThoughtIndex !== -1) {
+          const thoughtItem = newTimeline[runningThoughtIndex];
+          newTimeline[runningThoughtIndex] = {
+            ...thoughtItem,
+            status: 'done',
+            duration: now - thoughtItem.timestamp,
+          };
+        }
         const runningCommentaryIndex = findLastRunningTimelineCommentaryIndex(newTimeline);
         if (runningCommentaryIndex !== -1) {
           const commentaryItem = newTimeline[runningCommentaryIndex];
@@ -2757,28 +3319,16 @@ export function Chat({
       chunk: string;
     }) => {
       if (!isActiveRef.current || !cliData.chunk) return;
-      setMessages((prev) => {
-        const lastReplyIndex = findLastAssistantReplyIndex(prev);
-        if (lastReplyIndex === -1) return prev;
-        const next = [...prev];
-        const lastMsg = next[lastReplyIndex];
-        const timeline = [...lastMsg.timeline];
-        const existingIndex = findLatestTimelineItemIndex(
-          timeline,
-          (item) => item.type === 'cli-exec' && item.cliData?.executionId === cliData.executionId,
-        );
-        if (existingIndex === -1) return prev;
-        const target = timeline[existingIndex];
-        timeline[existingIndex] = {
-          ...target,
-          cliData: {
-            ...target.cliData,
-            logPreview: appendCliLogPreview(target.cliData?.logPreview || '', cliData.chunk),
-          },
-        };
-        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
-        return next;
-      });
+      pendingCliLogUpdatesRef.current[cliData.executionId] = appendCliLogPreview(
+        pendingCliLogUpdatesRef.current[cliData.executionId] || '',
+        cliData.chunk,
+      );
+      if (!cliLogUpdateTimerRef.current) {
+        cliLogUpdateTimerRef.current = setTimeout(() => {
+          cliLogUpdateTimerRef.current = null;
+          flushPendingCliLogChunks();
+        }, STREAM_UPDATE_INTERVAL_MS);
+      }
     };
 
     const handleCliExecutionStatus = (_: unknown, cliData: {
@@ -2982,8 +3532,9 @@ export function Chat({
       responseCompletedRef.current = true;
       suppressComposerFocus('response_end', 5000);
       blurComposer('response_end');
-      flushPendingAssistantChunk();
+      flushPendingStreamingUpdates();
       const finalContent = typeof payload?.content === 'string' ? payload.content : '';
+      openResponseSegmentRef.current = '';
       const streamStats = streamStatsRef.current;
       debugUi('chat:response_end:ui', {
         sessionId: currentSessionIdRef.current,
@@ -3105,8 +3656,9 @@ export function Chat({
       if (!isActiveRef.current) return;
       suppressComposerFocus('cancelled', 3000);
       blurComposer('cancelled');
-      flushPendingAssistantChunk();
+      flushPendingStreamingUpdates();
       missedChunksRef.current = '';
+      openResponseSegmentRef.current = '';
       debugUi('response_cancelled', {
         sessionId: currentSessionIdRef.current,
         chunks: streamStatsRef.current?.chunks || 0,
@@ -3156,9 +3708,7 @@ export function Chat({
 
     const handleSessionTitleUpdated = (_: unknown, { sessionId, title }: { sessionId: string; title: string }) => {
       if (!isActiveRef.current) return;
-      setSessions(prev => prev.map(s =>
-        s.id === sessionId ? { ...s, title } : s
-      ));
+      debugUi('session_title_updated:ignored_in_embedded_chat', { sessionId, title });
     };
 
     const handlePlanUpdated = (_: unknown, { steps }: { steps: any[] }) => {
@@ -3188,7 +3738,9 @@ export function Chat({
       }
       suppressComposerFocus('error', 3000);
       blurComposer('error');
+      flushPendingStreamingUpdates();
       const notice = normalizeChatErrorNotice(error);
+      const errorTimelineItem = buildChatErrorTimelineItem(error, notice);
       debugUi('response_error', {
         sessionId: currentSessionIdRef.current,
         error: typeof error === 'string' ? error : error?.message || 'unknown',
@@ -3218,6 +3770,7 @@ export function Chat({
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
+            timeline.push(errorTimelineItem);
             const next = [...prev];
             next[lastReplyIndex] = {
               ...lastMsg,
@@ -3397,6 +3950,12 @@ export function Chat({
       onCliVerificationFinished: ({ executionId, status, summary }) => {
         handleCliVerificationFinished(null, { executionId, status, summary });
       },
+      onAcpConversationChanged: ({ eventType }) => {
+        const sessionId = currentSessionIdRef.current;
+        if (!isActiveRef.current || !sessionId) return;
+        debugUi('acp_conversation_changed:reload_messages', { sessionId, eventType });
+        void selectSession(sessionId);
+      },
     });
 
     return () => {
@@ -3405,20 +3964,41 @@ export function Chat({
 
       // Cleanup timer
       if (updateTimerRef.current) {
-          clearTimeout(updateTimerRef.current);
+        clearTimeout(updateTimerRef.current);
+        updateTimerRef.current = null;
       }
+      pendingUpdateRef.current = null;
+      openResponseSegmentRef.current = '';
+      if (thoughtUpdateTimerRef.current) {
+        clearTimeout(thoughtUpdateTimerRef.current);
+        thoughtUpdateTimerRef.current = null;
+      }
+      pendingThoughtUpdateRef.current = null;
+      if (cliLogUpdateTimerRef.current) {
+        clearTimeout(cliLogUpdateTimerRef.current);
+        cliLogUpdateTimerRef.current = null;
+      }
+      pendingCliLogUpdatesRef.current = {};
     };
-  }, [debugUi, flushPendingAssistantChunk, isActive]);
+  }, [
+    debugUi,
+    flushPendingAssistantChunk,
+    flushPendingCliLogChunks,
+    flushPendingStreamingUpdates,
+    flushPendingThoughtChunk,
+    isActive,
+  ]);
 
   const getChatModelConfig = useCallback(() => {
-    const currentModel = resolveSelectedChatModelFromRefs() || selectedChatModel;
-    if (!currentModel) return undefined;
+    if (!selectedChatModel) return undefined;
     return {
-      apiKey: currentModel.apiKey,
-      baseURL: currentModel.baseURL,
-      modelName: currentModel.modelName,
+      apiKey: selectedChatModel.apiKey,
+      baseURL: selectedChatModel.baseURL,
+      modelName: selectedChatModel.modelName,
+      sourceId: selectedChatModel.sourceId,
+      presetId: selectedChatModel.presetId,
     };
-  }, [resolveSelectedChatModelFromRefs, selectedChatModel]);
+  }, [selectedChatModel]);
 
   const transcribeAudioClip = useCallback(async (clip: AudioRecordingClip) => {
     setIsTranscribingAudio(true);
@@ -3436,11 +4016,16 @@ export function Chat({
       if (!resolved.text) {
         return;
       }
-      setInput((prev) => {
-        const current = String(prev || '').trim();
-        const next = resolved.text || '';
-        return current ? `${current}${current.endsWith('\n') ? '' : '\n'}${next}` : next;
-      });
+      const next = resolved.text || '';
+      const composer = composerRef.current;
+      if (composer) {
+        composer.insertTextAtEnd(next, { separator: '\n' });
+      } else {
+        setInput((prev) => {
+          const current = String(prev || '').trim();
+          return current ? `${current}${current.endsWith('\n') ? '' : '\n'}${next}` : next;
+        });
+      }
       requestAnimationFrame(() => {
         composerRef.current?.focus();
         composerRef.current?.syncHeight();
@@ -3482,22 +4067,15 @@ export function Chat({
 
   const sendMessage = async (
     content: string,
-    attachmentsInput: UploadedFileAttachment | UploadedFileAttachment[] = [],
+    attachments: UploadedFileAttachment[] = [],
     memberMention: ChatMemberMentionOption | null = selectedMemberMention || fixedMemberMention,
     knowledgeMentions: ChatKnowledgeMentionOption[] = selectedKnowledgeMentions,
     skillMentions: ChatSkillMentionOption[] = selectedSkillMentions,
     assetMentions: ChatAssetMentionOption[] = selectedAssetMentions,
-    displayOverride?: string,
+    displayContentOverride?: string,
   ) => {
-    const attachments = Array.isArray(attachmentsInput)
-      ? attachmentsInput.filter(Boolean)
-      : attachmentsInput
-        ? [attachmentsInput]
-        : [];
     const primaryAttachment = attachments[0];
     const safeKnowledgeMentions = knowledgeMentions.filter((item) => item.id);
-    const safeSkillMentions = skillMentions.filter((item) => item.name);
-    const safeAssetMentions = assetMentions.filter((item) => item.id);
     uiTraceInteraction('chat', 'send_message', {
       sessionId: currentSessionId || null,
       chars: String(content || '').trim().length,
@@ -3505,27 +4083,28 @@ export function Chat({
       attachmentCount: attachments.length,
       targetAdvisorId: memberMention?.id || null,
       knowledgeReferenceCount: safeKnowledgeMentions.length,
-      skillReferenceCount: safeSkillMentions.length,
-      assetReferenceCount: safeAssetMentions.length,
+      assetReferenceCount: assetMentions.length,
     });
     suppressComposerFocus('send_message', 5000);
     blurComposer('send_message');
     shouldAutoScrollRef.current = true;
     setErrorNotice(null);
     const normalizedContent = String(content || '').trim();
-    const knowledgeLabels = safeKnowledgeMentions.map((item) => `#${item.title || '知识库内容'}`);
+    const mentionLabel = memberMention ? `@${memberMention.name}` : '';
     const inlineLabels = [
-      ...safeSkillMentions.map((item) => `@${item.name}`),
-      ...safeAssetMentions.map((item) => `@${item.name}`),
-    ];
+      mentionLabel,
+      ...skillMentions.map((item) => `@${item.name}`),
+      ...assetMentions.map((item) => `@${item.name}`),
+    ].filter(Boolean);
     const missingInlineLabels = inlineLabels.filter((label) => !normalizedContent.includes(label));
-    const normalizedDisplayOverride = String(displayOverride || '').trim();
+    const knowledgeLabels = safeKnowledgeMentions.map((item) => `#${item.title || '知识库内容'}`);
+    const normalizedDisplayOverride = String(displayContentOverride || '').trim();
     const hasAttachments = attachments.length > 0;
     const attachmentOnlyTitle = hasAttachments
       ? `附件：${attachments.map((item) => item.name).filter(Boolean).join('、') || '未命名附件'}`
       : '';
     const displayBody = normalizedDisplayOverride || normalizedContent || (safeKnowledgeMentions.length > 0 ? '请结合提到的知识库内容回答。' : '');
-    const displayText = [...missingInlineLabels, ...knowledgeLabels, displayBody || attachmentOnlyTitle].filter(Boolean).join(' ').trim();
+    const displayText = [...missingInlineLabels, ...knowledgeLabels, displayBody].filter(Boolean).join(' ').trim();
     if (!displayText && !hasAttachments) return;
     const attachmentBlockReason = attachmentsSendBlockReason(attachments);
     if (attachmentBlockReason) {
@@ -3533,6 +4112,10 @@ export function Chat({
       return;
     }
     const runtimeMessage = normalizedContent || displayBody || displayText || (hasAttachments ? '请分析这些附件。' : '');
+    const assetReferencesForSend = assetMentions.map((item) => ({
+      id: item.id,
+      name: item.name,
+    }));
     const processingStartedAt = Date.now();
     const memberActor: ChatMessageMemberActor | undefined = memberMention ? {
       type: 'member',
@@ -3540,17 +4123,6 @@ export function Chat({
       displayName: memberMention.name,
       avatar: memberMention.avatar,
     } : undefined;
-    const assetReferencesForMessage: ChatMessageAssetReference[] = safeAssetMentions.map((item) => ({
-      id: item.id,
-      name: item.name,
-      description: item.description,
-      primaryPreviewUrl: item.primaryPreviewUrl,
-      tags: item.tags,
-    }));
-    const skillReferencesForMessage: ChatMessageSkillReference[] = safeSkillMentions.map((item) => ({
-      name: item.name,
-      description: item.description,
-    }));
     const userMsg: Message = {
       id: processingStartedAt.toString(),
       role: 'user',
@@ -3559,8 +4131,6 @@ export function Chat({
       attachment: primaryAttachment as unknown as Message['attachment'],
       attachments,
       knowledgeReferences: safeKnowledgeMentions,
-      assetReferences: assetReferencesForMessage,
-      skillReferences: skillReferencesForMessage,
       memberMention: memberActor,
       tools: [],
       timeline: []
@@ -3577,13 +4147,46 @@ export function Chat({
       processingStartedAt,
       memberActor,
     };
+    const optimisticMessages = [userMsg, aiPlaceholder];
+    let targetSessionId = currentSessionIdRef.current || currentSessionId || null;
+    let seededOptimisticMessages = false;
+    if (!targetSessionId && onEnsureSessionForSend) {
+      try {
+        targetSessionId = await onEnsureSessionForSend(defaultSessionTitleFromMessage(displayBody || displayText || attachmentOnlyTitle), {
+          onCreated: (sessionId) => {
+            currentSessionIdRef.current = sessionId;
+            skipNextFixedSessionLoadRef.current = sessionId;
+            writeFixedSessionWarmSnapshot(sessionId, { messages: optimisticMessages });
+            localMessageMutationRef.current += 1;
+            setMessages(optimisticMessages);
+            setCurrentSessionId(sessionId);
+            setIsProcessing(true);
+            seededOptimisticMessages = true;
+          },
+        });
+      } catch (error) {
+        console.error('Failed to create chat session before send:', error);
+        targetSessionId = null;
+      }
+      if (!targetSessionId) {
+        setErrorNotice('创建对话失败，请稍后重试');
+        return;
+      }
+      currentSessionIdRef.current = targetSessionId;
+      skipNextFixedSessionLoadRef.current = targetSessionId;
+      setCurrentSessionId(targetSessionId);
+    }
+    notifySessionActivity(targetSessionId, new Date(processingStartedAt).toISOString());
 
-    localMessageMutationRef.current += 1;
-    setMessages(prev => [...prev, userMsg, aiPlaceholder]);
+    if (!seededOptimisticMessages) {
+      localMessageMutationRef.current += 1;
+      setMessages(prev => [...prev, userMsg, aiPlaceholder]);
+    }
     setInput('');
-    setSelectedKnowledgeMentions([]);
+    setSelectedMemberMention(null);
     setSelectedSkillMentions([]);
     setSelectedAssetMentions([]);
+    setSelectedKnowledgeMentions([]);
     resetPendingAttachment();
     setIsProcessing(true);
 
@@ -3602,58 +4205,48 @@ export function Chat({
     const resolvedAttachment = createAttachmentPayload(committedAttachments);
 
     dispatchChatSend({
-      sessionId: currentSessionId || undefined,
+      sessionId: targetSessionId || undefined,
       message: runtimeMessage,
       displayContent: displayText,
-      attachment: stripTransientAttachmentPreview(resolvedAttachment),
-      attachments: committedAttachments.map((item) => stripTransientAttachmentPreview(item) as UploadedFileAttachment),
-      knowledgeReferences: safeKnowledgeMentions,
-      assetReferences: assetReferencesForMessage,
+      attachment: stripTransientAttachmentPreview(resolvedAttachment as UploadedFileAttachment | undefined),
+      attachments: committedAttachments.map((attachment) => stripTransientAttachmentPreview(attachment) as UploadedFileAttachment),
       memberMention: memberMention ? {
         type: 'advisor',
         advisorId: memberMention.id,
         name: memberMention.name,
         avatar: memberMention.avatar,
       } : undefined,
+      knowledgeReferences: safeKnowledgeMentions,
+      assetReferences: assetReferencesForSend,
       modelConfig: resolvedModelConfig || getChatModelConfig(),
-      taskHints: safeSkillMentions.length > 0 ? {
-        activeSkills: safeSkillMentions.map((item) => item.name),
-      } : undefined,
+      taskHints: mergeSkillMentionsIntoTaskHints(fixedSessionTaskHints, skillMentions),
     });
   };
 
-  const reusableVideoAttachment = useMemo(
-    () => pendingAttachments.length > 0 ? null : latestReusableVideoAttachment(messages),
+  const reusableVideoAttachments = useMemo(
+    () => pendingAttachments.length > 0 ? [] : latestReusableVideoAttachments(messages),
     [messages, pendingAttachments.length],
   );
-  const shortcutAttachment = pendingAttachment || reusableVideoAttachment || null;
-  const shortcutAttachments = pendingAttachments.length > 0
-    ? pendingAttachments
-    : shortcutAttachment
-      ? [shortcutAttachment]
-      : [];
+  const shortcutAttachment = pendingAttachment || reusableVideoAttachments[0] || null;
+  const shortcutAttachments = pendingAttachments.length > 0 ? pendingAttachments : reusableVideoAttachments;
   const shortcutContext: ChatShortcutContext = {
     input,
     hasInput: Boolean(input.trim()),
     attachment: shortcutAttachment,
     attachments: shortcutAttachments,
-    selectedMemberMention: selectedMemberMention || fixedMemberMention,
+    selectedMemberMention,
     selectedKnowledgeMentions,
   };
-  const fallbackShortcuts = (
-    reusableVideoAttachment
-      ? attachmentActionsFor('video').map((shortcut) => ({
-        ...shortcut,
-        attachment: reusableVideoAttachment,
-      }))
-      : [
-        { label: '📝 总结内容', text: '请总结以上内容，提炼核心要点。' },
-        { label: '💡 提炼观点', text: '请提炼其中的关键观点和洞察。' },
-        { label: '✂️ 润色优化', text: '请润色这段内容，使其更具吸引力。' },
-        { label: '❓ 延伸提问', text: '基于以上内容，提出3个值得思考的延伸问题。' },
-      ]
-  );
-  const shortcuts = resolveChatShortcutProvider(shortcutsProp, fallbackShortcuts, shortcutContext);
+
+  const shortcuts = resolveChatShortcutProvider(
+    shortcutsProp,
+    defaultComposerShortcuts(shortcutContext),
+    shortcutContext,
+  ).map((shortcut) => (
+    !pendingAttachment && shortcutAttachments.length > 0 && shortcut.action === 'send'
+      ? { ...shortcut, attachments: shortcutAttachments }
+      : shortcut
+  ));
 
   const welcomeShortcuts = resolveChatShortcutProvider(welcomeShortcutsProp, [
     { label: '📄 阅读稿件', text: '请帮我阅读并理解当前的稿件内容。' },
@@ -3666,28 +4259,88 @@ export function Chat({
     const action = shortcut.action || 'send';
     if (action === 'inject') {
       setErrorNotice(null);
-      setInput(shortcut.text);
-      requestAnimationFrame(() => {
-        composerRef.current?.focus();
-        composerRef.current?.syncHeight();
-      });
+      const text = String(shortcut.text || '');
+      const composer = composerRef.current;
+      if (composer) {
+        composer.insertTextAtEnd(text, { separator: '\n' });
+      } else {
+        setInput((prev) => {
+          const current = String(prev || '');
+          return current.trim() ? `${current}${current.endsWith('\n') ? '' : '\n'}${text}` : text;
+        });
+        activateComposerInput('composer');
+      }
       return;
     }
-    const shortcutAttachmentsForSend = shortcut.attachments && shortcut.attachments.length > 0
-      ? shortcut.attachments
-      : shortcut.attachment
-        ? [shortcut.attachment]
-        : pendingAttachments;
+    if (shortcut.attachments && shortcut.attachments.length > 0) {
+      void sendMessage(
+        shortcut.text,
+        shortcut.attachments,
+        selectedMemberMention || fixedMemberMention,
+        selectedKnowledgeMentions,
+        selectedSkillMentions,
+        selectedAssetMentions,
+        shortcut.displayContent || shortcut.label,
+      );
+      return;
+    }
+    void sendMessage(shortcut.text);
+  }, [
+    activateComposerInput,
+    fixedMemberMention,
+    selectedAssetMentions,
+    selectedKnowledgeMentions,
+    selectedMemberMention,
+    selectedSkillMentions,
+    sendMessage,
+  ]);
+
+  const currentAttachmentActionKey = attachmentActionKey(pendingAttachments);
+  const attachmentActionKindValue = attachmentShortcutKind(pendingAttachment);
+  const showAttachmentActionOverlay = Boolean(
+    showComposerShortcuts &&
+    showComposer &&
+    allowFileUpload &&
+    isEmptySession &&
+    pendingAttachment &&
+    attachmentActionKindValue &&
+    currentAttachmentActionKey &&
+    dismissedAttachmentActionKey !== currentAttachmentActionKey &&
+    !isAttachmentUploading &&
+    shortcuts.length > 0
+  );
+  const dismissAttachmentActionOverlay = useCallback(() => {
+    if (!currentAttachmentActionKey) return;
+    setDismissedAttachmentActionKey(currentAttachmentActionKey);
+  }, [currentAttachmentActionKey]);
+  const applyAttachmentAction = useCallback((shortcut: ChatShortcut) => {
+    if (currentAttachmentActionKey) {
+      setDismissedAttachmentActionKey(currentAttachmentActionKey);
+    }
     void sendMessage(
       shortcut.text,
-      shortcutAttachmentsForSend,
+      pendingAttachments,
       selectedMemberMention || fixedMemberMention,
       selectedKnowledgeMentions,
       selectedSkillMentions,
       selectedAssetMentions,
       shortcut.displayContent || shortcut.label,
     );
-  }, [fixedMemberMention, pendingAttachments, selectedAssetMentions, selectedKnowledgeMentions, selectedMemberMention, selectedSkillMentions, sendMessage]);
+  }, [
+    currentAttachmentActionKey,
+    fixedMemberMention,
+    pendingAttachments,
+    selectedAssetMentions,
+    selectedKnowledgeMentions,
+    selectedMemberMention,
+    selectedSkillMentions,
+    sendMessage,
+  ]);
+  const showInlineShortcutChips = Boolean(
+    showComposerShortcuts &&
+    shortcuts.length > 0 &&
+    !pendingAttachment
+  );
 
   const formatTokenLabel = (value?: number) => {
     const safe = Math.max(0, Math.round(Number(value || 0)));
@@ -3720,48 +4373,10 @@ export function Chat({
     ? (documentThemeMode === 'dark' ? 'dark' : 'default')
     : embeddedTheme;
   const darkEmbedded = resolvedEmbeddedTheme === 'dark';
-  const showChatDropOverlay = Boolean(showComposer && allowFileUpload && isFileDragActive && !isProcessing);
-  const attachmentActionKind = inferAttachmentActionKind(pendingAttachment);
-  const currentAttachmentActionKey = attachmentActionKey(pendingAttachments);
-  const attachmentActionOverlayVisible = Boolean(
-    showComposer
-    && allowFileUpload
-    && pendingAttachment
-    && isEmptySession
-    && !isProcessing
-    && !isAttachmentUploading
-    && !input.trim()
-    && currentAttachmentActionKey
-    && dismissedAttachmentActionKey !== currentAttachmentActionKey
-  );
-  const attachmentActionOverlayActions = attachmentActionsFor(attachmentActionKind);
-  const dismissAttachmentActionOverlay = useCallback(() => {
-    if (currentAttachmentActionKey) {
-      setDismissedAttachmentActionKey(currentAttachmentActionKey);
-    }
-    requestAnimationFrame(() => {
-      composerRef.current?.focus();
-      composerRef.current?.syncHeight();
-    });
-  }, [currentAttachmentActionKey]);
-  const applyAttachmentAction = useCallback((shortcut: ChatShortcut) => {
-    if (currentAttachmentActionKey) {
-      setDismissedAttachmentActionKey(currentAttachmentActionKey);
-    }
-    void sendMessage(
-      shortcut.text,
-      pendingAttachments,
-      selectedMemberMention || fixedMemberMention,
-      selectedKnowledgeMentions,
-      selectedSkillMentions,
-      selectedAssetMentions,
-      shortcut.displayContent || shortcut.label,
-    );
-  }, [currentAttachmentActionKey, fixedMemberMention, pendingAttachments, selectedAssetMentions, selectedKnowledgeMentions, selectedMemberMention, selectedSkillMentions, sendMessage]);
   const composerTheme = darkEmbedded ? 'dark' : 'default';
   const inputAreaShellClass = darkEmbedded
     ? 'bg-transparent pb-4 pt-2 md:pb-5'
-    : 'bg-surface-primary pb-4 pt-2 md:pb-5';
+    : 'bg-transparent pb-4 pt-2 md:pb-5';
   const shortcutChipClass = darkEmbedded
     ? 'flex-shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/62 transition-colors hover:border-white/20 hover:text-white disabled:opacity-50'
     : 'flex-shrink-0 rounded-full border border-border bg-surface-primary px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-accent-primary/30 hover:text-accent-primary disabled:opacity-50';
@@ -3790,10 +4405,17 @@ export function Chat({
   );
   const composerContextUsageLabel = `${contextUsedPercentDisplay}% · ${formatTokenLabel(estimatedEffectiveTokens)} / ${formatTokenLabel(compactThreshold)} 上下文已使用`;
   const dockedEmptyState = isEmptySession && emptyStateComposerPlacement === 'bottom';
+  const showChatDropOverlay = Boolean(
+    allowFileUpload &&
+    isFileDragActive &&
+    showComposer
+  );
   const shouldCollapseEmptyFixedSession = Boolean(
     collapseEmptyFixedSession &&
-    fixedSessionId &&
+    fixedSessionMode &&
     isEmptySession &&
+    !pendingMessage &&
+    !isProcessing &&
     !showComposer &&
     !showWelcomeHeader &&
     !showWelcomeShortcuts &&
@@ -3839,27 +4461,6 @@ export function Chat({
       </div>
     </div>
   ) : null;
-  const fixedMemberAvatar = String(fixedMemberMention?.avatar || '').trim();
-  const fixedMemberAvatarRenderable = /^(https?:|file:|data:|local-file:|redbox-asset:)/i.test(fixedMemberAvatar) || fixedMemberAvatar.startsWith('/');
-  const fixedMemberMentionChip = fixedMemberMention ? (
-    <div className="mb-2 flex justify-start">
-      <div className={clsx(
-        'inline-flex max-w-full items-center gap-2 rounded-full border px-2.5 py-1.5 text-[12px] font-medium shadow-sm',
-        darkEmbedded
-          ? 'border-white/10 bg-white/[0.04] text-white/72'
-          : 'border-border bg-surface-primary/86 text-text-secondary'
-      )}>
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border/70 bg-surface-secondary text-[11px] font-semibold">
-          {fixedMemberAvatarRenderable ? (
-            <img src={resolveAssetUrl(fixedMemberAvatar)} alt="" className="h-full w-full object-cover" />
-          ) : (
-            (fixedMemberAvatar || fixedMemberMention.name || '成').slice(0, 2)
-          )}
-        </span>
-        <span className="truncate">当前成员：{fixedMemberMention.name}</span>
-      </div>
-    </div>
-  ) : null;
 
   const renderComposer = (
     source: 'empty' | 'composer',
@@ -3878,7 +4479,6 @@ export function Chat({
         onDeny={handleDenyCliEscalation}
       />
       <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
-      {fixedMemberMentionChip}
       <ChatComposer
         ref={composerRef}
         theme={composerTheme}
@@ -3886,14 +4486,7 @@ export function Chat({
         className={options?.className}
         value={input}
         onValueChange={setInput}
-        onSubmit={() => sendMessage(
-          input,
-          pendingAttachments,
-          selectedMemberMention || fixedMemberMention,
-          selectedKnowledgeMentions,
-          selectedSkillMentions,
-          selectedAssetMentions,
-        )}
+        onSubmit={() => sendMessage(input, pendingAttachments, selectedMemberMention, selectedKnowledgeMentions, selectedSkillMentions, selectedAssetMentions)}
         placeholder={placeholder}
         attachment={pendingAttachment}
         attachments={pendingAttachments}
@@ -3905,21 +4498,8 @@ export function Chat({
         onRemoveAttachment={removePendingAttachment}
         modelOptions={chatModelOptions}
         selectedModelKey={selectedChatModelKey}
-        onSelectedModelKeyChange={handleSelectedChatModelKeyChange}
-        memberMentionOptions={fixedMemberMention ? [] : memberMentionOptions}
-        selectedMemberMention={fixedMemberMention ? null : selectedMemberMention}
-        onSelectedMemberMentionChange={fixedMemberMention ? undefined : setSelectedMemberMention}
-        knowledgeMentionOptions={knowledgeMentionOptions}
-        selectedKnowledgeMentions={selectedKnowledgeMentions}
-        onSelectedKnowledgeMentionsChange={setSelectedKnowledgeMentions}
-        skillMentionOptions={skillMentionOptions}
-        selectedSkillMentions={selectedSkillMentions}
-        onSelectedSkillMentionsChange={setSelectedSkillMentions}
-        assetMentionOptions={assetMentionOptions}
-        selectedAssetMentions={selectedAssetMentions}
-        onSelectedAssetMentionsChange={setSelectedAssetMentions}
+        onSelectedModelKeyChange={setSelectedChatModelKey}
         isBusy={isProcessing}
-        allowInputWhileBusy={keepComposerInputActive}
         audioState={isTranscribingAudio ? 'transcribing' : audioRecording.isRecording ? 'recording' : 'idle'}
         onAudioAction={handleAudioInput}
         onCancel={handleCancel}
@@ -3928,51 +4508,66 @@ export function Chat({
         onFocus={() => handleComposerFocus(source)}
         suppressed={composerSuppressed}
         onResumeFromSuppressed={() => resumeComposerFocus(source)}
+        memberMentionOptions={memberMentionOptions}
+        selectedMemberMention={selectedMemberMention}
+        onSelectedMemberMentionChange={setSelectedMemberMention}
+        skillMentionOptions={skillMentionOptions}
+        selectedSkillMentions={selectedSkillMentions}
+        onSelectedSkillMentionsChange={setSelectedSkillMentions}
+        assetMentionOptions={assetMentionOptions}
+        selectedAssetMentions={selectedAssetMentions}
+        onSelectedAssetMentionsChange={setSelectedAssetMentions}
+        knowledgeMentionOptions={knowledgeMentionOptions}
+        selectedKnowledgeMentions={selectedKnowledgeMentions}
+        onSelectedKnowledgeMentionsChange={setSelectedKnowledgeMentions}
+        onKnowledgeMentionSearchQueryChange={handleKnowledgeMentionSearchQueryChange}
       />
     </>
   );
 
   const welcomeHeaderBlock = showWelcomeHeader ? (
     <>
-      <div className="flex justify-center">
-        {welcomeIconSrc ? (
-          welcomeIconVariant === 'avatar' ? (
-            <div className={clsx(
-              'flex items-center justify-center overflow-hidden border shadow-lg',
-              darkEmbedded ? 'border-white/10 bg-white/5' : 'border-border bg-surface-primary',
-              'h-24 w-24 rounded-[28px]',
-            )}>
+      <div className="flex flex-col items-center gap-4">
+        <div className="flex justify-center">
+          {welcomeIconSrc ? (
+            welcomeIconVariant === 'avatar' ? (
+              <div className={clsx(
+                'flex items-center justify-center overflow-hidden border shadow-lg',
+                darkEmbedded ? 'border-white/10 bg-white/5' : 'border-border bg-surface-primary',
+                'h-24 w-24 rounded-[28px]',
+              )}>
+                <img
+                  src={welcomeIconSrc}
+                  alt={welcomeTitle}
+                  className="h-full w-full object-cover"
+                />
+              </div>
+            ) : (
               <img
                 src={welcomeIconSrc}
                 alt={welcomeTitle}
-                className="h-full w-full object-cover"
+                className="w-24 h-24 object-contain"
               />
+            )
+          ) : welcomeAvatarText ? (
+            <div className={clsx(
+              'flex h-24 w-24 items-center justify-center overflow-hidden rounded-[28px] border text-[34px] font-semibold shadow-lg',
+              darkEmbedded ? 'border-white/10 bg-white/5 text-white' : 'border-border bg-surface-primary text-text-primary',
+            )}>
+              {welcomeAvatarText}
             </div>
           ) : (
-            <img
-              src={welcomeIconSrc}
-              alt={welcomeTitle}
-              className="w-24 h-24 object-contain"
-            />
-          )
-        ) : welcomeAvatarText ? (
-          <div className={clsx(
-            'flex h-24 w-24 items-center justify-center overflow-hidden rounded-[28px] border text-[34px] font-semibold shadow-lg',
-            darkEmbedded ? 'border-white/10 bg-white/5 text-white' : 'border-border bg-surface-primary text-text-primary',
-          )}>
-            {welcomeAvatarText}
-          </div>
-        ) : (
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
-            <Sparkles className="w-8 h-8 text-white" />
-          </div>
-        )}
-      </div>
-      {welcomeIconAccessory ? (
-        <div className="flex justify-center">
-          {welcomeIconAccessory}
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
+              <Sparkles className="w-8 h-8 text-white" />
+            </div>
+          )}
         </div>
-      ) : null}
+        {welcomeIconAccessory ? (
+          <div className="flex justify-center">
+            {welcomeIconAccessory}
+          </div>
+        ) : null}
+      </div>
 
       <div className="space-y-2">
         <h1 className={clsx('text-2xl font-semibold', darkEmbedded ? 'text-white' : 'text-text-primary')}>{welcomeTitle}</h1>
@@ -4013,16 +4608,9 @@ export function Chat({
       return;
     }
     if (action.text) {
-      sendMessage(
-        action.text,
-        undefined,
-        selectedMemberMention || fixedMemberMention,
-        selectedKnowledgeMentions,
-        selectedSkillMentions,
-        selectedAssetMentions,
-      );
+      sendMessage(action.text);
     }
-  }, [fixedMemberMention, selectedAssetMentions, selectedKnowledgeMentions, selectedMemberMention, selectedSkillMentions, sendMessage]);
+  }, [sendMessage]);
 
   const welcomeActionsBlock = welcomeActions && welcomeActions.length > 0 ? (
     <div className="flex items-center justify-center gap-6">
@@ -4060,6 +4648,18 @@ export function Chat({
     placeholder || '问我任何问题，使用 @ 引用文件，/ 执行指令...',
     { showContextUsage: true, showCancelWhenBusy: false },
   );
+  const attachmentActionOverlay = showAttachmentActionOverlay && pendingAttachment && attachmentActionKindValue ? (
+    <ChatAttachmentActionOverlay
+      attachment={pendingAttachment}
+      attachmentCount={pendingAttachments.length}
+      actions={shortcuts}
+      darkEmbedded={darkEmbedded}
+      kind={attachmentActionKindValue}
+      disabled={isProcessing}
+      onAction={applyAttachmentAction}
+      onDismiss={dismissAttachmentActionOverlay}
+    />
+  ) : null;
 
   if (shouldCollapseEmptyFixedSession) {
     return null;
@@ -4068,89 +4668,14 @@ export function Chat({
   return (
     <div
       className={clsx('flex h-full min-w-0', wideContent && 'chat-layout-wide', narrowContent && 'chat-layout-narrow')}
-      onDragEnter={dragHandlers.onDragEnter}
-      onDragLeave={dragHandlers.onDragLeave}
-      onDragOver={dragHandlers.onDragOver}
-      onDrop={dragHandlers.onDrop}
+      {...dragHandlers}
     >
-      {/* Sidebar - Session List (可折叠) - Only show if not fixed session */}
-      {!fixedSessionId && (
-        <div className={clsx(
-          "bg-surface-secondary border-r border-border flex flex-col transition-all duration-300",
-          sidebarCollapsed ? "w-0 overflow-hidden" : "w-64"
-        )}>
-          <div className="p-4 border-b border-border flex items-center gap-2">
-            <button
-              onClick={createNewSession}
-              className="flex-1 flex items-center justify-center gap-2 bg-accent-primary text-white py-2 rounded-lg hover:bg-accent-primary/90 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              新对话
-            </button>
-            <button
-              onClick={() => setSidebarCollapsed(true)}
-              className="p-2 text-text-tertiary hover:text-text-primary hover:bg-surface-tertiary rounded-lg transition-colors"
-              title="收起侧边栏"
-            >
-              <PanelLeftClose className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-2 space-y-1">
-            {sessions.map(session => (
-              <div
-                key={session.id}
-                className={clsx(
-                  "group w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-2 cursor-pointer",
-                  currentSessionId === session.id
-                    ? "bg-surface-tertiary text-text-primary font-medium"
-                    : "text-text-secondary hover:bg-surface-tertiary/50"
-                )}
-                onClick={() => selectSession(session.id)}
-              >
-                <MessageSquare className="w-4 h-4 shrink-0 opacity-70" />
-                <span className="truncate flex-1">{session.title || 'Untitled Chat'}</span>
-                <button
-                  onClick={(e) => deleteSession(session.id, e)}
-                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded transition-all"
-                  title="删除对话"
-                >
-                  <X className="w-3 h-3 text-red-500" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Main Chat Area */}
       <div className="flex-1 min-w-0 flex flex-col h-full relative overflow-hidden">
-        {showChatDropOverlay && (
+        {showChatDropOverlay ? (
           <ChatDropOverlay darkEmbedded={darkEmbedded} />
-        )}
-
-        {/* Header - Sidebar Controls - Hide if fixed session */}
-        {!fixedSessionId && (
-          <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
-            <button
-              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              className="p-2 text-text-tertiary hover:text-text-primary transition-colors bg-surface-primary/80 backdrop-blur rounded-full shadow-sm border border-border"
-              title={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-            >
-              <PanelLeft className="w-4 h-4" />
-            </button>
-
-            {sidebarCollapsed && (
-              <button
-                onClick={createNewSession}
-                className="p-2 text-text-tertiary hover:text-text-primary transition-colors bg-surface-primary/80 backdrop-blur rounded-full shadow-sm border border-border"
-                title="新对话"
-              >
-                <Edit className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-        )}
-
+        ) : null}
+        {attachmentActionOverlay}
         {/* Linked Session Indicator */}
         {fixedSessionId && currentSessionId && fixedSessionBannerText && fixedSessionContextIndicatorMode === 'top' && (
           <div className="absolute top-0 left-0 right-0 z-10 flex flex-col items-center gap-1 pointer-events-none">
@@ -4178,175 +4703,215 @@ export function Chat({
           </div>
         )}
 
-        {attachmentActionOverlayVisible && pendingAttachment && (
-          <ChatAttachmentActionOverlay
-            attachment={pendingAttachment}
-            attachmentCount={Math.max(1, pendingAttachments.length)}
-            actions={attachmentActionOverlayActions}
-            darkEmbedded={darkEmbedded}
-            kind={attachmentActionKind}
-            disabled={isProcessing}
-            onAction={applyAttachmentAction}
-            onDismiss={dismissAttachmentActionOverlay}
-          />
-        )}
-
-        {/* Content Area */}
-        {isEmptySession && !dockedEmptyState ? (
-          <div className={clsx(
-            'flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto relative',
-            emptyStateVerticalAlign === 'lower' && 'pt-16'
-          )}>
-            <div className={clsx('text-center space-y-6 w-full max-w-2xl mx-auto', emptySessionWidthClass)}>
-              {/* Logo/Icon */}
-              {showWelcomeHeader ? (
-                <>
-                  {welcomeHeaderBlock}
-                </>
-              ) : null}
-              {showWelcomeShortcuts && welcomeShortcuts.length > 0 && (
-                <div className="flex flex-wrap justify-center gap-2 text-xs">
-                  {welcomeShortcuts.map((shortcut) => (
-                    <button
-                      key={shortcut.label}
-                      onClick={() => applyShortcut(shortcut)}
-                      className={darkEmbedded
-                        ? 'px-3 py-1.5 border border-white/10 rounded-full text-white/62 hover:text-white hover:border-white/20 transition-all cursor-pointer'
-                        : 'px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer'}
-                    >
-                      {shortcut.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* 居中的输入框 (Codex Style) */}
-              {showComposer ? renderComposer('empty', 'empty', placeholder || '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
-                className: 'mt-10',
-                showCancelWhenBusy: false,
-              }) : null}
-            </div>
-            {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
-            <div className="absolute bottom-10 left-0 right-0 flex justify-center pointer-events-none">
-              <div className="pointer-events-auto">
-                {welcomeActionsBlock}
-              </div>
-            </div>
-          </div>
-        ) : (
-          <>
-            {/* Messages */}
-            <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className={clsx('flex-1 min-w-0 overflow-y-auto py-4 md:py-5', contentOuterPaddingClass)}>
-              <div className={clsx('mx-auto min-w-0', contentMaxWidthClass, contentWidthClass, dockedEmptyState ? 'flex min-h-full flex-col justify-center' : 'space-y-4 md:space-y-5')}>
-                {dockedEmptyState ? (
-                  <div className="text-center space-y-6 py-10">
-                    {welcomeHeaderBlock}
-                    {welcomeActionsBlock}
-                    {welcomeShortcutsBlock}
-                  </div>
-                ) : (
-                  <>
-                    {messages.map((msg) => (
-                      <ErrorBoundary key={msg.id} name={`MessageItem-${msg.id}`}>
-                        <MessageItem
-                          msg={msg}
-                          copiedMessageId={copiedMessageId}
-                          onCopyMessage={handleCopyMessage}
-                          workflowPlacement={messageWorkflowPlacement}
-                          workflowVariant={messageWorkflowVariant}
-                          workflowEmphasis={messageWorkflowEmphasis}
-                          workflowDisplayMode={messageWorkflowDisplayMode}
-                          workflowAutoHideWhenComplete={messageWorkflowAutoHideWhenComplete}
-                          workflowFailureTone={messageWorkflowFailureTone}
-                          showAttachments={showMessageAttachments}
-                          linkRenderMode={messageLinkRenderMode}
-                          onPreviewLink={onMessageLinkPreview}
-                          activePreviewHref={activePreviewHref}
-                        />
-                      </ErrorBoundary>
-                    ))}
-                    {messageListHeader}
-                    <div ref={messagesEndRef} />
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Input Area - Bottom Fixed */}
-            {showComposer ? (
-            <div className={clsx('shrink-0', inputAreaShellClass, contentOuterPaddingClass)}>
-              <div className={clsx('mx-auto space-y-3.5', contentMaxWidthClass, contentWidthClass)}>
-                {dockedEmptyState ? (
-                  emptyComposerForm
-                ) : (
-                  <>
-                {errorNotice && (() => {
-                  const structuredNotice = typeof errorNotice === 'string' ? null : errorNotice;
-                  const noticeTitle = structuredNotice?.title || '请求失败';
-                  const noticeBody = structuredNotice
-                    ? structuredNotice.hint || structuredNotice.metaParts?.join(' · ') || ''
-                    : errorNotice;
-                  const reportContent = structuredNotice
-                    ? [structuredNotice.hint, structuredNotice.detail, structuredNotice.metaParts?.join(' · ')]
-                      .filter(Boolean)
-                      .join('\n\n') || noticeTitle
-                    : errorNotice;
-                  return (
-                    <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-3 text-sm text-red-700 shadow-sm dark:text-red-300">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="font-medium">{noticeTitle}</div>
-                          {noticeBody && (
-                            <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">
-                              {noticeBody}
-                            </div>
-                          )}
-                          {structuredNotice?.detail && (
-                            <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-5 text-red-800/85 dark:text-red-200/90">
-                              {structuredNotice.detail}
-                            </pre>
-                          )}
-                        </div>
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            {/* Content Area */}
+            {isEmptySession && !dockedEmptyState ? (
+              <div className={clsx(
+                'flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto relative',
+                emptyStateVerticalAlign === 'lower' && 'pt-16'
+              )}>
+                <div className={clsx('text-center space-y-6 w-full max-w-2xl mx-auto', emptySessionWidthClass)}>
+                  {/* Logo/Icon */}
+                  {showWelcomeHeader ? (
+                    <>
+                      {welcomeHeaderBlock}
+                    </>
+                  ) : null}
+                  {showWelcomeShortcuts && welcomeShortcuts.length > 0 && (
+                    <div className="flex flex-wrap justify-center gap-2 text-xs">
+                      {welcomeShortcuts.map((shortcut) => (
                         <button
-                          type="button"
-                          onClick={() => window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
-                            detail: {
-                              title: noticeTitle,
-                              content: reportContent,
-                              sourcePage: 'chat',
-                              sessionId: currentSessionIdRef.current || currentSessionId || undefined,
-                              operation: 'chat_request',
-                            },
-                          }))}
-                          className="inline-flex h-7 shrink-0 items-center rounded-md border border-red-500/25 bg-red-500/10 px-2 text-[11px] font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
+                          key={shortcut.label}
+                          onClick={() => applyShortcut(shortcut)}
+                          className={darkEmbedded
+                            ? 'px-3 py-1.5 border border-white/10 rounded-full text-white/62 hover:text-white hover:border-white/20 transition-all cursor-pointer'
+                            : 'px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer'}
                         >
-                          反馈
+                          {shortcut.label}
                         </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* 居中的输入框 (Codex Style) */}
+                  {showComposer ? (
+                    renderComposer('empty', 'empty', placeholder || '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
+                      className: 'mt-10',
+                      showCancelWhenBusy: false,
+                    })
+                  ) : null}
+                </div>
+                {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
+                <div className="absolute bottom-10 left-0 right-0 flex justify-center pointer-events-none">
+                  <div className="pointer-events-auto">
+                    {welcomeActionsBlock}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className={clsx('flex min-h-0 flex-1 overflow-hidden', hasInlineSidePanel && splitOuterPaddingClass)}>
+                  <div className={clsx(
+                    hasInlineSidePanel
+                      ? 'mx-auto grid min-h-0 w-full grid-cols-2 gap-4'
+                      : 'flex min-h-0 flex-1 overflow-hidden',
+                    hasInlineSidePanel && splitContentMaxWidthClass,
+                  )}>
+                    {/* Messages */}
+                    <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className={clsx(hasInlineSidePanel ? 'min-w-0' : 'flex-1', 'overflow-y-auto py-4 md:py-5', paneOuterPaddingClass)}>
+                      <div className={clsx('mx-auto min-w-0', messageContentMaxWidthClass, contentWidthClass, dockedEmptyState ? 'flex min-h-full flex-col justify-center' : 'space-y-4 md:space-y-5')}>
+                        {dockedEmptyState ? (
+                          <div className="text-center space-y-6 py-10">
+                            {welcomeHeaderBlock}
+                            {welcomeActionsBlock}
+                            {welcomeShortcutsBlock}
+                          </div>
+                        ) : (
+                          <>
+                            {messages.map((msg) => (
+                              <ErrorBoundary key={msg.id} name={`MessageItem-${msg.id}`}>
+                                <MessageItem
+                                  msg={msg}
+                                  copiedMessageId={copiedMessageId}
+                                  onCopyMessage={handleCopyMessage}
+                                  workflowPlacement={messageWorkflowPlacement}
+                                  workflowVariant={messageWorkflowVariant}
+                                  workflowEmphasis={messageWorkflowEmphasis}
+                                  workflowDisplayMode={messageWorkflowDisplayMode}
+                                  workflowAutoHideWhenComplete={messageWorkflowAutoHideWhenComplete}
+                                  workflowFailureTone={messageWorkflowFailureTone}
+                                  showAttachments={showMessageAttachments}
+                                  linkRenderMode={messageLinkRenderMode}
+                                  onPreviewLink={onMessageLinkPreview}
+                                  activePreviewHref={activePreviewHref}
+                                />
+                              </ErrorBoundary>
+                            ))}
+                            {messageListHeader}
+                            <div ref={messagesEndRef} />
+                          </>
+                        )}
                       </div>
                     </div>
-                  );
-                })()}
-                {showComposerShortcuts && shortcuts.length > 0 && (
-                  <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
-                    {shortcuts.map((shortcut) => (
-                      <button key={shortcut.label} onClick={() => applyShortcut(shortcut)} disabled={isProcessing} className={shortcutChipClass}>
-                        {shortcut.label}
-                      </button>
-                    ))}
+                    {inlineSidePanel ? (
+                      <div className="min-h-0 min-w-0 py-4 md:py-5">
+                        {inlineSidePanel}
+                      </div>
+                    ) : null}
                   </div>
-                )}
+                </div>
 
-                {renderComposer('composer', 'main', placeholder || '发送消息...', {
-                  showContextUsage: true,
-                  showCancelWhenBusy: true,
-                })}
-                  </>
-                )}
-              </div>
-            </div>
-            ) : null}
-          </>
-        )}
+                {/* Input Area - Bottom Fixed */}
+                {showComposer ? (
+                <div className={clsx('shrink-0', inputAreaShellClass, splitOuterPaddingClass)}>
+                  <div className={clsx('mx-auto space-y-3.5', composerMaxWidthClass, contentWidthClass)}>
+                    {dockedEmptyState ? (
+                      emptyComposerForm
+                    ) : (
+                      <>
+                    {errorNotice && (() => {
+                      const structuredNotice = typeof errorNotice === 'string' ? null : errorNotice;
+                      const noticeTitle = structuredNotice?.title || '请求失败';
+                      const noticeBody = String(structuredNotice
+                        ? structuredNotice.hint
+                          || ''
+                        : errorNotice);
+                      const reportContent = structuredNotice
+                        ? [structuredNotice.hint, structuredNotice.detail, structuredNotice.metaParts?.join(' · ')]
+                          .filter(Boolean)
+                          .join('\n\n') || noticeTitle
+                        : errorNotice;
+                      const noticeTone = structuredNotice?.tone || 'danger';
+                      const noticeClass = noticeTone === 'danger'
+                        ? 'border-red-500/25 bg-red-500/[0.07] text-red-700 dark:text-red-300'
+                        : noticeTone === 'warning'
+                          ? 'border-amber-500/25 bg-amber-500/[0.08] text-amber-800 dark:text-amber-200'
+                          : 'border-border/80 bg-surface-secondary/70 text-text-secondary';
+                      const detailClass = noticeTone === 'danger'
+                        ? 'text-red-700/75 dark:text-red-300/80'
+                        : noticeTone === 'warning'
+                          ? 'text-amber-800/75 dark:text-amber-200/80'
+                          : 'text-text-tertiary';
+                      const actionClass = noticeTone === 'danger'
+                        ? 'border-red-500/25 bg-red-500/10 text-red-700 hover:bg-red-500/15 dark:text-red-200'
+                        : noticeTone === 'warning'
+                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 hover:bg-amber-500/15 dark:text-amber-100'
+                          : 'border-border bg-surface-primary/80 text-text-secondary hover:border-accent-primary/30 hover:text-text-primary';
+                      const closeClass = noticeTone === 'danger'
+                        ? 'text-red-700/65 hover:bg-red-500/10 hover:text-red-800 dark:text-red-200/75 dark:hover:text-red-100'
+                        : noticeTone === 'warning'
+                          ? 'text-amber-800/65 hover:bg-amber-500/10 hover:text-amber-900 dark:text-amber-100/80 dark:hover:text-amber-50'
+                          : 'text-text-tertiary hover:bg-surface-primary hover:text-text-primary';
+                      return (
+                        <div className={clsx('flex min-h-9 items-center gap-2 overflow-hidden rounded-lg border px-2.5 py-1.5 text-[12px] shadow-sm', noticeClass)}>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium leading-5">{noticeTitle}</div>
+                            {noticeBody && (
+                              <div className={clsx('truncate text-[11px] leading-4', detailClass)}>
+                                {truncateErrorDetail(noticeBody, 110)}
+                              </div>
+                            )}
+                          </div>
+                          {structuredNotice?.action?.target === 'settings-login' && (
+                            <button
+                              type="button"
+                              onClick={handleOpenSettingsLogin}
+                              className={clsx('inline-flex h-7 shrink-0 items-center rounded-md border px-2 text-[11px] font-medium transition-colors', actionClass)}
+                            >
+                              {structuredNotice.action.label}
+                            </button>
+                          )}
+                          {structuredNotice?.tone === 'danger' && (
+                            <button
+                              type="button"
+                              onClick={() => window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
+                                detail: {
+                                  title: noticeTitle,
+                                  content: reportContent,
+                                  sourcePage: 'chat',
+                                  sessionId: currentSessionIdRef.current || currentSessionId || undefined,
+                                  operation: 'chat_request',
+                                },
+                              }))}
+                              className={clsx('inline-flex h-7 shrink-0 items-center rounded-md border px-2 text-[11px] font-medium transition-colors', actionClass)}
+                            >
+                              反馈
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setErrorNotice(null)}
+                            className={clsx('inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors', closeClass)}
+                            aria-label="关闭错误提示"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })()}
+                    {showInlineShortcutChips && (
+                      <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
+                        {shortcuts.map((shortcut) => (
+                          <button key={shortcut.label} type="button" onClick={() => applyShortcut(shortcut)} disabled={isProcessing} className={shortcutChipClass}>
+                            {shortcut.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {renderComposer('composer', 'main', placeholder || '发送消息...', {
+                      showContextUsage: true,
+                      showCancelWhenBusy: true,
+                    })}
+                      </>
+                    )}
+                  </div>
+                </div>
+                ) : null}
+              </>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

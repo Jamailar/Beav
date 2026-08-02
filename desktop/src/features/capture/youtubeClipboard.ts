@@ -1,5 +1,3 @@
-import { detectClipboardCaptureCandidate } from './clipboardDetector';
-
 export interface YouTubeClipboardCandidate {
   videoId: string;
   videoUrl: string;
@@ -55,11 +53,17 @@ export function parseYouTubeCandidateFromUrl(rawInput: string): YouTubeClipboard
 }
 
 export function extractYouTubeCandidateFromClipboard(text: string): YouTubeClipboardCandidate | null {
-  const candidate = detectClipboardCaptureCandidate(text, 'paste');
-  if (candidate?.kind !== 'youtube-video' || !candidate.externalId) return null;
-  return {
-    videoId: candidate.externalId,
-    videoUrl: candidate.canonicalUrl,
-    rawUrl: candidate.rawUrl,
-  };
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+
+  const direct = parseYouTubeCandidateFromUrl(raw);
+  if (direct) return direct;
+
+  const matches = raw.match(/https?:\/\/[^\s"'<>]+/gi) || [];
+  for (const item of matches) {
+    const candidate = parseYouTubeCandidateFromUrl(item);
+    if (candidate) return candidate;
+  }
+
+  return null;
 }

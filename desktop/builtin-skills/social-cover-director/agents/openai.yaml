@@ -1,0 +1,4 @@
+interface:
+  display_name: "Social Cover Director"
+  short_description: "Design platform-native social covers"
+  default_prompt: "Use $social-cover-director to plan and generate a platform-native social media cover from this topic, draft, or reference image."

@@ -1,20 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { buildAudioDataUrl } from '../features/audio-input/audioInput';
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
+import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
+import { useMediaJobsByIds } from '../features/media-jobs/useMediaJobsStore';
+import { isMediaJobTerminal, type MediaJobProjection } from '../features/media-jobs/types';
 import { uiDebug, uiMeasure } from '../utils/uiDebug';
 import {
     ArrowLeft,
     Box,
     Building2,
     CalendarClock,
+    Check,
+    ChevronDown,
     Clapperboard,
+    Download,
     FolderOpen,
     Grid2X2,
-    Image as ImageIcon,
     ImagePlus,
-    List as ListIcon,
+    List,
     Mic,
     Music2,
     Package,
@@ -23,14 +28,30 @@ import {
     RefreshCw,
     Save,
     Search,
+    SlidersHorizontal,
     Sparkles,
     Tag,
     Trash2,
     UserRound,
     X,
+    type LucideIcon,
 } from 'lucide-react';
 import { resolveAssetUrl } from '../utils/pathManager';
+import { SelectMenu } from '../components/ui/SelectMenu';
 import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel } from '@/components/ui/liquid-glass-menu';
+import {
+    filterAiModelsByCapability,
+    normalizeAiModelDescriptors,
+    parseAiSources,
+    type AiModelDescriptor,
+} from './settings/shared';
+import { type AiSourceConfig } from '../config/aiSources';
+import {
+    ECOMMERCE_PLATFORM_GROUPS,
+    ecommercePlatformIconPath,
+    normalizeEcommercePlatformsSettings,
+    type EcommercePlatformRecord,
+} from '../features/ecommerce-platforms/catalog';
 
 interface SubjectCategory {
     id: string;
@@ -44,6 +65,12 @@ interface SubjectAttribute {
     value: string;
 }
 
+interface SubjectSku {
+    id: string;
+    name: string;
+    attributes: SubjectAttribute[];
+}
+
 interface SubjectRecord {
     id: string;
     name: string;
@@ -55,6 +82,9 @@ interface SubjectRecord {
     voicePath?: string;
     videoPath?: string;
     voiceScript?: string;
+    voice?: Record<string, unknown>;
+    brandId?: string;
+    skus?: SubjectSku[];
     createdAt: string;
     updatedAt: string;
     absoluteImagePaths?: string[];
@@ -66,45 +96,175 @@ interface SubjectRecord {
     videoPreviewUrl?: string;
 }
 
-type MediaAssetSource = 'generated' | 'planned' | 'imported';
-
-interface MediaAsset {
+interface BrandWorkspaceBrand {
     id: string;
-    source?: MediaAssetSource | string;
-    projectId?: string;
+    name: string;
+    description?: string;
+    updatedAt: string;
+    createdAt: string;
+}
+
+interface BrandWorkspaceProduct {
+    id: string;
+    brandId: string;
+    name: string;
+    description?: string;
+    updatedAt: string;
+    createdAt: string;
+}
+
+interface BrandWorkspaceSku {
+    id: string;
+    productId: string;
+    name: string;
+    variantText?: string;
+}
+
+interface BrandWorkspaceAssetRef {
+    id: string;
+    ownerType: string;
+    ownerId: string;
+    path: string;
+    role: string;
+    createdAt: string;
+}
+
+interface BrandWorkspaceProductDetailPage {
+    id: string;
+    productId: string;
+    platform: string;
+    market: string;
+    locale: string;
     title?: string;
-    prompt?: string;
-    provider?: string;
-    model?: string;
-    aspectRatio?: string;
-    size?: string;
-    quality?: string;
-    mimeType?: string;
-    relativePath?: string;
-    boundManuscriptPath?: string;
-    absolutePath?: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+interface BrandWorkspaceProductBundle {
+    product: BrandWorkspaceProduct;
+    skus: BrandWorkspaceSku[];
+    assets: BrandWorkspaceAssetRef[];
+    skuAssets?: Record<string, BrandWorkspaceAssetRef[]>;
+    detailPages?: BrandWorkspaceProductDetailPage[];
+    detailPageAssets?: Record<string, BrandWorkspaceAssetRef[]>;
+}
+
+interface BrandWorkspaceBrandBundle {
+    brand: BrandWorkspaceBrand;
+    assets: BrandWorkspaceAssetRef[];
+    products: BrandWorkspaceProductBundle[];
+}
+
+interface BrandWorkspaceResult {
+    success?: boolean;
+    error?: string;
+    brands?: BrandWorkspaceBrandBundle[];
+    brand?: BrandWorkspaceBrandBundle;
+    product?: BrandWorkspaceProductBundle;
+}
+
+interface BrandWorkspaceBridge {
+    list: () => Promise<BrandWorkspaceResult>;
+    get: (payload: { id: string }) => Promise<BrandWorkspaceResult>;
+    upsertBrand: (payload: unknown) => Promise<BrandWorkspaceResult>;
+    upsertProduct: (payload: unknown) => Promise<BrandWorkspaceResult>;
+    upsertSku: (payload: unknown) => Promise<BrandWorkspaceResult>;
+    upsertProductDetailPage?: (payload: unknown) => Promise<BrandWorkspaceResult>;
+    rebuildAiIndex: () => Promise<BrandWorkspaceResult>;
+}
+
+interface BrandWorkspaceProductDraft {
+    id?: string;
+    brandId: string;
+    name: string;
+    description: string;
+    images: BrandWorkspaceImageDraft[];
+    skus: BrandWorkspaceSkuDraft[];
+}
+
+interface BrandWorkspaceBrandDraft {
+    id?: string;
+    name: string;
+    description: string;
+    images: BrandWorkspaceImageDraft[];
+}
+
+interface BrandWorkspaceSkuDraft {
+    id: string;
+    name: string;
+    variantText: string;
+    images: BrandWorkspaceImageDraft[];
+}
+
+interface BrandWorkspaceImageDraft {
+    id?: string;
+    name: string;
+    previewUrl: string;
+    path?: string;
+    dataUrl?: string;
+}
+
+interface ProductDetailContext {
+    brandId: string;
+    productId: string;
+}
+
+interface ProductDetailVersionDraft {
+    market: string;
+    locale: string;
+    title: string;
+}
+
+interface ProductDetailVersionOption extends ProductDetailVersionDraft {
+    key: string;
+    page?: BrandWorkspaceProductDetailPage;
+    builtIn: boolean;
+}
+
+interface ProductDetailPageImageSaveTarget {
+    id?: string;
+    productId: string;
+    platform: string;
+    version: ProductDetailVersionDraft;
+}
+
+interface ProductDetailGenerationTask {
+    key: string;
+    target: ProductDetailPageImageSaveTarget;
+    productName: string;
+    platformName: string;
+    versionLabel: string;
+}
+
+interface GeneratedImageAsset {
+    id: string;
+    title?: string;
     previewUrl?: string;
-    thumbnailUrl?: string;
-    thumbnail_url?: string;
-    createdAt?: string;
-    updatedAt?: string;
+    absolutePath?: string;
+    relativePath?: string;
     exists?: boolean;
 }
 
-interface MediaListResponse {
-    success?: boolean;
-    error?: string;
-    assets?: MediaAsset[];
-    total?: number;
-    nextCursor?: string | null;
-    hasMore?: boolean;
+interface ProductDetailGenerationJob {
+    jobId?: string;
+    status?: string;
+    projectId?: string;
+    request?: Record<string, unknown>;
+    artifacts?: Array<Record<string, unknown>>;
 }
 
-interface MediaAssetContextMenuState {
-    visible: boolean;
-    x: number;
-    y: number;
-    asset: MediaAsset | null;
+interface ProductDetailToolResultItem {
+    id?: string;
+    toolName?: string;
+    command?: string;
+    success?: boolean;
+    resultText?: string;
+    payload?: unknown;
+}
+
+interface ProductDetailFollowUpJob {
+    jobId: string;
+    expectedCount?: number;
 }
 
 interface SubjectImageDraft {
@@ -122,6 +282,8 @@ interface SubjectDraft {
     tagsText: string;
     attributes: SubjectAttribute[];
     images: SubjectImageDraft[];
+    brandId: string;
+    skus: SubjectSku[];
     voice?: {
         name: string;
         previewUrl: string;
@@ -138,20 +300,110 @@ interface SubjectDraft {
 }
 
 type CategoryDialogMode = 'create' | 'rename';
-type AssetLibraryTab = 'media' | 'assets';
 type SubjectViewMode = 'grid' | 'list';
+type AssetLibraryTab = 'assets' | 'media';
+type AssetModalPhase = 'opening' | 'open' | 'closing';
+type MediaAssetSource = 'generated' | 'planned' | 'imported';
+
+const ASSET_LIBRARY_MODAL_ANIMATION_MS = 220;
+type SubjectCategoryTab = {
+    id: string;
+    label: string;
+    icon: LucideIcon;
+    disabled?: boolean;
+};
+
+interface MediaAsset {
+    id: string;
+    source?: MediaAssetSource | string;
+    projectId?: string;
+    title?: string;
+    prompt?: string;
+    model?: string;
+    aspectRatio?: string;
+    size?: string;
+    quality?: string;
+    mimeType?: string;
+    relativePath?: string;
+    boundManuscriptPath?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    absolutePath?: string;
+    previewUrl?: string;
+    thumbnailUrl?: string;
+    thumbnail_url?: string;
+    exists?: boolean;
+}
+
+interface MediaAssetContextMenuState {
+    visible: boolean;
+    x: number;
+    y: number;
+    asset: MediaAsset | null;
+}
 
 const UNCATEGORIZED_FILTER = '__uncategorized__';
 const DEFAULT_SUBJECT_CATEGORY_NAMES = ['品牌', '角色', '物品', '商品', '场景'];
 const VISIBLE_SUBJECT_CATEGORY_NAMES = DEFAULT_SUBJECT_CATEGORY_NAMES.filter((name) => name !== '商品');
 const HIDDEN_SUBJECT_CATEGORY_NAMES = new Set(['商品', '人物']);
-const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。';
-const SUBJECT_VOICE_RECORDING_SECONDS = 6;
-
-const MEDIA_SOURCE_LABELS: Record<MediaAssetSource, string> = {
-    generated: '生成',
-    planned: '计划',
+const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。请用自然稳定的语速朗读这段文字，保持音量一致、停顿清晰，让系统更好地学习你的声音特点和语气节奏。';
+const SUBJECT_VOICE_MIN_RECORDING_SECONDS = 30;
+const SUBJECT_AUTOSAVE_DELAY_MS = 600;
+const PRODUCT_DETAIL_IMAGE_MIN_COUNT = 5;
+const PRODUCT_DETAIL_IMAGE_MAX_COUNT = 10;
+const PRODUCT_DETAIL_IMAGE_DEFAULT_COUNT = 6;
+const DEFAULT_VOICE_TTS_MODEL = 'cosyvoice-v3.5-plus';
+const DEFAULT_VOICE_CLONE_MODEL = 'cosyvoice-v3.5-plus-voice-clone';
+const MINIMAX_VOICE_CLONE_MODEL = 'minimax-voice-clone';
+const COSYVOICE_CLONE_MODEL = 'cosyvoice-v3.5-plus-voice-clone';
+const MEDIA_SOURCE_LABEL: Record<MediaAssetSource, string> = {
+    generated: '已生成',
+    planned: '计划项',
     imported: '导入',
+};
+
+type SubjectVoiceInfo = {
+    label: string;
+    detail?: string;
+    tone: 'muted' | 'active' | 'ready' | 'failed';
+    voiceId?: string;
+    targetTtsModel?: string;
+    cloneModel?: string;
+    jobId?: string;
+    error?: string;
+    canRetry: boolean;
+};
+
+type SubjectVoiceSlotInfo = {
+    voiceId: string;
+    targetTtsModel: string;
+    cloneModel?: string;
+    provider?: string;
+    status?: string;
+};
+
+type VoiceCloneModelOption = {
+    value: string;
+    label: string;
+    description?: string;
+};
+
+type VoiceRouteOverride = {
+    sourceId?: string;
+    baseURL?: string;
+    apiKey?: string;
+    presetId?: string;
+    protocol?: string;
+};
+
+const categoryIconForName = (name: string) => {
+    const normalized = name.trim();
+    if (normalized === '角色' || normalized === '人物') return UserRound;
+    if (normalized === '物品' || normalized === '资产') return Package;
+    if (normalized === '品牌') return Building2;
+    if (normalized === '商品') return Package;
+    if (normalized === '场景') return Box;
+    return Tag;
 };
 
 const readFileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
@@ -160,81 +412,6 @@ const readFileAsDataUrl = (file: File): Promise<string> => new Promise((resolve,
     reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
     reader.readAsDataURL(file);
 });
-
-function normalizeMediaAssetSource(source: unknown): MediaAssetSource {
-    const normalized = String(source || '').trim().toLowerCase();
-    if (normalized === 'generated' || normalized === 'planned' || normalized === 'imported') {
-        return normalized;
-    }
-    return 'imported';
-}
-
-function normalizeMediaAsset(asset: MediaAsset): MediaAsset {
-    const legacyAsset = asset as MediaAsset & {
-        project_id?: string;
-        mime_type?: string;
-        relative_path?: string;
-        bound_manuscript_path?: string;
-        absolute_path?: string;
-        preview_url?: string;
-        thumbnail_url?: string;
-        aspect_ratio?: string;
-    };
-    return {
-        ...asset,
-        source: normalizeMediaAssetSource(asset.source),
-        projectId: asset.projectId || legacyAsset.project_id,
-        mimeType: asset.mimeType || legacyAsset.mime_type,
-        relativePath: asset.relativePath || legacyAsset.relative_path,
-        boundManuscriptPath: asset.boundManuscriptPath || legacyAsset.bound_manuscript_path,
-        absolutePath: asset.absolutePath || legacyAsset.absolute_path,
-        previewUrl: asset.previewUrl || legacyAsset.preview_url,
-        thumbnailUrl: asset.thumbnailUrl || legacyAsset.thumbnail_url,
-        aspectRatio: asset.aspectRatio || legacyAsset.aspect_ratio,
-        exists: asset.exists !== false,
-    };
-}
-
-function mediaAssetSourceUrl(asset: MediaAsset): string {
-    return asset.previewUrl || asset.absolutePath || asset.relativePath || '';
-}
-
-function mediaAssetPreviewUrl(asset: MediaAsset): string {
-    return asset.previewUrl || asset.thumbnailUrl || asset.absolutePath || asset.relativePath || '';
-}
-
-function isVideoAsset(asset: MediaAsset): boolean {
-    const mimeType = String(asset.mimeType || '').toLowerCase();
-    if (mimeType.startsWith('video/')) return true;
-    return /\.(mp4|webm|mov|m4v)(?:[?#].*)?$/i.test(mediaAssetSourceUrl(asset));
-}
-
-function isAudioAsset(asset: MediaAsset): boolean {
-    const mimeType = String(asset.mimeType || '').toLowerCase();
-    if (mimeType.startsWith('audio/')) return true;
-    return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i.test(mediaAssetSourceUrl(asset));
-}
-
-function formatMediaAssetDate(value?: string): string {
-    if (!value) return '';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    return date.toLocaleString();
-}
-
-function categoryIconForName(name: string) {
-    const normalized = String(name || '').trim();
-    if (normalized === '角色' || normalized === '人物') return UserRound;
-    if (normalized === '品牌') return Building2;
-    if (normalized === '商品') return Package;
-    if (normalized === '场景') return Box;
-    return Tag;
-}
-
-function isRoleCategoryName(name: string): boolean {
-    const normalized = String(name || '').trim();
-    return normalized === '角色' || normalized === '人物';
-}
 
 const getAudioDurationSeconds = (src: string): Promise<number> => new Promise((resolve, reject) => {
     const audio = new Audio();
@@ -252,187 +429,10 @@ function createEmptyDraft(): SubjectDraft {
         tagsText: '',
         attributes: [],
         images: [],
+        brandId: '',
+        skus: [],
         voice: undefined,
-        video: undefined,
     };
-}
-
-function MediaAssetPreviewDialog({
-    asset,
-    onClose,
-    onOpenFile,
-    onShowInFolder,
-    onDelete,
-}: {
-    asset: MediaAsset;
-    onClose: () => void;
-    onOpenFile: (asset: MediaAsset) => void;
-    onShowInFolder: (asset: MediaAsset) => void;
-    onDelete: (asset: MediaAsset) => void;
-}) {
-    const source = normalizeMediaAssetSource(asset.source);
-    const sourceUrl = mediaAssetSourceUrl(asset);
-    const previewUrl = mediaAssetPreviewUrl(asset);
-    const resolvedSourceUrl = sourceUrl ? resolveAssetUrl(sourceUrl) : '';
-    const resolvedPreviewUrl = previewUrl ? resolveAssetUrl(previewUrl) : '';
-    const label = String(asset.title || asset.id || '未命名素材').trim();
-    const isVideo = isVideoAsset(asset);
-    const isAudio = isAudioAsset(asset);
-
-    return (
-        <div
-            className="fixed inset-0 z-[160] flex items-center justify-center bg-black/75 p-6"
-            onMouseDown={onClose}
-        >
-            <div
-                className="grid max-h-[86vh] w-full max-w-[1080px] grid-cols-[minmax(0,1fr)_280px] overflow-hidden rounded-2xl bg-white shadow-2xl max-[860px]:grid-cols-1"
-                onMouseDown={(event) => event.stopPropagation()}
-            >
-                <div className="flex min-h-[360px] items-center justify-center bg-black/[0.04] p-4">
-                    {asset.exists === false || (!resolvedSourceUrl && !resolvedPreviewUrl) ? (
-                        <div className="flex flex-col items-center gap-3 text-text-tertiary">
-                            {isAudio ? <Music2 className="h-10 w-10" /> : isVideo ? <Clapperboard className="h-10 w-10" /> : <ImageIcon className="h-10 w-10" />}
-                            <div className="max-w-[360px] truncate text-sm font-semibold">{label}</div>
-                            {asset.exists === false && <div className="text-xs">源文件缺失</div>}
-                        </div>
-                    ) : isAudio && resolvedSourceUrl ? (
-                        <div className="w-full max-w-[560px] rounded-xl bg-white p-5 shadow-sm">
-                            <div className="mb-4 flex items-center gap-3">
-                                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent-primary/10 text-accent-primary">
-                                    <Music2 className="h-6 w-6" />
-                                </div>
-                                <div className="min-w-0 truncate text-sm font-semibold text-text-primary">{label}</div>
-                            </div>
-                            <audio src={resolvedSourceUrl} className="w-full" controls autoPlay preload="metadata" />
-                        </div>
-                    ) : isVideo && resolvedSourceUrl ? (
-                        <video
-                            src={resolvedSourceUrl}
-                            className="block max-h-[78vh] max-w-full rounded-xl bg-black object-contain shadow-xl"
-                            controls
-                            autoPlay
-                            playsInline
-                            preload="metadata"
-                        />
-                    ) : (
-                        <img
-                            src={resolvedPreviewUrl}
-                            alt={label}
-                            className="block max-h-[78vh] max-w-full rounded-xl bg-white object-contain shadow-xl"
-                        />
-                    )}
-                </div>
-                <div className="flex min-h-0 flex-col border-l border-border bg-surface-primary max-[860px]:border-l-0 max-[860px]:border-t">
-                    <div className="flex items-start justify-between gap-3 border-b border-border p-4">
-                        <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-text-primary">{label}</div>
-                            <div className="mt-1 text-[11px] text-text-tertiary">{MEDIA_SOURCE_LABELS[source]}</div>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary"
-                            aria-label="关闭预览"
-                            title="关闭"
-                        >
-                            <X className="h-4 w-4" />
-                        </button>
-                    </div>
-                    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 text-[12px] text-text-secondary">
-                        {asset.prompt && (
-                            <div>
-                                <div className="mb-1 font-semibold text-text-primary">提示词</div>
-                                <div className="whitespace-pre-wrap leading-relaxed">{asset.prompt}</div>
-                            </div>
-                        )}
-                        <div className="space-y-2">
-                            {(asset.model || asset.provider || asset.mimeType) && (
-                                <div className="break-words">
-                                    <span className="font-semibold text-text-primary">来源 </span>
-                                    {asset.model || asset.provider || asset.mimeType}
-                                </div>
-                            )}
-                            {asset.createdAt && (
-                                <div>
-                                    <span className="font-semibold text-text-primary">创建 </span>
-                                    {formatMediaAssetDate(asset.createdAt)}
-                                </div>
-                            )}
-                            {(asset.relativePath || asset.absolutePath) && (
-                                <div className="break-all text-[11px] text-text-tertiary">
-                                    {asset.relativePath || asset.absolutePath}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                    <div className="grid gap-2 border-t border-border p-4">
-                        <button
-                            type="button"
-                            onClick={() => onOpenFile(asset)}
-                            className="inline-flex h-9 w-full items-center justify-center rounded-lg bg-[rgb(var(--color-text-primary))] px-3 text-sm font-semibold text-white transition hover:opacity-90"
-                        >
-                            打开文件
-                        </button>
-                        <div className="grid grid-cols-2 gap-2">
-                            <button
-                                type="button"
-                                onClick={() => onShowInFolder(asset)}
-                                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-border bg-surface-primary px-3 text-sm font-semibold text-text-secondary transition hover:bg-surface-secondary hover:text-text-primary"
-                            >
-                                <FolderOpen className="h-4 w-4" />
-                                文件夹
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => onDelete(asset)}
-                                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 text-sm font-semibold text-red-600 transition hover:bg-red-100"
-                            >
-                                <Trash2 className="h-4 w-4" />
-                                删除
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-function MediaMasonryThumb({ asset }: { asset: MediaAsset }) {
-    const sourceUrl = mediaAssetSourceUrl(asset);
-    const previewUrl = mediaAssetPreviewUrl(asset);
-    const resolvedSourceUrl = sourceUrl ? resolveAssetUrl(sourceUrl) : '';
-    const resolvedPreviewUrl = previewUrl ? resolveAssetUrl(previewUrl) : '';
-    const resolvedThumbnailUrl = asset.thumbnailUrl ? resolveAssetUrl(asset.thumbnailUrl) : '';
-    const fallback = (
-        <div className="flex aspect-square w-full items-center justify-center bg-surface-secondary/70 text-text-tertiary">
-            {isAudioAsset(asset) ? <Music2 className="h-7 w-7" /> : isVideoAsset(asset) ? <Clapperboard className="h-7 w-7" /> : <ImageIcon className="h-7 w-7" />}
-        </div>
-    );
-
-    if (asset.exists === false) return fallback;
-
-    if (isAudioAsset(asset)) {
-        return (
-            <div className="flex aspect-[4/3] w-full items-center justify-center bg-surface-secondary/70 text-accent-primary">
-                <Music2 className="h-7 w-7" />
-            </div>
-        );
-    }
-
-    if (isVideoAsset(asset)) {
-        if (resolvedThumbnailUrl) {
-            return <img src={resolvedThumbnailUrl} alt="" className="block h-auto w-full bg-surface-secondary" loading="lazy" />;
-        }
-        if (resolvedSourceUrl) {
-            return <video src={resolvedSourceUrl} className="block h-auto w-full bg-black" muted playsInline preload="metadata" />;
-        }
-        return fallback;
-    }
-
-    const imageUrl = resolvedPreviewUrl || resolvedSourceUrl;
-    if (!imageUrl) return fallback;
-    return <img src={imageUrl} alt="" className="block h-auto w-full bg-surface-secondary" loading="lazy" />;
 }
 
 function toDraft(subject?: SubjectRecord | null): SubjectDraft {
@@ -451,6 +451,16 @@ function toDraft(subject?: SubjectRecord | null): SubjectDraft {
             previewUrl,
             relativePath: subject.imagePaths[index],
         })),
+        brandId: subject.brandId || '',
+        skus: Array.isArray(subject.skus)
+            ? subject.skus.map((sku) => ({
+                id: sku.id || createDraftSkuId(),
+                name: sku.name || '',
+                attributes: Array.isArray(sku.attributes)
+                    ? sku.attributes.map((item) => ({ key: item.key || '', value: item.value || '' }))
+                    : [],
+            }))
+            : [],
         voice: subject.voicePreviewUrl ? {
             name: subject.voicePath?.split('/').pop() || 'voice-reference',
             previewUrl: subject.voicePreviewUrl,
@@ -465,10 +475,1247 @@ function toDraft(subject?: SubjectRecord | null): SubjectDraft {
     };
 }
 
+function subjectDraftVoicePayload(draft: SubjectDraft, categories: SubjectCategory[], initialVoicePresent: boolean): Record<string, unknown> | undefined {
+    const shouldSaveVoice = categories.find((item) => item.id === draft.categoryId)?.name.trim() === '角色';
+    if (shouldSaveVoice && draft.voice) {
+        return draft.voice.relativePath
+            ? {
+                relativePath: draft.voice.relativePath,
+                name: draft.voice.name,
+                scriptText: draft.voice.scriptText.trim() || undefined,
+            }
+            : {
+                dataUrl: draft.voice.dataUrl,
+                name: draft.voice.name,
+                scriptText: draft.voice.scriptText.trim() || undefined,
+            };
+    }
+    return initialVoicePresent ? {} : undefined;
+}
+
+function subjectDraftVideoPayload(draft: SubjectDraft, categories: SubjectCategory[], initialVideoPresent: boolean): Record<string, unknown> | undefined {
+    const shouldSaveVideo = categories.find((item) => item.id === draft.categoryId)?.name.trim() === '角色';
+    if (shouldSaveVideo && draft.video) {
+        return draft.video.relativePath
+            ? {
+                relativePath: draft.video.relativePath,
+                name: draft.video.name,
+            }
+            : {
+                dataUrl: draft.video.dataUrl,
+                name: draft.video.name,
+            };
+    }
+    return initialVideoPresent ? {} : undefined;
+}
+
+function subjectDraftPayload(
+    draft: SubjectDraft,
+    categories: SubjectCategory[],
+    voicePayload?: Record<string, unknown>,
+    videoPayload?: Record<string, unknown>,
+) {
+    const categoryName = categories.find((item) => item.id === draft.categoryId)?.name.trim() || '';
+    const isProduct = categoryName === '商品';
+    return {
+        id: draft.id,
+        name: draft.name.trim(),
+        categoryId: draft.categoryId || undefined,
+        description: draft.description.trim() || undefined,
+        tags: draft.tagsText.split(',').map((item) => item.trim()).filter(Boolean),
+        attributes: normalizeAttributes(draft.attributes),
+        images: draft.images.map((image) => image.relativePath
+            ? { relativePath: image.relativePath, name: image.name }
+            : { dataUrl: image.dataUrl, name: image.name }),
+        voice: voicePayload,
+        video: videoPayload,
+        brandId: isProduct && draft.brandId ? draft.brandId : undefined,
+        skus: isProduct ? normalizeSkus(draft.skus) : [],
+    };
+}
+
+function subjectDraftPayloadSnapshot(
+    draft: SubjectDraft,
+    categories: SubjectCategory[],
+    initialVoicePresent: boolean,
+    initialVideoPresent: boolean,
+): string {
+    return JSON.stringify(subjectDraftPayload(
+        draft,
+        categories,
+        subjectDraftVoicePayload(draft, categories, initialVoicePresent),
+        subjectDraftVideoPayload(draft, categories, initialVideoPresent),
+    ));
+}
+
 function normalizeAttributes(attributes: SubjectAttribute[]): SubjectAttribute[] {
     return attributes
         .map((item) => ({ key: String(item.key || '').trim(), value: String(item.value || '').trim() }))
         .filter((item) => item.key || item.value);
+}
+
+function createDraftSkuId(): string {
+    return `sku-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeSkus(skus: SubjectSku[]): SubjectSku[] {
+    return skus
+        .map((sku) => ({
+            id: sku.id || createDraftSkuId(),
+            name: String(sku.name || '').trim(),
+            attributes: normalizeAttributes(sku.attributes || []),
+        }))
+        .filter((sku) => sku.name);
+}
+
+function normalizeMediaSource(source: unknown): MediaAssetSource {
+    const normalized = String(source || '').trim().toLowerCase();
+    if (normalized === 'generated' || normalized === 'planned' || normalized === 'imported') return normalized;
+    return 'imported';
+}
+
+function normalizeMediaAsset(asset: MediaAsset): MediaAsset {
+    const legacyAsset = asset as MediaAsset & {
+        mime_type?: string;
+        relative_path?: string;
+        absolute_path?: string;
+        preview_url?: string;
+    };
+    return {
+        ...asset,
+        source: normalizeMediaSource(asset.source),
+        mimeType: asset.mimeType || legacyAsset.mime_type,
+        relativePath: asset.relativePath || legacyAsset.relative_path,
+        absolutePath: asset.absolutePath || legacyAsset.absolute_path,
+        previewUrl: asset.previewUrl || legacyAsset.preview_url,
+        thumbnailUrl: asset.thumbnailUrl || asset.thumbnail_url,
+        exists: asset.exists !== false,
+    };
+}
+
+function mediaAssetSourceUrl(asset: Pick<MediaAsset, 'previewUrl' | 'absolutePath' | 'relativePath'>): string {
+    return asset.previewUrl || asset.absolutePath || asset.relativePath || '';
+}
+
+function isVideoAsset(asset: Pick<MediaAsset, 'mimeType' | 'relativePath' | 'absolutePath' | 'previewUrl'>): boolean {
+    const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('audio/')) return false;
+    if (mimeType.startsWith('video/')) return true;
+    return /\.(mp4|webm|mov)(?:[?#].*)?$/i.test(mediaAssetSourceUrl(asset).trim());
+}
+
+function isAudioAsset(asset: Pick<MediaAsset, 'mimeType' | 'relativePath' | 'absolutePath' | 'previewUrl'>): boolean {
+    const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('audio/')) return true;
+    return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i.test(mediaAssetSourceUrl(asset).trim());
+}
+
+function mediaAssetKindLabel(asset: MediaAsset): string {
+    if (isAudioAsset(asset)) return '音频';
+    if (isVideoAsset(asset)) return '视频';
+    return asset.aspectRatio || asset.size || '图片';
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> {
+    if (!value) return {};
+    if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+    if (typeof value !== 'string' || !value.trim()) return {};
+    try {
+        const parsed = JSON.parse(value) as unknown;
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : {};
+    } catch {
+        return {};
+    }
+}
+
+function sourceModelDescriptors(source: AiSourceConfig): AiModelDescriptor[] {
+    return normalizeAiModelDescriptors([
+        ...(Array.isArray(source.modelsMeta) ? source.modelsMeta : []),
+        ...(Array.isArray(source.models) ? source.models : []),
+        source.model,
+    ]);
+}
+
+function sourceSupportsVoiceTtsModel(source: AiSourceConfig, modelId: string): boolean {
+    const target = modelId.trim();
+    if (!target) return false;
+    const descriptors = sourceModelDescriptors(source);
+    const ttsModels = filterAiModelsByCapability(descriptors, 'tts');
+    const audioModels = ttsModels.length > 0 ? ttsModels : filterAiModelsByCapability(descriptors, 'audio');
+    return audioModels.some((model) => model.id === target);
+}
+
+function sourceToVoiceRouteOverride(source: AiSourceConfig | undefined): VoiceRouteOverride {
+    if (!source) return {};
+    return {
+        sourceId: source.id || undefined,
+        baseURL: source.baseURL || undefined,
+        apiKey: source.apiKey || undefined,
+        presetId: source.presetId || undefined,
+        protocol: source.protocol || undefined,
+    };
+}
+
+function resolveVoiceTtsModelOverride(settings: Record<string, unknown>, modelId: string): VoiceRouteOverride {
+    const selectedModel = modelId.trim();
+    if (!selectedModel) return {};
+    const aiSources = parseAiSources(typeof settings.ai_sources_json === 'string' ? settings.ai_sources_json : undefined);
+    const candidates = aiSources.filter((source) => sourceSupportsVoiceTtsModel(source, selectedModel));
+    if (!candidates.length) return {};
+
+    const routes = parseJsonObject(settings.ai_model_routes_json);
+    const voiceRoute = parseJsonObject(routes.voiceTts);
+    const routeSourceId = String(voiceRoute.sourceId || voiceRoute.source_id || '').trim();
+    const routeModel = String(voiceRoute.model || voiceRoute.modelName || voiceRoute.model_name || '').trim();
+    const defaultSourceId = String(settings.default_ai_source_id || '').trim();
+    const source = (
+        routeSourceId && (!routeModel || routeModel === selectedModel)
+            ? candidates.find((item) => item.id === routeSourceId)
+            : undefined
+    )
+        || (defaultSourceId ? candidates.find((item) => item.id === defaultSourceId) : undefined)
+        || candidates[0];
+
+    return sourceToVoiceRouteOverride(source);
+}
+
+function buildVoiceCloneModelOptions(settings: Record<string, unknown>): { options: VoiceCloneModelOption[]; selectedModel: string } {
+    const routes = parseJsonObject(settings.ai_model_routes_json);
+    const voiceRoute = parseJsonObject(routes.voiceTts);
+    const selectedModel = String(
+        settings.voice_tts_model
+        || settings.tts_model
+        || voiceRoute.model
+        || DEFAULT_VOICE_TTS_MODEL
+    ).trim();
+    const aiSources = parseAiSources(typeof settings.ai_sources_json === 'string' ? settings.ai_sources_json : undefined);
+    const descriptors = aiSources.flatMap((source) => sourceModelDescriptors(source));
+    const ttsModels = filterAiModelsByCapability(descriptors, 'tts');
+    const audioModels = ttsModels.length > 0 ? ttsModels : filterAiModelsByCapability(descriptors, 'audio');
+    const seen = new Set<string>();
+    const options = audioModels
+        .map((model) => model.id.trim())
+        .filter((model) => model && !seen.has(model) && seen.add(model))
+        .map((model) => ({
+            value: model,
+            label: model,
+            description: `${cloneModelForTargetTtsModel(model)} · 克隆后音色绑定此模型`,
+        }));
+    if (selectedModel && !options.some((option) => option.value === selectedModel)) {
+        options.unshift({
+            value: selectedModel,
+            label: selectedModel,
+            description: `${cloneModelForTargetTtsModel(selectedModel, String(settings.voice_clone_model || DEFAULT_VOICE_CLONE_MODEL))} · 当前设置`,
+        });
+    }
+    if (!options.length) {
+        options.push({
+            value: DEFAULT_VOICE_TTS_MODEL,
+            label: DEFAULT_VOICE_TTS_MODEL,
+            description: `${COSYVOICE_CLONE_MODEL} · 默认`,
+        });
+    }
+    return { options, selectedModel: selectedModel || options[0]?.value || DEFAULT_VOICE_TTS_MODEL };
+}
+
+function AudioMediaThumb({ src, compact = false }: { src: string; compact?: boolean }) {
+    return (
+        <div className={clsx(
+            'flex h-full w-full flex-col items-center justify-center bg-surface-secondary/60 text-accent-primary',
+            compact ? 'gap-1.5 p-1.5' : 'gap-3 p-4',
+        )}>
+            <div className={clsx(
+                'flex items-center justify-center rounded-xl border border-accent-primary/20 bg-accent-primary/10',
+                compact ? 'h-9 w-9' : 'h-14 w-14',
+            )}>
+                <Music2 className={compact ? 'h-5 w-5' : 'h-7 w-7'} />
+            </div>
+            {!compact && src ? (
+                <audio
+                    src={resolveAssetUrl(src)}
+                    className="w-full"
+                    controls
+                    preload="metadata"
+                    onClick={(event) => event.stopPropagation()}
+                />
+            ) : null}
+        </div>
+    );
+}
+
+function VideoMediaThumb({
+    sourceUrl,
+    thumbnailUrl,
+    label,
+}: {
+    sourceUrl: string;
+    thumbnailUrl?: string;
+    label: string;
+}) {
+    const resolvedThumbnailUrl = thumbnailUrl ? resolveAssetUrl(thumbnailUrl) : '';
+    if (resolvedThumbnailUrl) {
+        return <img src={resolvedThumbnailUrl} alt={label} className="h-full w-full object-cover" />;
+    }
+    const resolvedSourceUrl = sourceUrl ? resolveAssetUrl(sourceUrl) : '';
+    if (resolvedSourceUrl) {
+        return <video src={resolvedSourceUrl} className="h-full w-full bg-black object-cover" muted playsInline preload="metadata" />;
+    }
+    return (
+        <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+            <Clapperboard className="h-6 w-6" />
+        </div>
+    );
+}
+
+function MediaAssetPreviewDialog({ asset, onClose }: { asset: MediaAsset; onClose: () => void }) {
+    const sourceUrl = mediaAssetSourceUrl(asset);
+    const resolvedSourceUrl = sourceUrl ? resolveAssetUrl(sourceUrl) : '';
+    const resolvedFallbackUrl = asset.thumbnailUrl ? resolveAssetUrl(asset.thumbnailUrl) : resolvedSourceUrl;
+    const label = asset.title || asset.id;
+
+    return (
+        <div
+            className="fixed inset-0 z-[160] flex items-center justify-center bg-black/75 p-8"
+            onMouseDown={onClose}
+        >
+            <div
+                className="relative flex max-h-[78vh] max-w-[82vw] items-center justify-center"
+                onMouseDown={(event) => event.stopPropagation()}
+            >
+                <button
+                    type="button"
+                    onClick={onClose}
+                    className="absolute right-3 top-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-black/80"
+                    aria-label="关闭预览"
+                >
+                    <X className="h-4 w-4" />
+                </button>
+                {asset.exists === false || (!resolvedSourceUrl && !resolvedFallbackUrl) ? (
+                    <div className="flex h-72 w-[min(520px,82vw)] flex-col items-center justify-center gap-3 rounded-xl bg-white text-text-tertiary shadow-2xl">
+                        <Clapperboard className="h-8 w-8" />
+                        <div className="max-w-[80%] truncate text-sm font-medium">{label}</div>
+                    </div>
+                ) : isAudioAsset(asset) && resolvedSourceUrl ? (
+                    <div className="flex w-[min(560px,82vw)] flex-col gap-4 rounded-xl bg-white p-5 shadow-2xl">
+                        <div className="flex items-center gap-3 pr-10">
+                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-primary/10 text-accent-primary">
+                                <Music2 className="h-6 w-6" />
+                            </div>
+                            <div className="min-w-0 truncate text-sm font-semibold text-text-primary">{label}</div>
+                        </div>
+                        <audio src={resolvedSourceUrl} className="w-full" controls autoPlay preload="metadata" />
+                    </div>
+                ) : isVideoAsset(asset) && resolvedSourceUrl ? (
+                    <video
+                        src={resolvedSourceUrl}
+                        className="block h-auto max-h-[78vh] w-auto max-w-[82vw] rounded-xl bg-black object-contain shadow-2xl"
+                        controls
+                        autoPlay
+                        playsInline
+                        preload="metadata"
+                    />
+                ) : (
+                    <img
+                        src={resolvedSourceUrl || resolvedFallbackUrl}
+                        alt={label}
+                        className="block h-auto max-h-[78vh] w-auto max-w-[82vw] rounded-xl bg-white object-contain shadow-2xl"
+                    />
+                )}
+            </div>
+        </div>
+    );
+}
+
+function subjectVoiceString(subject: SubjectRecord, keys: string[]): string {
+    const voice = subject.voice || {};
+    for (const key of keys) {
+        const value = voice[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+}
+
+function normalizedModelKey(value?: string): string {
+    return String(value || '').trim().toLowerCase();
+}
+
+function voiceValueString(voice: Record<string, unknown> | undefined, keys: string[]): string {
+    if (!voice) return '';
+    for (const key of keys) {
+        const value = voice[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+}
+
+function subjectVoiceMappingForModel(subject: SubjectRecord, targetTtsModel?: string): Record<string, unknown> | undefined {
+    const modelKey = normalizedModelKey(targetTtsModel);
+    if (!modelKey) return subject.voice;
+    const voiceMappings = subject.voice?.voiceMappings;
+    if (!voiceMappings || typeof voiceMappings !== 'object' || Array.isArray(voiceMappings)) {
+        return undefined;
+    }
+    const mapping = (voiceMappings as Record<string, unknown>)[modelKey];
+    return mapping && typeof mapping === 'object' && !Array.isArray(mapping)
+        ? mapping as Record<string, unknown>
+        : undefined;
+}
+
+function subjectVoiceMetadata(subject: SubjectRecord, targetTtsModel?: string): Record<string, unknown> | undefined {
+    const modelKey = normalizedModelKey(targetTtsModel);
+    if (!modelKey) return subject.voice;
+    const mappedVoice = subjectVoiceMappingForModel(subject, targetTtsModel);
+    if (mappedVoice) return mappedVoice;
+    const topLevelTarget = normalizedModelKey(voiceValueString(subject.voice, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model']));
+    return topLevelTarget === modelKey ? subject.voice : undefined;
+}
+
+function subjectVoiceSlots(subject: SubjectRecord): SubjectVoiceSlotInfo[] {
+    const slots = new Map<string, SubjectVoiceSlotInfo>();
+    const addSlot = (voice: Record<string, unknown> | undefined) => {
+        const voiceId = voiceValueString(voice, ['voiceId', 'voice_id']);
+        const targetTtsModel = voiceValueString(voice, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model', 'model']);
+        if (!voiceId || !targetTtsModel) return;
+        const key = normalizedModelKey(targetTtsModel);
+        if (!key) return;
+        slots.set(key, {
+            voiceId,
+            targetTtsModel,
+            cloneModel: voiceValueString(voice, ['cloneModel', 'clone_model']),
+            provider: voiceValueString(voice, ['provider']),
+            status: voiceValueString(voice, ['status']),
+        });
+    };
+
+    const voiceMappings = subject.voice?.voiceMappings;
+    if (voiceMappings && typeof voiceMappings === 'object' && !Array.isArray(voiceMappings)) {
+        Object.values(voiceMappings as Record<string, unknown>).forEach((mapping) => {
+            if (mapping && typeof mapping === 'object' && !Array.isArray(mapping)) {
+                addSlot(mapping as Record<string, unknown>);
+            }
+        });
+    }
+    addSlot(subject.voice);
+    return Array.from(slots.values()).sort((left, right) => left.targetTtsModel.localeCompare(right.targetTtsModel));
+}
+
+function shortVoiceId(value?: string): string {
+    if (!value) return '';
+    if (value.length <= 18) return value;
+    return `${value.slice(0, 10)}...${value.slice(-4)}`;
+}
+
+function displayModelName(value?: string): string {
+    return String(value || '').trim();
+}
+
+function cloneModelForTargetTtsModel(targetTtsModel: string, fallbackCloneModel = DEFAULT_VOICE_CLONE_MODEL): string {
+    const key = normalizedModelKey(targetTtsModel);
+    if (key.includes('cosyvoice')) return COSYVOICE_CLONE_MODEL;
+    if (key.startsWith('speech-') || key.startsWith('speech_') || key.includes('minimax')) return MINIMAX_VOICE_CLONE_MODEL;
+    return fallbackCloneModel || DEFAULT_VOICE_CLONE_MODEL;
+}
+
+function subjectVoiceInfo(subject: SubjectRecord, job?: MediaJobProjection | null, targetTtsModel?: string): SubjectVoiceInfo {
+    const voice = subjectVoiceMetadata(subject, targetTtsModel);
+    const voiceId = voiceValueString(voice, ['voiceId', 'voice_id']);
+    const voiceTargetTtsModel = voiceValueString(voice, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model']);
+    const cloneModel = voiceValueString(voice, ['cloneModel', 'clone_model', 'model']);
+    const jobId = subjectVoiceString(subject, ['jobId']);
+    const status = voiceValueString(voice, ['status']).toLowerCase();
+    const lastError = voiceValueString(voice, ['lastError', 'error']);
+    const hasSample = Boolean(subject.voicePreviewUrl || subject.voicePath);
+    const jobStatus = String(job?.status || '').toLowerCase();
+    const topLevelTarget = subjectVoiceString(subject, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model']);
+    const activeJobApplies = !targetTtsModel || normalizedModelKey(topLevelTarget) === normalizedModelKey(targetTtsModel);
+
+    if (activeJobApplies && jobStatus && !isMediaJobTerminal(jobStatus)) {
+        return {
+            label: jobStatus === 'queued' ? '声音复刻排队中' : '声音复刻中',
+            detail: jobId ? shortVoiceId(jobId) : undefined,
+            tone: 'active',
+            targetTtsModel: subjectVoiceString(subject, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model']) || targetTtsModel,
+            cloneModel: subjectVoiceString(subject, ['model', 'cloneModel', 'clone_model']),
+            jobId,
+            canRetry: false,
+        };
+    }
+
+    if (status === 'queued' || status === 'submitting') {
+        return {
+            label: '声音复刻排队中',
+            detail: jobId ? shortVoiceId(jobId) : undefined,
+            tone: 'active',
+            targetTtsModel: subjectVoiceString(subject, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model']) || targetTtsModel,
+            cloneModel: subjectVoiceString(subject, ['model', 'cloneModel', 'clone_model']),
+            jobId,
+            canRetry: false,
+        };
+    }
+
+    if (voiceId) {
+        return {
+            label: '已绑定声音',
+            detail: shortVoiceId(voiceId),
+            tone: 'ready',
+            voiceId,
+            targetTtsModel: voiceTargetTtsModel || targetTtsModel,
+            cloneModel,
+            jobId,
+            canRetry: hasSample,
+        };
+    }
+
+    if (status === 'failed' || jobStatus === 'failed' || jobStatus === 'dead_lettered') {
+        return {
+            label: '声音复刻失败',
+            detail: lastError || job?.attempt?.lastError || undefined,
+            tone: 'failed',
+            targetTtsModel: subjectVoiceString(subject, ['targetTtsModel', 'target_tts_model', 'ttsModel', 'tts_model']) || targetTtsModel,
+            cloneModel: subjectVoiceString(subject, ['model', 'cloneModel', 'clone_model']),
+            jobId,
+            error: lastError || job?.attempt?.lastError || undefined,
+            canRetry: hasSample,
+        };
+    }
+
+    if (hasSample) {
+        return {
+            label: '待复刻',
+            tone: 'muted',
+            targetTtsModel,
+            jobId,
+            canRetry: true,
+        };
+    }
+
+    return {
+        label: '无声音参考',
+        tone: 'muted',
+        canRetry: false,
+    };
+}
+
+function voiceInfoClassName(tone: SubjectVoiceInfo['tone']): string {
+    if (tone === 'ready') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    if (tone === 'active') return 'border-blue-200 bg-blue-50 text-blue-700';
+    if (tone === 'failed') return 'border-red-200 bg-red-50 text-red-700';
+    return 'border-border bg-surface-secondary/50 text-text-tertiary';
+}
+
+function VoiceSlotBadges({ slots, compact = false }: { slots: SubjectVoiceSlotInfo[]; compact?: boolean }) {
+    if (slots.length === 0) return null;
+    return (
+        <div className={clsx('flex flex-wrap', compact ? 'gap-1' : 'gap-1.5')}>
+            {slots.map((slot) => (
+                <span
+                    key={`${slot.targetTtsModel}-${slot.voiceId}`}
+                    className={clsx(
+                        'inline-flex max-w-full items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 text-emerald-700',
+                        compact ? 'px-1.5 py-0.5 text-[9px]' : 'px-2 py-1 text-[11px]',
+                    )}
+                    title={`${slot.targetTtsModel}: ${slot.voiceId}`}
+                >
+                    <span className="truncate font-mono">{displayModelName(slot.targetTtsModel)}</span>
+                    <span className="font-mono opacity-75">{shortVoiceId(slot.voiceId)}</span>
+                </span>
+            ))}
+        </div>
+    );
+}
+
+function formatAssetDate(value?: string): string {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleDateString();
+}
+
+function getBrandWorkspaceBridge(): BrandWorkspaceBridge | null {
+    return ((window.ipcRenderer as typeof window.ipcRenderer & { brandWorkspace?: BrandWorkspaceBridge }).brandWorkspace || null);
+}
+
+function createEmptyProductDraft(brandId = ''): BrandWorkspaceProductDraft {
+    return {
+        brandId,
+        name: '',
+        description: '',
+        images: [],
+        skus: [],
+    };
+}
+
+function assetRefsToImageDrafts(assets?: BrandWorkspaceAssetRef[]): BrandWorkspaceImageDraft[] {
+    return (assets || [])
+        .filter((asset) => asset.role === 'image')
+        .map((asset) => ({
+            id: asset.id,
+            name: asset.path.split(/[\\/]/).pop() || 'image',
+            path: asset.path,
+            previewUrl: asset.path,
+        }));
+}
+
+function imageDraftPayload(images: BrandWorkspaceImageDraft[]) {
+    return images.map((image) => ({
+        id: image.id,
+        path: image.path,
+        dataUrl: image.dataUrl,
+        name: image.name,
+        role: 'image',
+    }));
+}
+
+const ALL_ECOMMERCE_PLATFORMS = ECOMMERCE_PLATFORM_GROUPS.flatMap((group) => group.platforms);
+
+function enabledEcommercePlatformsFromSettings(settings: Record<string, unknown>): EcommercePlatformRecord[] {
+    const normalized = normalizeEcommercePlatformsSettings(settings.ecommerce_platforms_json);
+    return ALL_ECOMMERCE_PLATFORMS.filter((platform) => normalized.enabledById[platform.id] !== false);
+}
+
+function isMainlandChinaPlatform(platform?: Pick<EcommercePlatformRecord, 'market'> | null): boolean {
+    return platform?.market.trim() === '中国大陆';
+}
+
+function productDetailVersionForPlatform(
+    version: ProductDetailVersionDraft,
+    platform?: EcommercePlatformRecord | null,
+): ProductDetailVersionDraft {
+    return isMainlandChinaPlatform(platform)
+        ? { ...version, market: '', locale: '' }
+        : version;
+}
+
+function buildProductDetailVersionOptions(
+    platform: EcommercePlatformRecord | null,
+    pages: BrandWorkspaceProductDetailPage[],
+): ProductDetailVersionOption[] {
+    if (!platform || isMainlandChinaPlatform(platform)) {
+        const page = pages.find((item) => detailVersionKey(item.market, item.locale) === '__default__') || pages[0];
+        return [{
+            key: '__default__',
+            market: '',
+            locale: '',
+            title: page?.title || '',
+            page,
+            builtIn: true,
+        }];
+    }
+
+    const options = (platform.detailPageLocales || []).map((item) => {
+        const key = detailVersionKey(item.market, item.locale);
+        const page = pages.find((candidate) => detailVersionKey(candidate.market, candidate.locale) === key);
+        return {
+            key,
+            market: item.market,
+            locale: item.locale,
+            title: page?.title || '',
+            page,
+            builtIn: true,
+        };
+    });
+    const knownKeys = new Set(options.map((item) => item.key));
+    const legacyOptions = pages
+        .filter((page) => {
+            const key = detailVersionKey(page.market, page.locale);
+            return key !== '__default__' && !knownKeys.has(key);
+        })
+        .map((page) => ({
+            key: detailVersionKey(page.market, page.locale),
+            market: page.market,
+            locale: page.locale,
+            title: page.title || '',
+            page,
+            builtIn: false,
+        }));
+
+    return [...options, ...legacyOptions];
+}
+
+function detailVersionKey(market = '', locale = ''): string {
+    const cleanMarket = market.trim();
+    const cleanLocale = locale.trim();
+    return cleanMarket || cleanLocale ? `${cleanMarket}__${cleanLocale}` : '__default__';
+}
+
+function productDetailGenerationKey(productId: string, platformId: string, version: ProductDetailVersionDraft): string {
+    return [productId, platformId, detailVersionKey(version.market, version.locale)].join('__');
+}
+
+function detailVersionLabel(page?: Pick<ProductDetailVersionDraft, 'market' | 'locale'>): string {
+    if (!page) return '默认版本';
+    const parts = [page.market, page.locale].map((value) => value.trim()).filter(Boolean);
+    return parts.length ? parts.join('-') : '默认版本';
+}
+
+function generatedAssetToImageDraft(asset: Partial<GeneratedImageAsset> & Record<string, unknown>): BrandWorkspaceImageDraft | null {
+    const path = asset.absolutePath || asset.previewUrl || asset.relativePath || '';
+    if (!path.trim()) return null;
+    return {
+        name: asset.title || path.split(/[\\/]/).pop() || String(asset.id || 'image'),
+        previewUrl: asset.previewUrl || path,
+        path,
+    };
+}
+
+function optionalText(value: unknown): string {
+    return typeof value === 'string' ? value : '';
+}
+
+function sanitizeDownloadFileName(value: string, fallback: string): string {
+    const sanitized = value
+        .trim()
+        .replace(/[\\/:*?"<>|]+/g, '-')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    return sanitized || fallback;
+}
+
+function imageExtensionFromPath(value: string): string {
+    const cleanValue = value.split(/[?#]/)[0] || '';
+    const match = cleanValue.match(/\.([a-z0-9]+)$/i);
+    return match?.[1]?.toLowerCase() || 'png';
+}
+
+function generatedArtifactToImageDraft(artifact: Record<string, unknown>): BrandWorkspaceImageDraft | null {
+    const parsedMetadata = typeof artifact.metadata === 'string'
+        ? parseJsonRecord(artifact.metadata)
+        : null;
+    const metadata = artifact.metadata && typeof artifact.metadata === 'object'
+        ? artifact.metadata as Record<string, unknown>
+        : parsedMetadata || {};
+    const asset = {
+        id: String(metadata.id || artifact.artifactId || artifact.jobId || 'image'),
+        title: optionalText(metadata.title || artifact.title),
+        previewUrl: optionalText(metadata.previewUrl || artifact.previewUrl),
+        absolutePath: optionalText(metadata.absolutePath || artifact.absolutePath),
+        relativePath: optionalText(metadata.relativePath || artifact.relativePath),
+    };
+    return generatedAssetToImageDraft(asset);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function parseJsonRecord(value: unknown): Record<string, unknown> | null {
+    if (typeof value !== 'string' || !value.trim()) return null;
+    try {
+        return asRecord(JSON.parse(value));
+    } catch {
+        return null;
+    }
+}
+
+function generatedImagesFromToolResultValue(value: unknown): BrandWorkspaceImageDraft[] {
+    const record = asRecord(value);
+    if (!record) return [];
+    const nestedResult = asRecord(record.result);
+    const data = asRecord(record.data) || asRecord(nestedResult?.data);
+    const assets = Array.isArray(data?.assets) ? data.assets : [];
+    return assets
+        .map((asset) => asRecord(asset))
+        .filter((asset): asset is Record<string, unknown> => Boolean(asset))
+        .map(generatedAssetToImageDraft)
+        .filter((image): image is BrandWorkspaceImageDraft => Boolean(image));
+}
+
+function optionalNumber(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+}
+
+function collectProductDetailFollowUpJob(value: unknown, jobs: ProductDetailFollowUpJob[]): void {
+    const record = asRecord(value);
+    if (!record) return;
+    const jobId = optionalText(record.jobId);
+    const kind = optionalText(record.kind);
+    if (!jobId || (kind && kind !== 'image')) return;
+    jobs.push({
+        jobId,
+        expectedCount: optionalNumber(record.expectedCount),
+    });
+}
+
+function productDetailFollowUpJobsFromToolResultValue(value: unknown): ProductDetailFollowUpJob[] {
+    const record = asRecord(value);
+    if (!record) return [];
+    const nestedResult = asRecord(record.result);
+    const data = asRecord(record.data) || asRecord(nestedResult?.data);
+    const jobs: ProductDetailFollowUpJob[] = [];
+    collectProductDetailFollowUpJob(data?.followUp, jobs);
+    collectProductDetailFollowUpJob(data?.submitted, jobs);
+    collectProductDetailFollowUpJob(record.followUp, jobs);
+    collectProductDetailFollowUpJob(record.submitted, jobs);
+    return jobs;
+}
+
+function normalizeGenerationAgentScope(value: string): string {
+    const normalized = String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    return normalized || 'default';
+}
+
+function buildProductDetailGenerationAgentContextId(productId: string, platformId: string, version: ProductDetailVersionDraft): string {
+    const scope = normalizeGenerationAgentScope([
+        'brand-workspace',
+        'product-detail',
+        productId,
+        platformId,
+        detailVersionKey(version.market, version.locale),
+    ].join(':'));
+    return `generation-studio:agent:${scope}`;
+}
+
+function buildProductDetailGenerationAgentInitialContext(productBundle: BrandWorkspaceProductBundle): string {
+    return [
+        '你当前位于资产库的商品详情图生成页面。',
+        '这是后台自动执行的 Agent 任务，用户不会在执行过程中看到你的规划，也不会中途给你反馈或确认。',
+        `这里的任务是为当前商品生成一组电商详情页图片，不是单张长图。默认生成 ${PRODUCT_DETAIL_IMAGE_DEFAULT_COUNT} 张，合理范围是 ${PRODUCT_DETAIL_IMAGE_MIN_COUNT}-${PRODUCT_DETAIL_IMAGE_MAX_COUNT} 张。`,
+        '你要像图片导演一样工作：判断转化目标、规划套图顺序、锁定商品身份和统一视觉、写清每张图的文案位置与画面细节，然后直接调用图片生成工具。',
+        '与普通图片导演流程最大的区别：这里不能把方案发给用户确认，也不能等待用户建议或调整方向；所有规划、取舍、自检和执行都必须由你一次性完成。',
+        '不要要求用户二次确认；不要停在方案输出；只有缺少商品名称这类完全不可推断的硬性必填项时才停止并说明缺口。',
+        `当前项目ID: brand-workspace:${productBundle.product.id}`,
+        `当前商品: ${productBundle.product.name}`,
+    ].join('\n');
+}
+
+function buildProductDetailReferenceItems(productBundle: BrandWorkspaceProductBundle): Array<Record<string, string>> {
+    const items: Array<Record<string, string>> = [];
+    for (const asset of productBundle.assets || []) {
+        if (asset.role !== 'image') continue;
+        items.push({
+            type: 'product-image',
+            path: asset.path,
+            title: `${productBundle.product.name} 商品图`,
+        });
+    }
+    const skuAssets = productBundle.skuAssets || {};
+    for (const sku of productBundle.skus || []) {
+        const assets = skuAssets[sku.id] || [];
+        for (const asset of assets) {
+            if (asset.role !== 'image') continue;
+            items.push({
+                type: 'sku-image',
+                skuId: sku.id,
+                skuName: sku.name,
+                path: asset.path,
+                title: `${sku.name} SKU 图`,
+            });
+        }
+    }
+    return items;
+}
+
+function buildProductDetailGenerationAgentMessage(
+    prompt: string,
+    brand: BrandWorkspaceBrand,
+    productBundle: BrandWorkspaceProductBundle,
+    platform: EcommercePlatformRecord,
+    version: ProductDetailVersionDraft,
+): string {
+    const effectiveVersion = productDetailVersionForPlatform(version, platform);
+    const title = effectiveVersion.title.trim() || `${productBundle.product.name} ${platform.name} 详情页`;
+    const referenceItems = buildProductDetailReferenceItems(productBundle);
+    return [
+        prompt,
+        '[GenerationAgentContext]',
+        JSON.stringify({
+            executionMode: 'auto',
+            noSecondConfirmation: true,
+            backgroundExecution: true,
+            currentMode: 'image',
+            preferredRole: 'image-director',
+            source: 'brand-workspace-product-detail',
+            sourceTitle: `${brand.name} / ${productBundle.product.name}`,
+            autonomousDirectorPolicy: {
+                userCannotReviewPlan: true,
+                mustNotAskForConfirmation: true,
+                mustNotStopAfterPlanning: true,
+                mustPlanSilentlyThenGenerate: true,
+                mustSelfCritiqueBeforeToolCall: true,
+                normalImageDirectorDifference: '普通 image-director 需要先给用户看方案并等待确认；本任务是后台自动任务，必须内部完成同等质量的方案、自检和修正，然后直接生成。',
+            },
+            currentRequest: {
+                type: 'image',
+                prompt,
+                title,
+                projectId: `brand-workspace:${productBundle.product.id}`,
+                generationMode: 'text-to-image',
+                referenceItems,
+                referenceImages: referenceItems.map((item) => item.path),
+                count: PRODUCT_DETAIL_IMAGE_DEFAULT_COUNT,
+                aspectRatio: '3:4',
+                quality: 'high',
+                resolution: '2K',
+            },
+            productDetailBinding: {
+                productId: productBundle.product.id,
+                brandId: brand.id,
+                platformId: platform.id,
+                market: effectiveVersion.market.trim(),
+                locale: effectiveVersion.locale.trim(),
+            },
+            creativeWorkflow: [
+                '先在内部完成套图结构规划，再调用 image.generate；不要把规划输出给用户后等待确认。',
+                '规划时先判断这套图的商业目标：展示产品、建立信任、解释规格、增强场景想象、促进购买。',
+                '按目标决定顺序，不要随机排列，也不要把同一卖点重复成多张相似图。',
+                '锁定商品身份：优先依据 referenceImages / referenceItems 中的商品图和 SKU 图；没有图片时，依据商品名称、描述和 SKU 文本保持一致。',
+                '锁定统一视觉：同一商品外观、材质、比例、颜色系统、品牌气质、字体层级、按钮/标签样式要贯穿全套。',
+                `必须生成一组 ${PRODUCT_DETAIL_IMAGE_MIN_COUNT}-${PRODUCT_DETAIL_IMAGE_MAX_COUNT} 张图片，默认 ${PRODUCT_DETAIL_IMAGE_DEFAULT_COUNT} 张。`,
+                '每张图都是一个可独立查看的详情页模块，图与图之间保持同一品牌视觉、同一商品身份和统一排版语言。',
+                '不要生成单张超长图，不要做成海报封面，不要只做一张总览图。',
+                '建议结构：首屏主视觉、核心卖点、规格/参数、SKU/颜色容量、使用场景、材质/细节、服务保障/购买理由。',
+                '如果商品资料不足，用行业常识补全基础卖点，但不要编造具体认证、价格、促销、库存或无法确认的参数。',
+                '文案语言必须匹配目标市场/语言；中国大陆平台默认中文，不要展示国家/语言字段。',
+            ],
+            requiredInternalPlan: {
+                sequenceGoal: '按电商详情页转化逻辑组织：先吸引注意，再解释卖点，再建立信任，最后收束购买理由。',
+                sharedStyleGuideMustCover: [
+                    '商品外观和关键识别点',
+                    '品牌视觉和色彩系统',
+                    '文字层级与位置规则',
+                    '背景密度、光线和商品摆放方式',
+                    '全套重复出现的视觉元素',
+                ],
+                imagePlanItemSchema: {
+                    title: '内部资产标签，不能作为画面可见文字',
+                    visibleText: '消费者能看到的文案，只能放最终要渲染的标题、短句、标签或按钮',
+                    layout: '说明文字位置、商品位置、背景元素、构图重点',
+                    mustKeep: '说明必须保持一致的商品细节、颜色、材质、品牌识别点',
+                    negativePrompt: '禁止页码、卡片编号、规划标签、表格字段名、思考过程、虚构价格或促销信息',
+                },
+            },
+            selfCheckBeforeGenerate: [
+                `图片数量是否在 ${PRODUCT_DETAIL_IMAGE_MIN_COUNT}-${PRODUCT_DETAIL_IMAGE_MAX_COUNT} 张之间，且默认接近 ${PRODUCT_DETAIL_IMAGE_DEFAULT_COUNT} 张。`,
+                '是否每张图只承担一个明确详情页模块。',
+                '是否所有图片都绑定同一个商品，而不是泛化成同类商品。',
+                '是否所有可见文字都是消费者可读的最终文案，没有页码、规划标签或内部字段。',
+                '是否避免了无法确认的价格、促销、认证、库存、保修承诺。',
+                '是否已经给每张图写清楚商品位置、文字位置、画面重点和必须保持的细节。',
+            ],
+            toolRequirement: {
+                tool: 'image.generate',
+                callStrategy: 'prefer_single_call_with_count',
+                count: PRODUCT_DETAIL_IMAGE_DEFAULT_COUNT,
+                minCount: PRODUCT_DETAIL_IMAGE_MIN_COUNT,
+                maxCount: PRODUCT_DETAIL_IMAGE_MAX_COUNT,
+                aspectRatio: '3:4',
+                quality: 'high',
+                resolution: '2K',
+                requiredPayloadShape: {
+                    prompt: '整套详情页套图的总体 brief',
+                    count: PRODUCT_DETAIL_IMAGE_DEFAULT_COUNT,
+                    sequenceGoal: '套图顺序和转化逻辑',
+                    sharedStyleGuide: '全套统一视觉锚点',
+                    imagePlanItems: '每张图的 visibleText、layout、mustKeep、negativePrompt',
+                    referenceImages: '商品图和 SKU 图路径，如果 currentRequest.referenceImages 非空则必须传入',
+                },
+            },
+            executionExpectation: '请直接调用 image.generate 生成详情页套图。生成完成后不需要保存到资产库，宿主页面会从本次图片生成任务的 artifacts 或 tool result 中取回图片并保存到当前商品的当前平台版本。',
+        }, null, 2),
+        '[/GenerationAgentContext]',
+    ].join('\n\n');
+}
+
+async function listProductDetailGenerationJobs(sessionId: string): Promise<ProductDetailGenerationJob[]> {
+    try {
+        const result = await window.ipcRenderer.generation.listJobs({
+            kind: 'image',
+            ownerSessionId: sessionId,
+            includeArchived: true,
+            limit: 50,
+        });
+        return Array.isArray(result?.items) ? result.items as ProductDetailGenerationJob[] : [];
+    } catch (error) {
+        console.warn('Failed to list product detail generation jobs:', error);
+        return [];
+    }
+}
+
+async function listProductDetailToolResults(sessionId: string): Promise<ProductDetailToolResultItem[]> {
+    try {
+        const result = await window.ipcRenderer.runtime.getToolResults({ sessionId, limit: 120 });
+        return Array.isArray(result) ? result as ProductDetailToolResultItem[] : [];
+    } catch (error) {
+        console.warn('Failed to list product detail tool results:', error);
+        return [];
+    }
+}
+
+function productDetailJobMatchesProject(job: ProductDetailGenerationJob, projectId: string): boolean {
+    const request = job.request && typeof job.request === 'object' ? job.request : {};
+    return job.projectId === projectId || request.projectId === projectId;
+}
+
+function generatedImagesFromJobs(jobs: ProductDetailGenerationJob[], knownJobIds: Set<string>, projectId: string): BrandWorkspaceImageDraft[] {
+    const completedNewJobs = jobs
+        .filter((job) => job.jobId && !knownJobIds.has(job.jobId))
+        .filter((job) => job.status === 'completed');
+    const projectMatchedJobs = completedNewJobs.filter((job) => productDetailJobMatchesProject(job, projectId));
+    return (projectMatchedJobs.length > 0 ? projectMatchedJobs : completedNewJobs)
+        .flatMap((job) => job.artifacts || [])
+        .map(generatedArtifactToImageDraft)
+        .filter((image): image is BrandWorkspaceImageDraft => Boolean(image));
+}
+
+function generatedImagesFromToolResults(
+    toolResults: ProductDetailToolResultItem[],
+    knownToolResultIds: Set<string>,
+): BrandWorkspaceImageDraft[] {
+    const seenPaths = new Set<string>();
+    return toolResults
+        .filter((item) => !item.id || !knownToolResultIds.has(item.id))
+        .filter((item) => item.success !== false)
+        .flatMap((item) => [
+            ...generatedImagesFromToolResultValue(item.payload),
+            ...generatedImagesFromToolResultValue(parseJsonRecord(item.resultText)),
+        ])
+        .filter((image) => {
+            const key = image.path || image.previewUrl || image.name;
+            if (!key || seenPaths.has(key)) return false;
+            seenPaths.add(key);
+            return true;
+        });
+}
+
+function productDetailFollowUpJobsFromToolResults(
+    toolResults: ProductDetailToolResultItem[],
+    knownToolResultIds: Set<string>,
+): ProductDetailFollowUpJob[] {
+    const seenJobIds = new Set<string>();
+    return toolResults
+        .filter((item) => !item.id || !knownToolResultIds.has(item.id))
+        .filter((item) => item.success !== false)
+        .flatMap((item) => [
+            ...productDetailFollowUpJobsFromToolResultValue(item.payload),
+            ...productDetailFollowUpJobsFromToolResultValue(parseJsonRecord(item.resultText)),
+        ])
+        .filter((job) => {
+            if (!job.jobId || seenJobIds.has(job.jobId)) return false;
+            seenJobIds.add(job.jobId);
+            return true;
+        });
+}
+
+async function generatedImagesFromJobArtifacts(jobId: string): Promise<BrandWorkspaceImageDraft[]> {
+    try {
+        const result = await window.ipcRenderer.generation.getJobArtifacts(jobId);
+        const artifacts = Array.isArray(result?.items) ? result.items : [];
+        return artifacts
+            .map(generatedArtifactToImageDraft)
+            .filter((image): image is BrandWorkspaceImageDraft => Boolean(image));
+    } catch (error) {
+        console.warn('Failed to get product detail generation job artifacts:', error);
+        return [];
+    }
+}
+
+function generatedImagesFromJobRecord(value: unknown): BrandWorkspaceImageDraft[] {
+    const record = asRecord(value);
+    if (!record) return [];
+    const artifacts = Array.isArray(record.artifacts) ? record.artifacts : [];
+    const result = asRecord(record.result);
+    const resultAssets = Array.isArray(result?.assets) ? result.assets : [];
+    return [...artifacts, ...resultAssets]
+        .map((item) => asRecord(item))
+        .filter((item): item is Record<string, unknown> => Boolean(item))
+        .map(generatedArtifactToImageDraft)
+        .filter((image): image is BrandWorkspaceImageDraft => Boolean(image));
+}
+
+function dedupeGeneratedImageDrafts(images: BrandWorkspaceImageDraft[]): BrandWorkspaceImageDraft[] {
+    const seenPaths = new Set<string>();
+    return images.filter((image) => {
+        const key = image.path || image.previewUrl || image.name;
+        if (!key || seenPaths.has(key)) return false;
+        seenPaths.add(key);
+        return true;
+    });
+}
+
+async function waitForProductDetailFollowUpJob(
+    job: ProductDetailFollowUpJob,
+    timeoutMs: number,
+): Promise<BrandWorkspaceImageDraft[]> {
+    let awaitedJob: Record<string, unknown> | null = null;
+    try {
+        awaitedJob = asRecord(await window.ipcRenderer.generation.awaitJob({ jobId: job.jobId, timeoutMs }));
+    } catch (error) {
+        console.warn('Failed to await product detail generation job:', error);
+    }
+    const images = dedupeGeneratedImageDrafts([
+        ...generatedImagesFromJobRecord(awaitedJob),
+        ...(await generatedImagesFromJobArtifacts(job.jobId)),
+    ]);
+    if (job.expectedCount && images.length < job.expectedCount) {
+        const status = optionalText(awaitedJob?.status);
+        if (status && status !== 'completed') return [];
+    }
+    return images;
+}
+
+async function waitForGeneratedProductDetailImages(
+    sessionId: string,
+    knownJobIds: Set<string>,
+    knownToolResultIds: Set<string>,
+    projectId: string,
+): Promise<BrandWorkspaceImageDraft[]> {
+    const startedAt = Date.now();
+    const timeoutMs = 600_000;
+    const followUpJobs = new Map<string, ProductDetailFollowUpJob>();
+    let bestPartialImages: BrandWorkspaceImageDraft[] = [];
+    while (Date.now() - startedAt < timeoutMs) {
+        const jobs = await listProductDetailGenerationJobs(sessionId);
+        const images = generatedImagesFromJobs(jobs, knownJobIds, projectId);
+        if (images.length > 0) return images;
+        const toolResults = await listProductDetailToolResults(sessionId);
+        const toolResultImages = generatedImagesFromToolResults(toolResults, knownToolResultIds);
+        if (toolResultImages.length > 0) return toolResultImages;
+        for (const job of productDetailFollowUpJobsFromToolResults(toolResults, knownToolResultIds)) {
+            followUpJobs.set(job.jobId, job);
+        }
+        for (const followUpJob of followUpJobs.values()) {
+            const remainingMs = Math.max(1000, timeoutMs - (Date.now() - startedAt));
+            const followUpImages = await waitForProductDetailFollowUpJob(followUpJob, remainingMs);
+            if (followUpImages.length >= PRODUCT_DETAIL_IMAGE_MIN_COUNT) return followUpImages;
+            if (followUpImages.length > bestPartialImages.length) bestPartialImages = followUpImages;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+    return bestPartialImages.length >= PRODUCT_DETAIL_IMAGE_MIN_COUNT ? bestPartialImages : [];
+}
+
+function buildProductDetailGenerationPrompt(
+    brand: BrandWorkspaceBrand,
+    productBundle: BrandWorkspaceProductBundle,
+    platform: EcommercePlatformRecord,
+    version: ProductDetailVersionDraft,
+): string {
+    const skuText = productBundle.skus
+        .map((sku) => {
+            const variant = (sku.variantText || '').trim();
+            return variant ? `${sku.name}: ${variant}` : sku.name;
+        })
+        .filter(Boolean)
+        .join('；') || '未填写';
+    const effectiveVersion = productDetailVersionForPlatform(version, platform);
+    const marketText = isMainlandChinaPlatform(platform)
+        ? '中国大陆 / 汉语'
+        : ([effectiveVersion.market.trim(), effectiveVersion.locale.trim()].filter(Boolean).join(' / ') || '默认市场');
+    const referenceItems = buildProductDetailReferenceItems(productBundle);
+    const referenceText = referenceItems.length
+        ? referenceItems.map((item, index) => `${index + 1}. ${item.title}：${item.path}`).join('\n')
+        : '未提供商品图片；请严格依据商品名称、品牌描述、商品描述和 SKU 文本保持商品身份一致，不要虚构具体外观细节。';
+    return [
+        `为电商平台 ${platform.name} 生成一组商品详情页套图。`,
+        '这是后台自动任务，用户无法中途查看方案、确认方案或给你修改建议；你必须自己完成图片导演式规划、自检、修正并直接生成。',
+        `品牌：${brand.name}`,
+        `品牌描述：${brand.description || '未填写'}`,
+        `商品：${productBundle.product.name}`,
+        `商品描述：${productBundle.product.description || '未填写'}`,
+        `SKU：${skuText}`,
+        `目标市场/语言：${marketText}`,
+        `商品参考图：\n${referenceText}`,
+        `数量要求：生成 ${PRODUCT_DETAIL_IMAGE_MIN_COUNT}-${PRODUCT_DETAIL_IMAGE_MAX_COUNT} 张图片，默认 ${PRODUCT_DETAIL_IMAGE_DEFAULT_COUNT} 张；不要生成单张长图。`,
+        '套图结构：每张图承担一个明确模块，建议覆盖首屏主视觉、核心卖点、规格/参数、SKU/颜色容量、材质/细节、使用场景、服务保障/购买理由。',
+        '创作流程：先在内部规划整套图的信息顺序、统一视觉、每张图的可见文案、文字位置、商品位置、背景元素和禁止事项；自检通过后直接调用图片生成工具，不要停下来等待用户确认。',
+        '图片导演要求：先判断这套图服务的转化目标，再锁定商品身份，再锁定共享风格，最后把细节预算用于每张图的文字、布局、商品摆放、道具、背景和必须保持的识别点。',
+        '画面要求：清晰展示商品卖点、材质/规格、使用场景和购买理由；不要做成海报封面、社媒封面或单张总览图；排版平铺清晰，信息层级明确，留白克制，适合商品详情页连续浏览。',
+        '文案要求：使用目标市场适合的语言和表达方式；只写消费者可见的最终文案，不要把页码、卡片编号、规划标签、表格字段名或思考过程放进图里。',
+        '真实性要求：不要编造具体价格、促销、认证、库存、保修承诺或无法从商品资料推断的硬参数；资料不足时用更稳妥的通用卖点表达。',
+    ].join('\n');
+}
+
+async function imageFilesToDrafts(files: FileList | null): Promise<BrandWorkspaceImageDraft[]> {
+    const nextFiles = Array.from(files || []);
+    const invalid = nextFiles.find((file) => !file.type.startsWith('image/'));
+    if (invalid) {
+        throw new Error('仅支持图片文件');
+    }
+    return Promise.all(nextFiles.map(async (file) => {
+        const dataUrl = await readFileAsDataUrl(file);
+        return {
+            name: file.name,
+            previewUrl: dataUrl,
+            dataUrl,
+        };
+    }));
+}
+
+interface BrandWorkspaceImageGridProps {
+    images: BrandWorkspaceImageDraft[];
+    onAdd: (files: FileList | null) => void;
+    onRemove: (index: number) => void;
+    label: string;
+}
+
+function BrandWorkspaceImageGrid({ images, onAdd, onRemove, label }: BrandWorkspaceImageGridProps) {
+    return (
+        <div className="grid grid-cols-5 gap-2 sm:grid-cols-6">
+            {images.map((image, index) => (
+                <div key={`${image.path || image.name}-${index}`} className="group relative aspect-square overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
+                    <img src={resolveAssetUrl(image.previewUrl)} alt={image.name} className="h-full w-full object-cover" />
+                    <button
+                        type="button"
+                        onClick={() => onRemove(index)}
+                        className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                        aria-label="删除图片"
+                    >
+                        <X className="h-3 w-3" />
+                    </button>
+                </div>
+            ))}
+            <label className="flex aspect-square cursor-pointer items-center justify-center rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-[rgb(var(--color-text-tertiary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]" aria-label={label} title={label}>
+                <Plus className="h-5 w-5" />
+                <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                        onAdd(event.target.files);
+                        event.currentTarget.value = '';
+                    }}
+                />
+            </label>
+        </div>
+    );
+}
+
+function productBundleToDraft(bundle: BrandWorkspaceProductBundle): BrandWorkspaceProductDraft {
+    return {
+        id: bundle.product.id,
+        brandId: bundle.product.brandId,
+        name: bundle.product.name,
+        description: bundle.product.description || '',
+        images: assetRefsToImageDrafts(bundle.assets),
+        skus: bundle.skus.map((sku) => ({
+            id: sku.id,
+            name: sku.name,
+            variantText: sku.variantText || '',
+            images: assetRefsToImageDrafts(bundle.skuAssets?.[sku.id]),
+        })),
+    };
+}
+
+function createEmptyBrandDraft(brand?: BrandWorkspaceBrand, assets?: BrandWorkspaceAssetRef[]): BrandWorkspaceBrandDraft {
+    return {
+        id: brand?.id,
+        name: brand?.name || '',
+        description: brand?.description || '',
+        images: assetRefsToImageDrafts(assets),
+    };
 }
 
 interface SubjectsProps {
@@ -482,9 +1729,69 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const isModalVariant = variant === 'modal';
     const [categories, setCategories] = useState<SubjectCategory[]>([]);
     const [subjects, setSubjects] = useState<SubjectRecord[]>([]);
+    const [brandWorkspaceBrands, setBrandWorkspaceBrands] = useState<BrandWorkspaceBrandBundle[]>([]);
+    const [brandWorkspaceError, setBrandWorkspaceError] = useState('');
+    const [enabledEcommercePlatforms, setEnabledEcommercePlatforms] = useState<EcommercePlatformRecord[]>([]);
     const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
     const [mediaNextCursor, setMediaNextCursor] = useState<string | null>(null);
     const [isLoadingMoreMedia, setIsLoadingMoreMedia] = useState(false);
+    const [libraryTab, setLibraryTab] = useState<AssetLibraryTab>('media');
+    const [loading, setLoading] = useState(true);
+    const [working, setWorking] = useState(false);
+    const [error, setError] = useState('');
+    const [query, setQuery] = useState('');
+    const [categoryFilter, setCategoryFilter] = useState<string>('all');
+    const [viewMode, setViewMode] = useState<SubjectViewMode>('grid');
+    const [filterOpen, setFilterOpen] = useState(false);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isAssetModalVisible, setIsAssetModalVisible] = useState(false);
+    const [assetModalPhase, setAssetModalPhase] = useState<AssetModalPhase>('closing');
+    const [isDraftCategoryMenuOpen, setIsDraftCategoryMenuOpen] = useState(false);
+    const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
+    const [categoryDialogMode, setCategoryDialogMode] = useState<CategoryDialogMode>('create');
+    const [categoryDialogName, setCategoryDialogName] = useState('');
+    const [categoryDialogTargetId, setCategoryDialogTargetId] = useState<string | null>(null);
+    const [isCategoryDialogSubmitting, setIsCategoryDialogSubmitting] = useState(false);
+    const [draft, setDraft] = useState<SubjectDraft>(createEmptyDraft);
+    const [brandDraft, setBrandDraft] = useState<BrandWorkspaceBrandDraft>(() => createEmptyBrandDraft());
+    const [isBrandModalOpen, setIsBrandModalOpen] = useState(false);
+    const [isBrandModalSubmitting, setIsBrandModalSubmitting] = useState(false);
+    const [productDraft, setProductDraft] = useState<BrandWorkspaceProductDraft>(() => createEmptyProductDraft());
+    const [productDraftBrand, setProductDraftBrand] = useState<BrandWorkspaceBrand | null>(null);
+    const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+    const [isProductModalSubmitting, setIsProductModalSubmitting] = useState(false);
+    const [expandedBrandIds, setExpandedBrandIds] = useState<Set<string>>(() => new Set());
+    const [productDetailContext, setProductDetailContext] = useState<ProductDetailContext | null>(null);
+    const [selectedDetailPlatformId, setSelectedDetailPlatformId] = useState('');
+    const [selectedDetailVersionKey, setSelectedDetailVersionKey] = useState('__default__');
+    const [detailVersionDraft, setDetailVersionDraft] = useState<ProductDetailVersionDraft>({ market: '', locale: '', title: '' });
+    const [detailImageDrafts, setDetailImageDrafts] = useState<BrandWorkspaceImageDraft[]>([]);
+    const [isDetailPageSubmitting, setIsDetailPageSubmitting] = useState(false);
+    const [isDetailPageDownloading, setIsDetailPageDownloading] = useState(false);
+    const [generatingDetailPageTasks, setGeneratingDetailPageTasks] = useState<ProductDetailGenerationTask[]>([]);
+    const [initialVoicePresent, setInitialVoicePresent] = useState(false);
+    const [initialVideoPresent, setInitialVideoPresent] = useState(false);
+    const [recordingError, setRecordingError] = useState('');
+    const [recordingHint, setRecordingHint] = useState('');
+    const [voiceCloneModelOptions, setVoiceCloneModelOptions] = useState<VoiceCloneModelOption[]>([]);
+    const [selectedVoiceCloneTtsModel, setSelectedVoiceCloneTtsModel] = useState(DEFAULT_VOICE_TTS_MODEL);
+    const [voiceModelSettingsSnapshot, setVoiceModelSettingsSnapshot] = useState<Record<string, unknown>>({});
+    const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
+    const recordingIntervalRef = useRef<number | null>(null);
+    const hasLoadedSnapshotRef = useRef(false);
+    const hasEnsuredDefaultCategoriesRef = useRef(false);
+    const hasAppliedInitialCategoryRef = useRef(false);
+    const hasInitializedBrandExpansionRef = useRef(false);
+    const loadDataRequestRef = useRef(0);
+    const refreshedVoiceJobIdsRef = useRef(new Set<string>());
+    const autosaveTimerRef = useRef<number | null>(null);
+    const autosaveLastPayloadRef = useRef<string | null>(null);
+    const autosaveSavingRef = useRef(false);
+    const autosaveVersionRef = useRef(0);
+    const assetModalAnimationTimerRef = useRef<number | null>(null);
+    const assetModalAnimationFrameRef = useRef<number | null>(null);
+    const [retryingVoiceSubjectId, setRetryingVoiceSubjectId] = useState<string | null>(null);
+    const [generatingCardSubjectId, setGeneratingCardSubjectId] = useState<string | null>(null);
     const [previewImage, setPreviewImage] = useState<SubjectImageDraft | null>(null);
     const [previewMediaAsset, setPreviewMediaAsset] = useState<MediaAsset | null>(null);
     const [mediaContextMenu, setMediaContextMenu] = useState<MediaAssetContextMenuState>({
@@ -493,31 +1800,39 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         y: 0,
         asset: null,
     });
-    const [activeLibraryTab, setActiveLibraryTab] = useState<AssetLibraryTab>('media');
-    const [subjectViewMode, setSubjectViewMode] = useState<SubjectViewMode>('grid');
-    const [loading, setLoading] = useState(true);
-    const [working, setWorking] = useState(false);
-    const [generatingCardSubjectId, setGeneratingCardSubjectId] = useState<string | null>(null);
-    const [error, setError] = useState('');
-    const [query, setQuery] = useState('');
-    const [categoryFilter, setCategoryFilter] = useState<string>('all');
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
-    const [categoryDialogMode, setCategoryDialogMode] = useState<CategoryDialogMode>('create');
-    const [categoryDialogName, setCategoryDialogName] = useState('');
-    const [categoryDialogTargetId, setCategoryDialogTargetId] = useState<string | null>(null);
-    const [isCategoryDialogSubmitting, setIsCategoryDialogSubmitting] = useState(false);
-    const [draft, setDraft] = useState<SubjectDraft>(createEmptyDraft);
-    const [initialVoicePresent, setInitialVoicePresent] = useState(false);
-    const [initialVideoPresent, setInitialVideoPresent] = useState(false);
-    const [recordingError, setRecordingError] = useState('');
-    const [recordingHint, setRecordingHint] = useState('');
-    const [recordingCountdown, setRecordingCountdown] = useState(0);
-    const recordingIntervalRef = useRef<number | null>(null);
-    const recordingTimeoutRef = useRef<number | null>(null);
-    const hasLoadedSnapshotRef = useRef(false);
-    const loadDataRequestRef = useRef(0);
-    const deletedMediaAssetIdsRef = useRef<Set<string>>(new Set());
+    const clearAssetModalAnimationHandles = useCallback(() => {
+        if (assetModalAnimationTimerRef.current !== null) {
+            window.clearTimeout(assetModalAnimationTimerRef.current);
+            assetModalAnimationTimerRef.current = null;
+        }
+        if (assetModalAnimationFrameRef.current !== null) {
+            window.cancelAnimationFrame(assetModalAnimationFrameRef.current);
+            assetModalAnimationFrameRef.current = null;
+        }
+    }, []);
+
+    const openAssetModalSurface = useCallback(() => {
+        clearAssetModalAnimationHandles();
+        setIsModalOpen(true);
+        setIsAssetModalVisible(true);
+        setAssetModalPhase('opening');
+        assetModalAnimationFrameRef.current = window.requestAnimationFrame(() => {
+            assetModalAnimationFrameRef.current = window.requestAnimationFrame(() => {
+                setAssetModalPhase('open');
+                assetModalAnimationFrameRef.current = null;
+            });
+        });
+    }, [clearAssetModalAnimationHandles]);
+
+    const resetAssetModalDraft = useCallback(() => {
+        setPreviewImage(null);
+        setDraft(createEmptyDraft());
+        setInitialVoicePresent(false);
+        setInitialVideoPresent(false);
+        setError('');
+        setRecordingError('');
+        setRecordingHint('');
+    }, []);
 
     useEffect(() => {
         if (!import.meta.env.DEV) return;
@@ -556,11 +1871,16 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         }
         setError('');
         try {
-            const [categoriesResult, subjectsResult, mediaResult] = await uiMeasure('subjects', 'load_data', async () => (
+            const brandWorkspaceBridge = getBrandWorkspaceBridge();
+            const [categoriesResult, subjectsResult, brandWorkspaceResult, mediaResult, settingsResult] = await uiMeasure('subjects', 'load_data', async () => (
                 Promise.all([
                     window.ipcRenderer.subjects.categories.list(),
                     window.ipcRenderer.subjects.list({ limit: 500 }),
-                    window.ipcRenderer.media.list<MediaListResponse>({ limit: 80 }),
+                    brandWorkspaceBridge
+                        ? brandWorkspaceBridge.list()
+                        : Promise.resolve({ success: false, error: '品牌工作区不可用', brands: [] }),
+                    window.ipcRenderer.media.list({ limit: 500 }) as Promise<{ success?: boolean; error?: string; assets?: MediaAsset[]; nextCursor?: string | null }>,
+                    window.ipcRenderer.getSettings().catch(() => ({})),
                 ])
             ), { requestId });
             if (!categoriesResult?.success) {
@@ -570,17 +1890,43 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 throw new Error(subjectsResult?.error || '加载资产失败');
             }
             if (requestId !== loadDataRequestRef.current) return;
-            setCategories(Array.isArray(categoriesResult.categories) ? categoriesResult.categories : []);
+            const nextCategories = Array.isArray(categoriesResult.categories) ? categoriesResult.categories : [];
+            const settingsSnapshot = settingsResult as Record<string, unknown>;
+            const voiceModelSettings = buildVoiceCloneModelOptions(settingsSnapshot);
+            setCategories(nextCategories);
             setSubjects(Array.isArray(subjectsResult.subjects) ? subjectsResult.subjects : []);
+            setBrandWorkspaceBrands(Array.isArray(brandWorkspaceResult?.brands) ? brandWorkspaceResult.brands : []);
+            setBrandWorkspaceError(brandWorkspaceResult?.success === false ? (brandWorkspaceResult.error || '品牌工作区加载失败') : '');
+            setEnabledEcommercePlatforms(enabledEcommercePlatformsFromSettings(settingsSnapshot));
+            setVoiceModelSettingsSnapshot(settingsSnapshot);
+            setVoiceCloneModelOptions(voiceModelSettings.options);
+            setSelectedVoiceCloneTtsModel((current) => (
+                current && voiceModelSettings.options.some((option) => option.value === current)
+                    ? current
+                    : voiceModelSettings.selectedModel
+            ));
             setMediaAssets(
-                mediaResult?.success && Array.isArray(mediaResult.assets)
-                    ? mediaResult.assets
-                        .map(normalizeMediaAsset)
-                        .filter((asset) => !deletedMediaAssetIdsRef.current.has(asset.id))
+                Array.isArray(mediaResult?.assets)
+                    ? mediaResult.assets.map(normalizeMediaAsset).sort((a, b) => (
+                        new Date(b.createdAt || b.updatedAt || 0).getTime() - new Date(a.createdAt || a.updatedAt || 0).getTime()
+                    ))
                     : []
             );
-            setMediaNextCursor(mediaResult?.success && typeof mediaResult.nextCursor === 'string' ? mediaResult.nextCursor : null);
+            setMediaNextCursor(typeof mediaResult?.nextCursor === 'string' ? mediaResult.nextCursor : null);
             hasLoadedSnapshotRef.current = true;
+            if (!hasEnsuredDefaultCategoriesRef.current) {
+                const existingNames = new Set(nextCategories.map((item) => item.name.trim()));
+                const missingNames = DEFAULT_SUBJECT_CATEGORY_NAMES.filter((name) => !existingNames.has(name));
+                if (missingNames.length > 0) {
+                    hasEnsuredDefaultCategoriesRef.current = true;
+                    await Promise.all(missingNames.map((name) => window.ipcRenderer.subjects.categories.create({ name })));
+                    if (requestId === loadDataRequestRef.current) {
+                        void loadData();
+                    }
+                } else {
+                    hasEnsuredDefaultCategoriesRef.current = true;
+                }
+            }
         } catch (e) {
             if (requestId !== loadDataRequestRef.current) return;
             console.error('Failed to load subjects:', e);
@@ -588,6 +1934,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             if (!hasLoadedSnapshotRef.current) {
                 setCategories([]);
                 setSubjects([]);
+                setBrandWorkspaceBrands([]);
+                setEnabledEcommercePlatforms([]);
                 setMediaAssets([]);
             }
         } finally {
@@ -597,34 +1945,26 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         }
     }, []);
 
-    useEffect(() => {
-        if (!isActive) return;
-        void loadData();
-    }, [isActive, loadData]);
-
     const loadMoreMediaAssets = useCallback(async () => {
         if (!mediaNextCursor || isLoadingMoreMedia) return;
         setIsLoadingMoreMedia(true);
-        setError('');
         try {
-            const mediaResult = await window.ipcRenderer.media.list<MediaListResponse>({
-                limit: 80,
+            const mediaResult = await window.ipcRenderer.media.list({
+                limit: 500,
                 cursor: mediaNextCursor,
-            });
+            }) as { success?: boolean; error?: string; assets?: MediaAsset[]; nextCursor?: string | null };
             if (!mediaResult?.success) {
                 throw new Error(mediaResult?.error || '加载更多媒体失败');
             }
             const nextAssets = Array.isArray(mediaResult.assets)
-                ? mediaResult.assets
-                    .map(normalizeMediaAsset)
-                    .filter((asset) => !deletedMediaAssetIdsRef.current.has(asset.id))
+                ? mediaResult.assets.map(normalizeMediaAsset)
                 : [];
             setMediaAssets((current) => {
-                const byId = new Map(current.map((asset) => [asset.id, asset]));
-                for (const asset of nextAssets) {
-                    byId.set(asset.id, asset);
-                }
-                return Array.from(byId.values());
+                const seen = new Set(current.map((asset) => asset.id));
+                return [...current, ...nextAssets.filter((asset) => !seen.has(asset.id))]
+                    .sort((a, b) => (
+                        new Date(b.createdAt || b.updatedAt || 0).getTime() - new Date(a.createdAt || a.updatedAt || 0).getTime()
+                    ));
             });
             setMediaNextCursor(typeof mediaResult.nextCursor === 'string' ? mediaResult.nextCursor : null);
         } catch (loadError) {
@@ -636,152 +1976,249 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }, [isLoadingMoreMedia, mediaNextCursor]);
 
     useEffect(() => {
-        if (!previewMediaAsset) return;
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') {
-                setPreviewMediaAsset(null);
+        if (!isActive) return;
+        void loadData();
+    }, [isActive, loadData]);
+
+    useEffect(() => {
+        if (!productDetailContext) return;
+        if (enabledEcommercePlatforms.length === 0) {
+            setSelectedDetailPlatformId('');
+            return;
+        }
+        if (!selectedDetailPlatformId || !enabledEcommercePlatforms.some((platform) => platform.id === selectedDetailPlatformId)) {
+            setSelectedDetailPlatformId(enabledEcommercePlatforms[0].id);
+        }
+    }, [enabledEcommercePlatforms, productDetailContext, selectedDetailPlatformId]);
+
+    const voiceJobIds = useMemo(
+        () => Array.from(new Set(subjects
+            .map((subject) => subjectVoiceString(subject, ['jobId']))
+            .filter(Boolean))),
+        [subjects],
+    );
+    const voiceJobs = useMediaJobsByIds(voiceJobIds);
+    const voiceJobsById = useMemo(() => (
+        Object.fromEntries(voiceJobs.map((job) => [job.jobId, job])) as Record<string, MediaJobProjection>
+    ), [voiceJobs]);
+    const voiceJobBootstrapFilter = useMemo(() => ({ kind: 'voice_clone' as const, limit: 100 }), []);
+
+    useMediaJobSubscription(voiceJobIds, {
+        enabled: isActive,
+        bootstrapFilter: voiceJobBootstrapFilter,
+    });
+
+    useEffect(() => {
+        if (!isActive) return;
+        for (const job of voiceJobs) {
+            const jobId = job.jobId;
+            if (!job || !isMediaJobTerminal(job.status) || refreshedVoiceJobIdsRef.current.has(jobId)) {
+                continue;
             }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [previewMediaAsset]);
+            refreshedVoiceJobIdsRef.current.add(jobId);
+            void loadData();
+            break;
+        }
+    }, [isActive, loadData, voiceJobs]);
 
     const categoryNameMap = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
-    const draftCategoryName = categoryNameMap.get(draft.categoryId || '') || '';
-    const draftEntityLabel = draftCategoryName.trim() || '资产';
-    const isRoleDraft = isRoleCategoryName(draftCategoryName);
-    const isRoleSubject = useCallback((subject: SubjectRecord) => (
-        isRoleCategoryName(categoryNameMap.get(subject.categoryId || '') || '')
+    useEffect(() => {
+        if (hasAppliedInitialCategoryRef.current) return;
+        const brandCategory = categories.find((item) => item.name.trim() === '品牌');
+        if (!brandCategory) return;
+        hasAppliedInitialCategoryRef.current = true;
+        setCategoryFilter(brandCategory.id);
+    }, [categories]);
+    const subjectCategoryName = useCallback((subject: SubjectRecord) => (
+        categoryNameMap.get(subject.categoryId || '')?.trim() || ''
     ), [categoryNameMap]);
-    const draftAttributeValue = (key: string) => draft.attributes.find((item) => item.key === key)?.value || '';
-    const visibleDraftAttributes = draft.attributes
-        .map((attribute, index) => ({ attribute, index }))
-        .filter(({ attribute }) => !isRoleDraft || (attribute.key !== '性别' && attribute.key !== '年龄'));
-    const draftCategoryOptions = useMemo(() => categories.filter((category) => {
-        const name = category.name.trim();
-        return !['品牌', '商品'].includes(name) || category.id === draft.categoryId;
-    }), [categories, draft.categoryId]);
-
+    const subjectNameMap = useMemo(() => new Map(subjects.map((subject) => [subject.id, subject.name])), [subjects]);
+    const productCountByBrandId = useMemo(() => {
+        const counts = new Map<string, number>();
+        for (const bundle of brandWorkspaceBrands) {
+            counts.set(bundle.brand.id, bundle.products.length);
+        }
+        return counts;
+    }, [brandWorkspaceBrands]);
+    const activeDetailBrandBundle = useMemo(() => (
+        productDetailContext
+            ? brandWorkspaceBrands.find((bundle) => bundle.brand.id === productDetailContext.brandId) || null
+            : null
+    ), [brandWorkspaceBrands, productDetailContext]);
+    const activeDetailProductBundle = useMemo(() => (
+        productDetailContext && activeDetailBrandBundle
+            ? activeDetailBrandBundle.products.find((bundle) => bundle.product.id === productDetailContext.productId) || null
+            : null
+    ), [activeDetailBrandBundle, productDetailContext]);
+    const activeDetailPlatform = useMemo(() => (
+        enabledEcommercePlatforms.find((platform) => platform.id === selectedDetailPlatformId) || enabledEcommercePlatforms[0] || null
+    ), [enabledEcommercePlatforms, selectedDetailPlatformId]);
+    const activeDetailPages = useMemo(() => (
+        activeDetailProductBundle && activeDetailPlatform
+            ? (activeDetailProductBundle.detailPages || []).filter((page) => page.platform === activeDetailPlatform.id)
+            : []
+    ), [activeDetailPlatform, activeDetailProductBundle]);
+    const detailVersionOptions = useMemo(() => (
+        buildProductDetailVersionOptions(activeDetailPlatform, activeDetailPages)
+    ), [activeDetailPages, activeDetailPlatform]);
+    const activeDetailVersionOption = useMemo(() => (
+        detailVersionOptions.find((option) => option.key === selectedDetailVersionKey)
+            || detailVersionOptions[0]
+            || null
+    ), [detailVersionOptions, selectedDetailVersionKey]);
+    const activeDetailPage = activeDetailVersionOption?.page || null;
+    const activeDetailGenerationKey = activeDetailProductBundle && activeDetailPlatform
+        ? productDetailGenerationKey(activeDetailProductBundle.product.id, activeDetailPlatform.id, detailVersionDraft)
+        : '';
+    const generatingDetailPageKeySet = useMemo(
+        () => new Set(generatingDetailPageTasks.map((task) => task.key)),
+        [generatingDetailPageTasks],
+    );
+    const isActiveDetailPageGenerating = Boolean(activeDetailGenerationKey && generatingDetailPageKeySet.has(activeDetailGenerationKey));
+    const activeDetailSelectionRef = useRef('');
+    useEffect(() => {
+        activeDetailSelectionRef.current = activeDetailGenerationKey;
+    }, [activeDetailGenerationKey]);
+    const productDetailThumbnailsByProductId = useMemo(() => {
+        const result = new Map<string, BrandWorkspaceAssetRef[]>();
+        for (const brandBundle of brandWorkspaceBrands) {
+            for (const productBundle of brandBundle.products) {
+                const assets = (productBundle.detailPages || []).flatMap((page) => (
+                    productBundle.detailPageAssets?.[page.id] || []
+                ));
+                if (assets.length) {
+                    result.set(productBundle.product.id, assets.slice(0, 5));
+                }
+            }
+        }
+        return result;
+    }, [brandWorkspaceBrands]);
+    useEffect(() => {
+        if (!productDetailContext) return;
+        if (activeDetailVersionOption) {
+            if (selectedDetailVersionKey !== activeDetailVersionOption.key) {
+                setSelectedDetailVersionKey(activeDetailVersionOption.key);
+            }
+            setDetailVersionDraft({
+                market: activeDetailVersionOption.market,
+                locale: activeDetailVersionOption.locale,
+                title: activeDetailVersionOption.title || '',
+            });
+            setDetailImageDrafts(assetRefsToImageDrafts(activeDetailVersionOption.page ? activeDetailProductBundle?.detailPageAssets?.[activeDetailVersionOption.page.id] : undefined));
+            return;
+        }
+        setSelectedDetailVersionKey('__default__');
+        setDetailVersionDraft({ market: '', locale: '', title: '' });
+        setDetailImageDrafts([]);
+    }, [activeDetailProductBundle, activeDetailVersionOption, productDetailContext, selectedDetailVersionKey]);
+    const activeDraftSubject = useMemo(
+        () => draft.id ? subjects.find((subject) => subject.id === draft.id) || null : null,
+        [draft.id, subjects],
+    );
+    const activeDraftVoiceInfo = useMemo(
+        () => {
+            if (!activeDraftSubject) return null;
+            if (retryingVoiceSubjectId === activeDraftSubject.id) {
+                const targetTtsModel = selectedVoiceCloneTtsModel || DEFAULT_VOICE_TTS_MODEL;
+                return {
+                    label: '声音复刻提交中',
+                    tone: 'active',
+                    targetTtsModel,
+                    cloneModel: cloneModelForTargetTtsModel(targetTtsModel),
+                    canRetry: false,
+                } satisfies SubjectVoiceInfo;
+            }
+            return subjectVoiceInfo(
+                activeDraftSubject,
+                voiceJobsById[subjectVoiceString(activeDraftSubject, ['jobId'])],
+                selectedVoiceCloneTtsModel,
+            );
+        },
+        [activeDraftSubject, retryingVoiceSubjectId, selectedVoiceCloneTtsModel, voiceJobsById],
+    );
+    const activeDraftVoiceSlots = useMemo(
+        () => activeDraftSubject ? subjectVoiceSlots(activeDraftSubject) : [],
+        [activeDraftSubject],
+    );
     const filteredSubjects = useMemo(() => {
         const keyword = query.trim().toLowerCase();
         return subjects.filter((subject) => {
+            if (['品牌', '商品'].includes(subjectCategoryName(subject))) return false;
             if (categoryFilter === UNCATEGORIZED_FILTER && subject.categoryId) return false;
-            if (categoryFilter !== 'all' && categoryFilter !== UNCATEGORIZED_FILTER && subject.categoryId !== categoryFilter) return false;
+            if (categoryFilter !== UNCATEGORIZED_FILTER && subject.categoryId !== categoryFilter) return false;
             if (!keyword) return true;
             const haystack = [
                 subject.name,
                 subject.description || '',
                 subject.tags.join(' '),
                 subject.attributes.map((item) => `${item.key} ${item.value}`).join(' '),
+                subject.brandId ? subjectNameMap.get(subject.brandId) || '' : '',
+                (subject.skus || []).map((sku) => [
+                    sku.name,
+                    ...(sku.attributes || []).map((item) => `${item.key} ${item.value}`),
+                ].join(' ')).join(' '),
                 categoryNameMap.get(subject.categoryId || '') || '',
             ].join('\n').toLowerCase();
             return haystack.includes(keyword);
         });
-    }, [categoryFilter, categoryNameMap, query, subjects]);
+    }, [categoryFilter, categoryNameMap, query, subjectCategoryName, subjectNameMap, subjects]);
+
+    const isBrandCategoryView = categoryNameMap.get(categoryFilter)?.trim() === '品牌';
+    const filteredBrandSubjects = useMemo(() => {
+        const keyword = query.trim().toLowerCase();
+        return brandWorkspaceBrands.filter((bundle) => {
+            if (!keyword) return true;
+            const haystack = [
+                bundle.brand.name,
+                bundle.brand.description || '',
+                bundle.products.map((productBundle) => [
+                    productBundle.product.name,
+                    productBundle.product.description || '',
+                    productBundle.skus.map((sku) => [
+                        sku.name,
+                        sku.variantText || '',
+                    ].join(' ')).join(' '),
+                ].join(' ')).join(' '),
+            ].join('\n').toLowerCase();
+            return haystack.includes(keyword);
+        });
+    }, [brandWorkspaceBrands, query]);
+    useEffect(() => {
+        if (hasInitializedBrandExpansionRef.current) return;
+        if (brandWorkspaceBrands.length !== 1 || brandWorkspaceBrands[0].products.length === 0) return;
+        hasInitializedBrandExpansionRef.current = true;
+        setExpandedBrandIds(new Set([brandWorkspaceBrands[0].brand.id]));
+    }, [brandWorkspaceBrands]);
 
     const filteredMediaAssets = useMemo(() => {
         const keyword = query.trim().toLowerCase();
+        if (!keyword) return mediaAssets;
         return mediaAssets.filter((asset) => {
-            if (!keyword) return true;
             const haystack = [
                 asset.title || '',
                 asset.prompt || '',
                 asset.projectId || '',
                 asset.boundManuscriptPath || '',
                 asset.relativePath || '',
-                asset.absolutePath || '',
-                asset.previewUrl || '',
-                asset.provider || '',
-                asset.model || '',
-                asset.aspectRatio || '',
-                asset.size || '',
-                asset.quality || '',
-                asset.mimeType || '',
-                MEDIA_SOURCE_LABELS[normalizeMediaAssetSource(asset.source)],
+                asset.id,
             ].join('\n').toLowerCase();
             return haystack.includes(keyword);
         });
     }, [mediaAssets, query]);
 
-    const openMediaPreview = useCallback((asset: MediaAsset) => {
-        setMediaContextMenu({ visible: false, x: 0, y: 0, asset: null });
-        setPreviewMediaAsset(asset);
-    }, []);
-
-    const openMediaContextMenu = useCallback((event: ReactMouseEvent, asset: MediaAsset) => {
-        event.preventDefault();
-        event.stopPropagation();
-        setMediaContextMenu({
-            visible: true,
-            x: event.clientX,
-            y: event.clientY,
-            asset,
-        });
-    }, []);
-
-    const handleOpenMediaAsset = useCallback(async (asset: MediaAsset) => {
-        try {
-            const result = await window.ipcRenderer.media.open<{ success?: boolean; error?: string }>({ assetId: asset.id });
-            if (!result?.success) {
-                void appAlert(result?.error || '打开媒体文件失败');
-            }
-        } catch (e) {
-            console.error('Failed to open media asset:', e);
-            void appAlert('打开媒体文件失败');
-        }
-    }, []);
-
-    const handleShowMediaAssetInFolder = useCallback(async (asset: MediaAsset) => {
-        const source = mediaAssetSourceUrl(asset);
-        if (!source) {
-            void appAlert('媒体资产没有可打开的文件路径');
-            return;
-        }
-        try {
-            const result = await window.ipcRenderer.files.showInFolder({ source }) as { success?: boolean; error?: string };
-            if (!result?.success) {
-                void appAlert(result?.error || '打开文件夹失败');
-            }
-        } catch (e) {
-            console.error('Failed to show media asset in folder:', e);
-            void appAlert('打开文件夹失败');
-        }
-    }, []);
-
-    const handleDeleteMediaAsset = useCallback(async (asset: MediaAsset) => {
-        const label = asset.title || asset.id;
-        if (!(await appConfirm(`删除媒体“${label}”？`, { title: '删除媒体', confirmLabel: '删除', tone: 'danger' }))) return;
-        try {
-            const result = await window.ipcRenderer.media.delete<{ success?: boolean; error?: string }>({ assetId: asset.id });
-            if (!result?.success) {
-                void appAlert(result?.error || '删除失败');
-                return;
-            }
-            deletedMediaAssetIdsRef.current.add(asset.id);
-            setMediaAssets((current) => current.filter((item) => item.id !== asset.id));
-            setPreviewMediaAsset((current) => current?.id === asset.id ? null : current);
-            setMediaContextMenu((current) => current.asset?.id === asset.id ? { visible: false, x: 0, y: 0, asset: null } : current);
-        } catch (e) {
-            console.error('Failed to delete media asset:', e);
-            void appAlert('删除失败');
-        }
-    }, []);
-
-    const handleImportMediaAssets = useCallback(async () => {
-        try {
-            const result = await window.ipcRenderer.media.importFiles<{ success?: boolean; canceled?: boolean; error?: string }>();
-            if (!result?.success) {
-                void appAlert(result?.error || '导入媒体失败');
-                return;
-            }
-            if (!result.canceled) {
-                await loadData();
-            }
-        } catch (e) {
-            console.error('Failed to import media assets:', e);
-            void appAlert('导入媒体失败');
-        }
-    }, [loadData]);
+    const mediaLoadMoreControl = mediaNextCursor ? (
+        <div className="mt-4 flex justify-center">
+            <button
+                type="button"
+                onClick={() => void loadMoreMediaAssets()}
+                disabled={isLoadingMoreMedia}
+                className="inline-flex h-8 items-center gap-2 rounded-lg border border-[rgb(var(--color-border))] bg-white px-3 text-xs text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+                <RefreshCw className={clsx('h-3.5 w-3.5', isLoadingMoreMedia && 'animate-spin')} />
+                {isLoadingMoreMedia ? '加载中' : '加载更多'}
+            </button>
+        </div>
+    ) : null;
 
     const categoryStats = useMemo(() => {
         const stats = new Map<string, number>();
@@ -793,88 +2230,498 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         return stats;
     }, [categories, subjects]);
 
-    const subjectCategoryTabs = useMemo(() => {
-        const existingNames = new Set(categories.map((category) => category.name.trim()));
-        const customCategories = categories.filter((category) => {
-            const name = category.name.trim();
-            return !DEFAULT_SUBJECT_CATEGORY_NAMES.includes(name) && !HIDDEN_SUBJECT_CATEGORY_NAMES.has(name);
-        });
-        return [
-            { id: 'all', label: '全部', icon: Package, createName: '' },
-            ...VISIBLE_SUBJECT_CATEGORY_NAMES.map((name) => {
-                const category = categories.find((item) => item.name.trim() === name);
-                return {
-                    id: category?.id || `preset:${name}`,
-                    label: name,
-                    icon: categoryIconForName(name),
-                    createName: existingNames.has(name) ? '' : name,
-                };
-            }),
-            ...customCategories.map((category) => ({
-                id: category.id,
-                label: category.name,
-                icon: categoryIconForName(category.name),
-                createName: '',
-            })),
-        ];
-    }, [categories]);
+    const openCreateBrandModal = useCallback(() => {
+        setBrandDraft(createEmptyBrandDraft());
+        setError('');
+        setIsBrandModalOpen(true);
+    }, []);
 
-    const activeSubjectCategoryTab = subjectCategoryTabs.find((item) => item.id === categoryFilter) || subjectCategoryTabs[0];
-    const createAssetButtonLabel = activeSubjectCategoryTab?.id && activeSubjectCategoryTab.id !== 'all'
-        ? `创建${activeSubjectCategoryTab.label}`
-        : '创建资产';
+    const openEditBrandModal = useCallback((brand: BrandWorkspaceBrand, assets: BrandWorkspaceAssetRef[] = []) => {
+        setBrandDraft(createEmptyBrandDraft(brand, assets));
+        setError('');
+        setIsBrandModalOpen(true);
+    }, []);
 
-    const ensureSubjectCategory = useCallback(async (name: string): Promise<string> => {
-        const trimmedName = name.trim();
-        if (!trimmedName) return '';
-        const existing = categories.find((category) => category.name.trim() === trimmedName);
-        if (existing?.id) return existing.id;
-        const result = await window.ipcRenderer.subjects.categories.create({ name: trimmedName });
-        if (!result?.success || !result.category?.id) {
-            throw new Error(result?.error || '创建分类失败');
-        }
-        await loadData();
-        return result.category.id;
-    }, [categories, loadData]);
+    const closeBrandModal = useCallback(() => {
+        if (isBrandModalSubmitting) return;
+        setIsBrandModalOpen(false);
+        setBrandDraft(createEmptyBrandDraft());
+    }, [isBrandModalSubmitting]);
 
-    const selectSubjectCategoryTab = useCallback(async (item: { id: string; createName?: string }) => {
-        if (item.id === 'all') {
-            setCategoryFilter('all');
+    const updateBrandDraft = useCallback((patch: Partial<BrandWorkspaceBrandDraft>) => {
+        setBrandDraft((current) => ({ ...current, ...patch }));
+    }, []);
+
+    const handleSaveBrand = useCallback(async () => {
+        const name = brandDraft.name.trim();
+        if (!name) {
+            void appAlert('品牌名称不能为空');
             return;
         }
-        if (item.createName) {
-            try {
-                const categoryId = await ensureSubjectCategory(item.createName);
-                if (categoryId) setCategoryFilter(categoryId);
-            } catch (error) {
-                console.error('Failed to create subject category:', error);
-                void appAlert(error instanceof Error ? error.message : '创建分类失败');
+        const brandWorkspaceBridge = getBrandWorkspaceBridge();
+        if (!brandWorkspaceBridge) {
+            void appAlert('品牌工作区不可用');
+            return;
+        }
+        setIsBrandModalSubmitting(true);
+        setError('');
+        try {
+            const result = await brandWorkspaceBridge.upsertBrand({
+                id: brandDraft.id,
+                name,
+                description: brandDraft.description.trim() || undefined,
+                images: imageDraftPayload(brandDraft.images),
+            });
+            if (!result?.success) {
+                throw new Error(result?.error || '保存品牌失败');
             }
-            return;
+            await loadData();
+            closeBrandModal();
+        } catch (e) {
+            console.error('Failed to save brand:', e);
+            setError(e instanceof Error ? e.message : '保存品牌失败');
+        } finally {
+            setIsBrandModalSubmitting(false);
         }
-        setCategoryFilter(item.id);
-    }, [ensureSubjectCategory]);
+    }, [brandDraft, closeBrandModal, loadData]);
+
+    const handleBrandImageInput = useCallback(async (files: FileList | null) => {
+        try {
+            const images = await imageFilesToDrafts(files);
+            if (!images.length) return;
+            setBrandDraft((current) => ({ ...current, images: [...current.images, ...images] }));
+        } catch (e) {
+            void appAlert(e instanceof Error ? e.message : '品牌图片仅支持图片文件');
+        }
+    }, []);
+
+    const handleRemoveBrandImage = useCallback((index: number) => {
+        setBrandDraft((current) => ({
+            ...current,
+            images: current.images.filter((_, itemIndex) => itemIndex !== index),
+        }));
+    }, []);
 
     const openCreateModal = useCallback(() => {
-        const defaultCategoryId = categoryFilter !== 'all' && categoryFilter !== UNCATEGORIZED_FILTER
-            ? categoryFilter
-            : '';
-        setDraft({ ...createEmptyDraft(), categoryId: defaultCategoryId });
+        if (categoryNameMap.get(categoryFilter)?.trim() === '品牌') {
+            openCreateBrandModal();
+            return;
+        }
+        const nextDraft = createEmptyDraft();
+        if (categoryFilter !== UNCATEGORIZED_FILTER) {
+            nextDraft.categoryId = categoryFilter;
+        }
+        autosaveLastPayloadRef.current = null;
+        setDraft(nextDraft);
         setInitialVoicePresent(false);
         setInitialVideoPresent(false);
-        setPreviewImage(null);
         setError('');
-        setIsModalOpen(true);
-    }, [categoryFilter]);
+        setIsDraftCategoryMenuOpen(false);
+        openAssetModalSurface();
+    }, [categoryFilter, categoryNameMap, openAssetModalSurface, openCreateBrandModal]);
 
     const openEditModal = useCallback((subject: SubjectRecord) => {
+        autosaveLastPayloadRef.current = null;
         setDraft(toDraft(subject));
         setInitialVoicePresent(Boolean(subject.voicePreviewUrl));
         setInitialVideoPresent(Boolean(subject.videoPreviewUrl));
-        setPreviewImage(null);
         setError('');
-        setIsModalOpen(true);
+        setIsDraftCategoryMenuOpen(false);
+        openAssetModalSurface();
+    }, [openAssetModalSurface]);
+
+    const openCreateProductModal = useCallback((brand: BrandWorkspaceBrand) => {
+        setProductDraft(createEmptyProductDraft(brand.id));
+        setProductDraftBrand(brand);
+        setError('');
+        setExpandedBrandIds((current) => new Set(current).add(brand.id));
+        setIsProductModalOpen(true);
     }, []);
+
+    const openEditProductModal = useCallback((brand: BrandWorkspaceBrand, productBundle: BrandWorkspaceProductBundle) => {
+        setProductDraft(productBundleToDraft(productBundle));
+        setProductDraftBrand(brand);
+        setError('');
+        setExpandedBrandIds((current) => new Set(current).add(brand.id));
+        setIsProductModalOpen(true);
+    }, []);
+
+    const openProductDetailPage = useCallback((brand: BrandWorkspaceBrand, productBundle: BrandWorkspaceProductBundle) => {
+        setProductDetailContext({ brandId: brand.id, productId: productBundle.product.id });
+        setSelectedDetailPlatformId((current) => current || enabledEcommercePlatforms[0]?.id || '');
+        setSelectedDetailVersionKey('__default__');
+        setDetailVersionDraft({ market: '', locale: '', title: '' });
+        setDetailImageDrafts([]);
+        setError('');
+    }, [enabledEcommercePlatforms]);
+
+    const closeProductDetailPage = useCallback(() => {
+        if (isDetailPageSubmitting) return;
+        setProductDetailContext(null);
+        setSelectedDetailVersionKey('__default__');
+        setDetailVersionDraft({ market: '', locale: '', title: '' });
+        setDetailImageDrafts([]);
+    }, [isDetailPageSubmitting]);
+
+    const handleRemoveDetailImage = useCallback((index: number) => {
+        setDetailImageDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    }, []);
+
+    const handleSelectDetailVersion = useCallback((option: ProductDetailVersionOption) => {
+        setSelectedDetailVersionKey(option.key);
+        setDetailVersionDraft({
+            market: option.market,
+            locale: option.locale,
+            title: option.title || '',
+        });
+        setDetailImageDrafts(assetRefsToImageDrafts(option.page ? activeDetailProductBundle?.detailPageAssets?.[option.page.id] : undefined));
+    }, [activeDetailProductBundle]);
+
+    const handleSaveDetailPage = useCallback(async () => {
+        if (!activeDetailProductBundle || !activeDetailPlatform) {
+            void appAlert('请选择商品和电商平台');
+            return;
+        }
+        const brandWorkspaceBridge = getBrandWorkspaceBridge();
+        if (!brandWorkspaceBridge?.upsertProductDetailPage) {
+            void appAlert('商品详情图保存接口不可用');
+            return;
+        }
+        setIsDetailPageSubmitting(true);
+        setError('');
+        try {
+            const effectiveVersion = productDetailVersionForPlatform(detailVersionDraft, activeDetailPlatform);
+            const result = await brandWorkspaceBridge.upsertProductDetailPage({
+                id: activeDetailPage?.id,
+                productId: activeDetailProductBundle.product.id,
+                platform: activeDetailPlatform.id,
+                market: effectiveVersion.market.trim(),
+                locale: effectiveVersion.locale.trim(),
+                title: effectiveVersion.title.trim() || undefined,
+                images: imageDraftPayload(detailImageDrafts),
+            });
+            if (!result?.success) {
+                throw new Error(result?.error || '保存商品详情图失败');
+            }
+            await loadData();
+            setSelectedDetailVersionKey(detailVersionKey(effectiveVersion.market, effectiveVersion.locale));
+        } catch (e) {
+            console.error('Failed to save product detail page:', e);
+            setError(e instanceof Error ? e.message : '保存商品详情图失败');
+        } finally {
+            setIsDetailPageSubmitting(false);
+        }
+    }, [activeDetailPage, activeDetailPlatform, activeDetailProductBundle, detailImageDrafts, detailVersionDraft, loadData]);
+
+    const handleDownloadDetailPage = useCallback(async () => {
+        if (!activeDetailBrandBundle || !activeDetailProductBundle || !activeDetailPlatform) {
+            void appAlert('请选择商品和电商平台');
+            return;
+        }
+        if (detailImageDrafts.length === 0) {
+            void appAlert('当前版本没有可下载的详情图');
+            return;
+        }
+        const effectiveVersion = productDetailVersionForPlatform(detailVersionDraft, activeDetailPlatform);
+        const versionName = detailVersionLabel(effectiveVersion);
+        const baseName = sanitizeDownloadFileName([
+            activeDetailBrandBundle.brand.name,
+            activeDetailProductBundle.product.name,
+            activeDetailPlatform.name,
+            versionName,
+            '商品详情页',
+        ].filter(Boolean).join('-'), '商品详情页');
+        const files = detailImageDrafts
+            .map((image, index) => {
+                const source = image.path || image.previewUrl;
+                if (!source) return null;
+                const extension = imageExtensionFromPath(source);
+                return {
+                    source,
+                    name: `${String(index + 1).padStart(2, '0')}-${baseName}.${extension}`,
+                };
+            })
+            .filter((item): item is { source: string; name: string } => Boolean(item));
+        if (files.length === 0) {
+            void appAlert('当前版本没有可下载的本地图片');
+            return;
+        }
+        setIsDetailPageDownloading(true);
+        setError('');
+        try {
+            const result = await window.ipcRenderer.files.saveZip({
+                defaultName: `${baseName}.zip`,
+                files,
+            });
+            if (!result?.success && !result?.canceled) {
+                throw new Error(result?.error || '下载详情页失败');
+            }
+        } catch (e) {
+            console.error('Failed to download product detail page:', e);
+            setError(e instanceof Error ? e.message : '下载详情页失败');
+        } finally {
+            setIsDetailPageDownloading(false);
+        }
+    }, [activeDetailBrandBundle, activeDetailPlatform, activeDetailProductBundle, detailImageDrafts, detailVersionDraft]);
+
+    const persistDetailPageImagesForTarget = useCallback(async (
+        images: BrandWorkspaceImageDraft[],
+        target: ProductDetailPageImageSaveTarget,
+    ) => {
+        const brandWorkspaceBridge = getBrandWorkspaceBridge();
+        if (!brandWorkspaceBridge?.upsertProductDetailPage) {
+            throw new Error('商品详情图保存接口不可用');
+        }
+        const result = await brandWorkspaceBridge.upsertProductDetailPage({
+            id: target.id,
+            productId: target.productId,
+            platform: target.platform,
+            market: target.version.market.trim(),
+            locale: target.version.locale.trim(),
+            title: target.version.title.trim() || undefined,
+            images: imageDraftPayload(images),
+        });
+        if (!result?.success) {
+            throw new Error(result?.error || '保存商品详情图失败');
+        }
+    }, []);
+
+    const handleGenerateDetailPage = useCallback(async () => {
+        if (!activeDetailBrandBundle || !activeDetailProductBundle || !activeDetailPlatform) {
+            void appAlert('请选择商品和电商平台');
+            return;
+        }
+        const taskVersion = productDetailVersionForPlatform(detailVersionDraft, activeDetailPlatform);
+        const taskKey = productDetailGenerationKey(activeDetailProductBundle.product.id, activeDetailPlatform.id, taskVersion);
+        if (generatingDetailPageKeySet.has(taskKey)) return;
+        const taskProductId = activeDetailProductBundle.product.id;
+        const taskPlatformId = activeDetailPlatform.id;
+        const taskPageId = activeDetailPage?.id;
+        const taskInitialImages = detailImageDrafts;
+        const task: ProductDetailGenerationTask = {
+            key: taskKey,
+            target: {
+                id: taskPageId,
+                productId: taskProductId,
+                platform: taskPlatformId,
+                version: taskVersion,
+            },
+            productName: activeDetailProductBundle.product.name,
+            platformName: activeDetailPlatform.name,
+            versionLabel: detailVersionLabel(taskVersion),
+        };
+        setGeneratingDetailPageTasks((current) => (
+            current.some((item) => item.key === task.key) ? current : [...current, task]
+        ));
+        setError('');
+        try {
+            const prompt = buildProductDetailGenerationPrompt(
+                activeDetailBrandBundle.brand,
+                activeDetailProductBundle,
+                activeDetailPlatform,
+                taskVersion,
+            );
+            const projectId = `brand-workspace:${activeDetailProductBundle.product.id}`;
+            const contextId = buildProductDetailGenerationAgentContextId(
+                activeDetailProductBundle.product.id,
+                activeDetailPlatform.id,
+                taskVersion,
+            );
+            const session = await window.ipcRenderer.chat.getOrCreateContextSession({
+                contextId,
+                contextType: 'generation-agent',
+                title: `${activeDetailProductBundle.product.name} 详情页生成`,
+                initialContext: buildProductDetailGenerationAgentInitialContext(activeDetailProductBundle),
+                metadata: {
+                    contextType: 'generation-agent',
+                    intent: 'image_creation',
+                    preferredRole: 'image-director',
+                    generationTarget: 'image',
+                    executionMode: 'auto',
+                    requiresHumanApproval: false,
+                    projectId,
+                    source: 'brand-workspace-product-detail',
+                    sourceTitle: `${activeDetailBrandBundle.brand.name} / ${activeDetailProductBundle.product.name}`,
+                    productId: activeDetailProductBundle.product.id,
+                    brandId: activeDetailBrandBundle.brand.id,
+                    platformId: activeDetailPlatform.id,
+                },
+            });
+            if (!session?.id) {
+                throw new Error('Agent 会话初始化失败');
+            }
+            const knownJobIds = new Set(
+                (await listProductDetailGenerationJobs(session.id))
+                    .map((job) => job.jobId)
+                    .filter((jobId): jobId is string => Boolean(jobId)),
+            );
+            const knownToolResultIds = new Set(
+                (await listProductDetailToolResults(session.id))
+                    .map((item) => item.id)
+                    .filter((id): id is string => Boolean(id)),
+            );
+            const message = buildProductDetailGenerationAgentMessage(
+                prompt,
+                activeDetailBrandBundle.brand,
+                activeDetailProductBundle,
+                activeDetailPlatform,
+                taskVersion,
+            );
+            const agentResult = await window.ipcRenderer.runtime.query({
+                sessionId: session.id,
+                message,
+                metadata: {
+                    contextType: 'generation-agent',
+                    source: 'brand-workspace-product-detail',
+                    projectId,
+                    preferredRole: 'image-director',
+                    generationTarget: 'image',
+                },
+            } as Parameters<typeof window.ipcRenderer.runtime.query>[0] & { metadata: Record<string, unknown> });
+            if (!agentResult?.success) {
+                throw new Error(agentResult?.error || 'Agent 生成商品详情页失败');
+            }
+            const generatedImages = await waitForGeneratedProductDetailImages(session.id, knownJobIds, knownToolResultIds, projectId);
+            if (!generatedImages.length) {
+                throw new Error('Agent 已执行完成，但没有找到可保存的商品详情图');
+            }
+            const nextImages = [...taskInitialImages, ...generatedImages];
+            await persistDetailPageImagesForTarget(nextImages, task.target);
+            await loadData();
+            if (activeDetailSelectionRef.current === taskKey) {
+                setDetailImageDrafts(nextImages);
+                setSelectedDetailVersionKey(detailVersionKey(task.target.version.market, task.target.version.locale));
+            }
+        } catch (e) {
+            console.error('Failed to generate product detail page:', e);
+            if (activeDetailSelectionRef.current === taskKey) {
+                setError(e instanceof Error ? e.message : 'AI 生成商品详情页失败');
+            }
+        } finally {
+            setGeneratingDetailPageTasks((current) => current.filter((item) => item.key !== taskKey));
+        }
+    }, [activeDetailBrandBundle, activeDetailPage, activeDetailPlatform, activeDetailProductBundle, detailImageDrafts, detailVersionDraft, generatingDetailPageKeySet, loadData, persistDetailPageImagesForTarget]);
+
+    const closeProductModal = useCallback(() => {
+        if (isProductModalSubmitting) return;
+        setIsProductModalOpen(false);
+        setProductDraft(createEmptyProductDraft());
+        setProductDraftBrand(null);
+    }, [isProductModalSubmitting]);
+
+    const updateProductDraft = useCallback((patch: Partial<BrandWorkspaceProductDraft>) => {
+        setProductDraft((current) => ({ ...current, ...patch }));
+    }, []);
+
+    const handleAddProductSku = useCallback(() => {
+        setProductDraft((current) => ({
+            ...current,
+            skus: [
+                ...current.skus,
+                { id: createDraftSkuId(), name: '', variantText: '', images: [] },
+            ],
+        }));
+    }, []);
+
+    const handleProductSkuChange = useCallback((index: number, patch: Partial<BrandWorkspaceSkuDraft>) => {
+        setProductDraft((current) => ({
+            ...current,
+            skus: current.skus.map((sku, skuIndex) => skuIndex === index ? { ...sku, ...patch } : sku),
+        }));
+    }, []);
+
+    const handleRemoveProductSku = useCallback((index: number) => {
+        setProductDraft((current) => ({
+            ...current,
+            skus: current.skus.filter((_, skuIndex) => skuIndex !== index),
+        }));
+    }, []);
+
+    const handleProductImageInput = useCallback(async (files: FileList | null) => {
+        try {
+            const images = await imageFilesToDrafts(files);
+            if (!images.length) return;
+            setProductDraft((current) => ({ ...current, images: [...current.images, ...images] }));
+        } catch (e) {
+            void appAlert(e instanceof Error ? e.message : '商品图片仅支持图片文件');
+        }
+    }, []);
+
+    const handleRemoveProductImage = useCallback((index: number) => {
+        setProductDraft((current) => ({
+            ...current,
+            images: current.images.filter((_, itemIndex) => itemIndex !== index),
+        }));
+    }, []);
+
+    const handleProductSkuImageInput = useCallback(async (index: number, files: FileList | null) => {
+        try {
+            const images = await imageFilesToDrafts(files);
+            if (!images.length) return;
+            setProductDraft((current) => ({
+                ...current,
+                skus: current.skus.map((sku, skuIndex) => (
+                    skuIndex === index ? { ...sku, images: [...sku.images, ...images] } : sku
+                )),
+            }));
+        } catch (e) {
+            void appAlert(e instanceof Error ? e.message : 'SKU 图片仅支持图片文件');
+        }
+    }, []);
+
+    const handleRemoveProductSkuImage = useCallback((skuIndex: number, imageIndex: number) => {
+        setProductDraft((current) => ({
+            ...current,
+            skus: current.skus.map((sku, currentSkuIndex) => (
+                currentSkuIndex === skuIndex
+                    ? { ...sku, images: sku.images.filter((_, currentImageIndex) => currentImageIndex !== imageIndex) }
+                    : sku
+            )),
+        }));
+    }, []);
+
+    const handleSaveProduct = useCallback(async () => {
+        const name = productDraft.name.trim();
+        if (!name) {
+            void appAlert('商品名称不能为空');
+            return;
+        }
+        const brandWorkspaceBridge = getBrandWorkspaceBridge();
+        if (!brandWorkspaceBridge) {
+            void appAlert('品牌工作区不可用');
+            return;
+        }
+        setIsProductModalSubmitting(true);
+        setError('');
+        try {
+            const payload = {
+                id: productDraft.id,
+                brandId: productDraft.brandId,
+                name,
+                description: productDraft.description.trim() || undefined,
+                images: imageDraftPayload(productDraft.images),
+                skus: productDraft.skus
+                    .filter((sku) => sku.name.trim())
+                    .map((sku) => ({
+                        id: sku.id.startsWith('draft-sku-') ? undefined : sku.id,
+                        name: sku.name.trim(),
+                        variantText: sku.variantText.trim(),
+                        images: imageDraftPayload(sku.images),
+                    })),
+            };
+            const result = await brandWorkspaceBridge.upsertProduct(payload);
+            if (!result?.success) {
+                throw new Error(result?.error || '保存商品失败');
+            }
+            await loadData();
+            closeProductModal();
+        } catch (e) {
+            console.error('Failed to save product:', e);
+            setError(e instanceof Error ? e.message : '保存商品失败');
+        } finally {
+            setIsProductModalSubmitting(false);
+        }
+    }, [closeProductModal, loadData, productDraft]);
 
     const openCreateCategoryDialog = useCallback(() => {
         setCategoryDialogMode('create');
@@ -906,10 +2753,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             window.clearInterval(recordingIntervalRef.current);
             recordingIntervalRef.current = null;
         }
-        if (recordingTimeoutRef.current) {
-            window.clearTimeout(recordingTimeoutRef.current);
-            recordingTimeoutRef.current = null;
-        }
     }, []);
 
     const updateDraft = useCallback((patch: Partial<SubjectDraft>) => {
@@ -937,29 +2780,98 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         }));
     }, []);
 
-    const handleNamedAttributeChange = useCallback((key: string, value: string) => {
-        setDraft((current) => {
-            const existingIndex = current.attributes.findIndex((item) => item.key === key);
-            if (!value.trim()) {
+    const handleAddSku = useCallback(() => {
+        setDraft((current) => ({
+            ...current,
+            skus: [
+                ...current.skus,
+                {
+                    id: createDraftSkuId(),
+                    name: '',
+                    attributes: [{ key: '规格', value: '' }],
+                },
+            ],
+        }));
+    }, []);
+
+    const handleSkuChange = useCallback((index: number, patch: Partial<SubjectSku>) => {
+        setDraft((current) => ({
+            ...current,
+            skus: current.skus.map((sku, skuIndex) => skuIndex === index ? { ...sku, ...patch } : sku),
+        }));
+    }, []);
+
+    const handleSkuAttributeChange = useCallback((skuIndex: number, attributeIndex: number, patch: Partial<SubjectAttribute>) => {
+        setDraft((current) => ({
+            ...current,
+            skus: current.skus.map((sku, currentSkuIndex) => {
+                if (currentSkuIndex !== skuIndex) return sku;
                 return {
-                    ...current,
-                    attributes: existingIndex >= 0
-                        ? current.attributes.filter((_, itemIndex) => itemIndex !== existingIndex)
-                        : current.attributes,
-                };
-            }
-            if (existingIndex >= 0) {
-                return {
-                    ...current,
-                    attributes: current.attributes.map((item, itemIndex) => (
-                        itemIndex === existingIndex ? { ...item, value } : item
+                    ...sku,
+                    attributes: sku.attributes.map((attribute, currentAttributeIndex) => (
+                        currentAttributeIndex === attributeIndex ? { ...attribute, ...patch } : attribute
                     )),
                 };
+            }),
+        }));
+    }, []);
+
+    const handleAddSkuAttribute = useCallback((skuIndex: number) => {
+        setDraft((current) => ({
+            ...current,
+            skus: current.skus.map((sku, currentSkuIndex) => (
+                currentSkuIndex === skuIndex
+                    ? { ...sku, attributes: [...sku.attributes, { key: '', value: '' }] }
+                    : sku
+            )),
+        }));
+    }, []);
+
+    const handleRemoveSkuAttribute = useCallback((skuIndex: number, attributeIndex: number) => {
+        setDraft((current) => ({
+            ...current,
+            skus: current.skus.map((sku, currentSkuIndex) => (
+                currentSkuIndex === skuIndex
+                    ? { ...sku, attributes: sku.attributes.filter((_, index) => index !== attributeIndex) }
+                    : sku
+            )),
+        }));
+    }, []);
+
+    const handleRemoveSku = useCallback((index: number) => {
+        setDraft((current) => ({
+            ...current,
+            skus: current.skus.filter((_, skuIndex) => skuIndex !== index),
+        }));
+    }, []);
+
+    const toggleBrandExpanded = useCallback((brandId: string) => {
+        setExpandedBrandIds((current) => {
+            const next = new Set(current);
+            if (next.has(brandId)) {
+                next.delete(brandId);
+            } else {
+                next.add(brandId);
             }
-            return {
-                ...current,
-                attributes: [...current.attributes, { key, value }],
-            };
+            return next;
+        });
+    }, []);
+
+    const handleNamedAttributeChange = useCallback((key: string, value: string) => {
+        setDraft((current) => {
+            const nextAttributes = [...current.attributes];
+            const existingIndex = nextAttributes.findIndex((item) => item.key === key);
+            const nextValue = value.trim();
+            if (!nextValue) {
+                if (existingIndex >= 0) nextAttributes.splice(existingIndex, 1);
+                return { ...current, attributes: nextAttributes };
+            }
+            if (existingIndex >= 0) {
+                nextAttributes[existingIndex] = { ...nextAttributes[existingIndex], value };
+            } else {
+                nextAttributes.push({ key, value });
+            }
+            return { ...current, attributes: nextAttributes };
         });
     }, []);
 
@@ -986,15 +2898,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             ...current,
             images: current.images.filter((_, itemIndex) => itemIndex !== index),
         }));
-    }, []);
-
-    const handleRemoveVoice = useCallback(() => {
-        setDraft((current) => ({
-            ...current,
-            voice: undefined,
-        }));
-        setRecordingError('');
-        setRecordingHint('');
     }, []);
 
     const handleVideoFileInput = useCallback(async (files: FileList | null) => {
@@ -1027,26 +2930,111 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         }));
     }, []);
 
-    const saveVoiceDataUrl = useCallback(async (dataUrl: string, fileName: string) => {
-        const duration = await getAudioDurationSeconds(dataUrl);
-        if (duration < 5 || duration > 10) {
-            throw new Error('声音参考时长必须在 5 到 10 秒之间');
+    const buildSubjectPayload = useCallback((voicePayload?: Record<string, unknown>, videoPayload?: Record<string, unknown>) => ({
+        ...subjectDraftPayload(draft, categories, voicePayload, videoPayload ?? subjectDraftVideoPayload(draft, categories, initialVideoPresent)),
+    }), [categories, draft, initialVideoPresent]);
+
+    const persistVoiceChange = useCallback(async (voicePayload: Record<string, unknown>, successHint: string) => {
+        if (!draft.id) return false;
+        const draftCategoryName = categories.find((item) => item.id === draft.categoryId)?.name.trim() || '';
+        if (draftCategoryName !== '角色') return false;
+        const payload = buildSubjectPayload(voicePayload);
+        const result = await window.ipcRenderer.subjects.update(payload);
+        if (!result?.success) {
+            throw new Error(result?.error || '保存声音参考失败');
         }
+        setInitialVoicePresent(Boolean(Object.keys(voicePayload).length));
+        setRecordingHint(successHint);
+        await loadData();
+        return true;
+    }, [buildSubjectPayload, categories, draft.categoryId, draft.id, loadData]);
+
+    const handleRemoveVoice = useCallback(async () => {
         setDraft((current) => ({
             ...current,
-            voice: {
-                name: fileName,
-                previewUrl: dataUrl,
-                dataUrl,
-                scriptText: SUBJECT_VOICE_SAMPLE_TEXT,
-            },
+            voice: undefined,
+        }));
+        setRecordingError('');
+        setRecordingHint('');
+        try {
+            await persistVoiceChange({}, '声音参考已删除');
+        } catch (e) {
+            const message = e instanceof Error ? e.message : '删除声音参考失败';
+            setRecordingError(message);
+            void appAlert(message);
+        }
+    }, [persistVoiceChange]);
+
+    const handleRetryVoiceClone = useCallback(async (subject: SubjectRecord) => {
+        if (!subject.voicePath) {
+            void appAlert('请先保存声音参考，再重试复刻');
+            return;
+        }
+        setRetryingVoiceSubjectId(subject.id);
+        setRecordingError('');
+        setRecordingHint('正在提交音色复刻...');
+        try {
+            const targetTtsModel = selectedVoiceCloneTtsModel || DEFAULT_VOICE_TTS_MODEL;
+            const cloneModel = cloneModelForTargetTtsModel(targetTtsModel);
+            const routeOverride = resolveVoiceTtsModelOverride(voiceModelSettingsSnapshot, targetTtsModel);
+            const result = await window.ipcRenderer.voice.clone({
+                ownerAssetId: subject.id,
+                samplePath: subject.voicePath,
+                name: subject.name,
+                model: cloneModel,
+                ...routeOverride,
+                cloneModel,
+                targetTtsModel,
+                target_tts_model: targetTtsModel,
+                ttsModel: targetTtsModel,
+                waitForCompletion: false,
+            }) as { success?: boolean; error?: string };
+            if (!result?.success) {
+                throw new Error(result?.error || '提交声音复刻失败');
+            }
+            setRecordingHint('音色复刻已提交');
+            await loadData();
+        } catch (e) {
+            console.error('Failed to retry voice clone:', e);
+            const message = e instanceof Error ? e.message : '提交声音复刻失败';
+            setRecordingError(message);
+            setRecordingHint('');
+            void appAlert(message);
+        } finally {
+            setRetryingVoiceSubjectId(null);
+        }
+    }, [loadData, selectedVoiceCloneTtsModel, voiceModelSettingsSnapshot]);
+
+    const saveVoiceDataUrl = useCallback(async (dataUrl: string, fileName: string) => {
+        const duration = await getAudioDurationSeconds(dataUrl);
+        if (duration <= SUBJECT_VOICE_MIN_RECORDING_SECONDS) {
+            throw new Error(`声音参考时长必须大于 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒`);
+        }
+        const nextVoice = {
+            name: fileName,
+            previewUrl: dataUrl,
+            dataUrl,
+            scriptText: SUBJECT_VOICE_SAMPLE_TEXT,
+        };
+        setDraft((current) => ({
+            ...current,
+            voice: nextVoice,
         }));
         setRecordingHint(`已录入声音参考，时长约 ${duration.toFixed(1)} 秒`);
         setRecordingError('');
-    }, []);
+        await persistVoiceChange({
+            dataUrl,
+            name: fileName,
+            scriptText: SUBJECT_VOICE_SAMPLE_TEXT,
+        }, `声音参考已保存，时长约 ${duration.toFixed(1)} 秒`);
+    }, [persistVoiceChange]);
 
     const audioRecording = useAudioRecording({
         onCaptured: async (clip) => {
+            const capturedSeconds = (clip.capturedDurationMs || 0) / 1000;
+            if (capturedSeconds > 0 && capturedSeconds < SUBJECT_VOICE_MIN_RECORDING_SECONDS) {
+                throw new Error(`实际录入音频只有 ${capturedSeconds.toFixed(1)} 秒，请重新录制至少 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒`);
+            }
             if ((clip.byteLength || 0) > 10 * 1024 * 1024) {
                 throw new Error('声音参考文件不能超过 10MB');
             }
@@ -1056,6 +3044,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             );
         },
     });
+    const audioRecordingRef = useRef(audioRecording);
+    useEffect(() => {
+        audioRecordingRef.current = audioRecording;
+    }, [audioRecording]);
+    const voiceRecordingElapsedSeconds = audioRecording.isRecording
+        ? recordingElapsedSeconds
+        : 0;
+    const canFinishVoiceRecording = voiceRecordingElapsedSeconds >= SUBJECT_VOICE_MIN_RECORDING_SECONDS;
 
     useEffect(() => {
         if (!audioRecording.error) return;
@@ -1066,37 +3062,66 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     useEffect(() => {
         if (audioRecording.isRecording) return;
         clearRecordingTimers();
-        setRecordingCountdown(0);
+        setRecordingElapsedSeconds(0);
     }, [audioRecording.isRecording, clearRecordingTimers]);
 
     const stopRecordingSession = useCallback(() => {
         clearRecordingTimers();
-        setRecordingCountdown(0);
-        if (audioRecording.isRecording || audioRecording.isWorking) {
-            void audioRecording.cancelRecording();
+        setRecordingElapsedSeconds(0);
+        const currentRecording = audioRecordingRef.current;
+        if (currentRecording.isRecording || currentRecording.isWorking) {
+            void currentRecording.cancelRecording();
         }
-    }, [audioRecording, clearRecordingTimers]);
+    }, [clearRecordingTimers]);
+
+    const handleDraftCategoryChange = useCallback((categoryId: string) => {
+        const nextCategoryName = categories.find((item) => item.id === categoryId)?.name.trim() || '';
+        if (nextCategoryName !== '角色') {
+            stopRecordingSession();
+            setRecordingError('');
+            setRecordingHint('');
+        }
+        setDraft((current) => ({
+            ...current,
+            categoryId,
+            voice: nextCategoryName === '角色' ? current.voice : undefined,
+            video: nextCategoryName === '角色' ? current.video : undefined,
+            brandId: nextCategoryName === '商品' ? current.brandId : '',
+            skus: nextCategoryName === '商品' ? current.skus : [],
+        }));
+    }, [categories, stopRecordingSession]);
 
     const closeModal = useCallback(() => {
         if (working) return;
+        clearAssetModalAnimationHandles();
         stopRecordingSession();
-        setIsModalOpen(false);
-        setPreviewImage(null);
-        setDraft(createEmptyDraft());
-        setInitialVoicePresent(false);
-        setInitialVideoPresent(false);
-        setError('');
-        setRecordingError('');
-        setRecordingHint('');
-    }, [stopRecordingSession, working]);
+        setIsDraftCategoryMenuOpen(false);
+        setAssetModalPhase('closing');
+        assetModalAnimationTimerRef.current = window.setTimeout(() => {
+            setIsModalOpen(false);
+            setIsAssetModalVisible(false);
+            resetAssetModalDraft();
+            assetModalAnimationTimerRef.current = null;
+        }, ASSET_LIBRARY_MODAL_ANIMATION_MS);
+    }, [clearAssetModalAnimationHandles, resetAssetModalDraft, stopRecordingSession, working]);
 
     useEffect(() => () => {
+        clearAssetModalAnimationHandles();
         stopRecordingSession();
-    }, [stopRecordingSession]);
+        if (autosaveTimerRef.current) {
+            window.clearTimeout(autosaveTimerRef.current);
+            autosaveTimerRef.current = null;
+        }
+    }, [clearAssetModalAnimationHandles, stopRecordingSession]);
 
     const handleVoiceFileInput = useCallback(async (files: FileList | null) => {
         const file = files?.[0];
         if (!file) return;
+        if (!/\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)$/i.test(file.name)) {
+            setRecordingError('声音参考仅支持常见音频文件');
+            setRecordingHint('');
+            return;
+        }
         if (file.size > 10 * 1024 * 1024) {
             setRecordingError('声音参考文件不能超过 10MB');
             return;
@@ -1112,28 +3137,36 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
     const handleRecordVoice = useCallback(async () => {
         if (audioRecording.isRecording || audioRecording.isWorking) return;
-        setRecordingCountdown(SUBJECT_VOICE_RECORDING_SECONDS);
+        setRecordingElapsedSeconds(0);
         setRecordingError('');
-        setRecordingHint('点击录音后，请按正常语速清晰朗读示例句。系统会自动截取这次采样。');
+        setRecordingHint('正在准备录音，请按正常语速清晰朗读示例句。');
         const started = await audioRecording.startRecording();
         if (!started) {
-            setRecordingCountdown(0);
+            setRecordingElapsedSeconds(0);
             setRecordingHint('');
             return;
         }
+        setRecordingHint(`正在采样，达到 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒后可手动完成。`);
         try {
             recordingIntervalRef.current = window.setInterval(() => {
-                setRecordingCountdown((current) => Math.max(0, current - 1));
+                setRecordingElapsedSeconds((current) => current + 1);
             }, 1000);
-            recordingTimeoutRef.current = window.setTimeout(() => {
-                void audioRecording.stopRecording();
-            }, SUBJECT_VOICE_RECORDING_SECONDS * 1000);
         } catch (e) {
             stopRecordingSession();
             setRecordingError(e instanceof Error ? e.message : '无法启动录音');
             setRecordingHint('');
         }
-    }, [audioRecording, stopRecordingSession]);
+    }, [audioRecording, clearRecordingTimers, stopRecordingSession]);
+
+    const handleFinishVoiceRecording = useCallback(async () => {
+        if (!audioRecording.isRecording || audioRecording.isWorking) return;
+        if (recordingElapsedSeconds < SUBJECT_VOICE_MIN_RECORDING_SECONDS) {
+            setRecordingHint(`至少需要 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒，再点击完成采样。`);
+            return;
+        }
+        clearRecordingTimers();
+        await audioRecording.stopRecording();
+    }, [audioRecording, clearRecordingTimers, recordingElapsedSeconds]);
 
     const submitCategoryDialog = useCallback(async () => {
         const trimmedName = categoryDialogName.trim();
@@ -1201,54 +3234,103 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         await loadData();
     }, [categoryFilter, draft.categoryId, loadData]);
 
+    const mergeSavedSubject = useCallback((savedSubject: SubjectRecord, syncDraftMedia = false) => {
+        setSubjects((current) => current.map((subject) => (
+            subject.id === savedSubject.id ? savedSubject : subject
+        )));
+        if (!syncDraftMedia) return;
+        setDraft((current) => {
+            if (current.id !== savedSubject.id) return current;
+            const nextDraft = toDraft(savedSubject);
+            autosaveLastPayloadRef.current = subjectDraftPayloadSnapshot(
+                nextDraft,
+                categories,
+                Boolean(savedSubject.voicePreviewUrl),
+                Boolean(savedSubject.videoPreviewUrl),
+            );
+            return nextDraft;
+        });
+        setInitialVoicePresent(Boolean(savedSubject.voicePreviewUrl));
+        setInitialVideoPresent(Boolean(savedSubject.videoPreviewUrl));
+    }, [categories]);
+
     const persistDraft = useCallback(async (): Promise<SubjectRecord> => {
         if (!draft.name.trim()) {
-            throw new Error(`${draftEntityLabel}名称是必填项`);
+            throw new Error('资产名称是必填项');
         }
-
-        const payload = {
-            id: draft.id,
-            name: draft.name.trim(),
-            categoryId: draft.categoryId || undefined,
-            description: draft.description.trim() || undefined,
-            tags: draft.tagsText.split(',').map((item) => item.trim()).filter(Boolean),
-            attributes: normalizeAttributes(draft.attributes),
-            images: draft.images.map((image) => image.relativePath
-                ? { relativePath: image.relativePath, name: image.name }
-                : { dataUrl: image.dataUrl, name: image.name }),
-            voice: draft.voice
-                ? (draft.voice.relativePath
-                    ? {
-                        relativePath: draft.voice.relativePath,
-                        name: draft.voice.name,
-                        scriptText: draft.voice.scriptText.trim() || undefined,
-                    }
-                    : {
-                        dataUrl: draft.voice.dataUrl,
-                        name: draft.voice.name,
-                        scriptText: draft.voice.scriptText.trim() || undefined,
-                    })
-                : (initialVoicePresent ? {} : undefined),
-            video: draft.video
-                ? (draft.video.relativePath
-                    ? {
-                        relativePath: draft.video.relativePath,
-                        name: draft.video.name,
-                    }
-                    : {
-                        dataUrl: draft.video.dataUrl,
-                        name: draft.video.name,
-                    })
-                : (initialVideoPresent ? {} : undefined),
-        };
+        autosaveVersionRef.current += 1;
+        if (autosaveTimerRef.current) {
+            window.clearTimeout(autosaveTimerRef.current);
+            autosaveTimerRef.current = null;
+        }
+        const nextVoicePayload = subjectDraftVoicePayload(draft, categories, initialVoicePresent);
+        const nextVideoPayload = subjectDraftVideoPayload(draft, categories, initialVideoPresent);
+        const payload = buildSubjectPayload(nextVoicePayload, nextVideoPayload);
         const result = draft.id
             ? await window.ipcRenderer.subjects.update(payload)
             : await window.ipcRenderer.subjects.create(payload);
         if (!result?.success || !result.subject) {
-            throw new Error(result?.error || `保存${draftEntityLabel}失败`);
+            throw new Error(result?.error || '保存资产失败');
         }
-        return result.subject;
-    }, [draft, draftEntityLabel, initialVideoPresent, initialVoicePresent]);
+        return result.subject as SubjectRecord;
+    }, [buildSubjectPayload, categories, draft.categoryId, draft.id, draft.name, draft.video, draft.voice, initialVideoPresent, initialVoicePresent]);
+
+    useEffect(() => {
+        if (!isModalOpen || !draft.id) return;
+        const snapshot = subjectDraftPayloadSnapshot(draft, categories, initialVoicePresent, initialVideoPresent);
+        if (!autosaveLastPayloadRef.current) {
+            autosaveLastPayloadRef.current = snapshot;
+            return;
+        }
+        if (snapshot === autosaveLastPayloadRef.current) return;
+        if (!draft.name.trim()) return;
+
+        autosaveVersionRef.current += 1;
+        const version = autosaveVersionRef.current;
+        const payload = subjectDraftPayload(
+            draft,
+            categories,
+            subjectDraftVoicePayload(draft, categories, initialVoicePresent),
+            subjectDraftVideoPayload(draft, categories, initialVideoPresent),
+        );
+        const syncDraftMedia = draft.images.some((image) => image.dataUrl) || Boolean(draft.voice?.dataUrl) || Boolean(draft.video?.dataUrl);
+        const runAutosave = async () => {
+            if (version !== autosaveVersionRef.current) return;
+            if (autosaveSavingRef.current) {
+                autosaveTimerRef.current = window.setTimeout(runAutosave, SUBJECT_AUTOSAVE_DELAY_MS);
+                return;
+            }
+            autosaveSavingRef.current = true;
+            try {
+                const result = await window.ipcRenderer.subjects.update(payload);
+                if (version !== autosaveVersionRef.current) return;
+                if (!result?.success || !result.subject) {
+                    throw new Error(result?.error || '自动保存失败');
+                }
+                autosaveLastPayloadRef.current = snapshot;
+                mergeSavedSubject(result.subject as SubjectRecord, syncDraftMedia);
+                setError('');
+            } catch (e) {
+                if (version === autosaveVersionRef.current) {
+                    console.error('Failed to autosave subject:', e);
+                    setError(e instanceof Error ? e.message : '自动保存失败');
+                }
+            } finally {
+                autosaveSavingRef.current = false;
+            }
+        };
+
+        if (autosaveTimerRef.current) {
+            window.clearTimeout(autosaveTimerRef.current);
+        }
+        autosaveTimerRef.current = window.setTimeout(runAutosave, SUBJECT_AUTOSAVE_DELAY_MS);
+        return () => {
+            if (autosaveTimerRef.current) {
+                window.clearTimeout(autosaveTimerRef.current);
+                autosaveTimerRef.current = null;
+            }
+        };
+    }, [categories, draft, initialVideoPresent, initialVoicePresent, isModalOpen, mergeSavedSubject]);
 
     const handleSave = useCallback(async () => {
         setWorking(true);
@@ -1259,11 +3341,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             closeModal();
         } catch (e) {
             console.error('Failed to save subject:', e);
-            setError(e instanceof Error ? e.message : `保存${draftEntityLabel}失败`);
+            setError(e instanceof Error ? e.message : '保存资产失败');
         } finally {
             setWorking(false);
         }
-    }, [closeModal, draftEntityLabel, loadData, persistDraft]);
+    }, [closeModal, loadData, persistDraft]);
 
     const handleGenerateCharacterCard = useCallback(async () => {
         setWorking(true);
@@ -1280,7 +3362,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             }
             setDraft(toDraft(result.subject as SubjectRecord));
             setInitialVoicePresent(Boolean((result.subject as SubjectRecord).voicePreviewUrl));
-            setInitialVideoPresent(Boolean((result.subject as SubjectRecord).videoPreviewUrl));
             await loadData();
         } catch (e) {
             console.error('Failed to generate character card:', e);
@@ -1293,107 +3374,549 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
     const handleDeleteSubject = useCallback(async () => {
         if (!draft.id) return;
-        if (!(await appConfirm(`删除${draftEntityLabel}“${draft.name || draft.id}”？`, { title: `删除${draftEntityLabel}`, confirmLabel: '删除', tone: 'danger' }))) return;
+        if (!(await appConfirm(`删除资产“${draft.name || draft.id}”？`, { title: '删除资产', confirmLabel: '删除', tone: 'danger' }))) return;
         setWorking(true);
         try {
             const result = await window.ipcRenderer.subjects.delete({ id: draft.id });
             if (!result?.success) {
-                throw new Error(result?.error || `删除${draftEntityLabel}失败`);
+                throw new Error(result?.error || '删除资产失败');
             }
             await loadData();
             closeModal();
         } catch (e) {
             console.error('Failed to delete subject:', e);
-            setError(e instanceof Error ? e.message : `删除${draftEntityLabel}失败`);
+            setError(e instanceof Error ? e.message : '删除资产失败');
         } finally {
             setWorking(false);
         }
-    }, [closeModal, draft.id, draft.name, draftEntityLabel, loadData]);
+    }, [closeModal, draft.id, draft.name, loadData]);
+
+    const openMediaContextMenu = useCallback((event: React.MouseEvent, asset: MediaAsset) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setMediaContextMenu({
+            visible: true,
+            x: event.clientX,
+            y: event.clientY,
+            asset,
+        });
+    }, []);
+
+    const openMediaPreview = useCallback((asset: MediaAsset) => {
+        setMediaContextMenu({ visible: false, x: 0, y: 0, asset: null });
+        setPreviewMediaAsset(asset);
+    }, []);
+
+    const handleShowMediaInFolder = useCallback(async (asset: MediaAsset) => {
+        const source = asset.absolutePath || asset.relativePath || asset.previewUrl || '';
+        if (!source) {
+            void appAlert('媒体没有可打开的文件路径');
+            return;
+        }
+        try {
+            const result = await window.ipcRenderer.files.showInFolder({ source }) as { success?: boolean; error?: string };
+            if (!result?.success) {
+                void appAlert(result?.error || '打开文件夹失败');
+            }
+        } catch (e) {
+            console.error('Failed to show media in folder:', e);
+            void appAlert('打开文件夹失败');
+        }
+    }, []);
+
+    const handleDeleteMediaAsset = useCallback(async (asset: MediaAsset) => {
+        const label = asset.title || asset.id;
+        if (!(await appConfirm(`删除媒体“${label}”？`, { title: '删除媒体', confirmLabel: '删除', tone: 'danger' }))) return;
+        try {
+            const result = await window.ipcRenderer.media.delete({ assetId: asset.id }) as { success?: boolean; error?: string };
+            if (!result?.success) {
+                void appAlert(result?.error || '删除失败');
+                return;
+            }
+            setMediaAssets((current) => current.filter((item) => item.id !== asset.id));
+            await loadData();
+        } catch (e) {
+            console.error('Failed to delete media asset:', e);
+            void appAlert('删除失败');
+        }
+    }, [loadData]);
+
+    const categoryTabs = useMemo<SubjectCategoryTab[]>(() => {
+        const customCategories = categories.filter((category) => {
+            const name = category.name.trim();
+            return !DEFAULT_SUBJECT_CATEGORY_NAMES.includes(name) && !HIDDEN_SUBJECT_CATEGORY_NAMES.has(name);
+        });
+        return [
+            ...VISIBLE_SUBJECT_CATEGORY_NAMES.map((name) => {
+                const category = categories.find((item) => item.name.trim() === name);
+                return {
+                    id: category?.id || `preset:${name}`,
+                    label: name,
+                    icon: categoryIconForName(name),
+                    disabled: !category?.id,
+                };
+            }),
+            ...customCategories.map((category) => ({
+                id: category.id,
+                label: category.name,
+                icon: categoryIconForName(category.name),
+            })),
+        ];
+    }, [categories]);
+    const activeCategoryTab = categoryTabs.find((item) => item.id === categoryFilter) || categoryTabs[0];
+    const createAssetButtonLabel = `创建${activeCategoryTab?.label || '资产'}`;
+
+    const draftCategoryName = categoryNameMap.get(draft.categoryId || '') || '';
+    const draftEntityLabel = draftCategoryName || '资产';
+    const isRoleDraft = draftCategoryName.trim() === '角色';
+    const isBrandDraft = draftCategoryName.trim() === '品牌';
+    const isProductDraft = draftCategoryName.trim() === '商品';
+    const selectedBrandName = subjectNameMap.get(draft.brandId) || '';
+    const draftPreviewImage = draft.images[0]?.previewUrl || '';
+    const draftAttributeValue = (key: string) => draft.attributes.find((item) => item.key === key)?.value || '';
+    const visibleDraftAttributes = draft.attributes
+        .map((attribute, index) => ({ attribute, index }))
+        .filter(({ attribute }) => !isRoleDraft || (attribute.key !== '性别' && attribute.key !== '年龄'));
+    const draftCategoryOptions = useMemo(() => [
+        { id: '', name: '未分类', icon: Tag },
+        ...categories
+            .filter((category) => (
+                !['品牌', '商品'].includes(category.name.trim()) || category.id === draft.categoryId
+            ))
+            .map((category) => ({
+            id: category.id,
+            name: category.name,
+            icon: categoryIconForName(category.name),
+        })),
+    ], [categories, draft.categoryId]);
+    const selectedDraftCategory = draftCategoryOptions.find((item) => item.id === draft.categoryId) || draftCategoryOptions[0];
+    const SelectedDraftCategoryIcon = selectedDraftCategory.icon;
+    const activeLibraryTab = libraryTab;
+    const showAssetControls = activeLibraryTab === 'assets';
+
+    if (productDetailContext && activeDetailBrandBundle && activeDetailProductBundle) {
+        const productCover = activeDetailProductBundle.assets.find((asset) => asset.role === 'image');
+        const productInfoImages = (productCover
+            ? [productCover, ...activeDetailProductBundle.assets.filter((asset) => asset.id !== productCover.id)]
+            : activeDetailProductBundle.assets
+        ).filter((asset) => asset.path).slice(0, 4);
+        const hasPlatforms = enabledEcommercePlatforms.length > 0;
+        const displayDetailVersion = productDetailVersionForPlatform(detailVersionDraft, activeDetailPlatform);
+        const activeDetailPlatformIcon = activeDetailPlatform ? ecommercePlatformIconPath(activeDetailPlatform.id) : '';
+        return (
+            <div className="fixed inset-0 z-[10020] flex min-h-0 flex-col bg-white">
+                <div className={clsx('shrink-0 border-b border-[rgb(var(--color-border))] bg-white', isModalVariant ? 'px-5 pb-4 pt-14' : 'px-8 pb-5 pt-14')}>
+                    <div className="flex min-w-0 items-center gap-3">
+                        <button
+                            type="button"
+                            onClick={closeProductDetailPage}
+                            disabled={isDetailPageSubmitting}
+                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[rgb(var(--color-border))] bg-white text-[rgb(var(--color-text-primary))] shadow-sm transition hover:bg-[rgb(var(--color-surface-primary))] disabled:opacity-50"
+                            aria-label="返回资产库"
+                            title="返回"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                        </button>
+                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-[rgb(var(--color-surface-secondary))]">
+                            {productCover ? (
+                                <img src={resolveAssetUrl(productCover.path)} alt={activeDetailProductBundle.product.name} className="h-full w-full object-cover" />
+                            ) : (
+                                <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
+                                    <Package className="h-5 w-5" />
+                                </div>
+                            )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                            <div className="truncate text-xs font-medium text-[rgb(var(--color-text-secondary))]">
+                                {activeDetailBrandBundle.brand.name}
+                            </div>
+                            <h2 className="mt-1 truncate text-xl font-semibold leading-none text-[rgb(var(--color-text-primary))]">
+                                {activeDetailProductBundle.product.name}
+                            </h2>
+                        </div>
+                        {activeDetailPlatform && (
+                            <div className="absolute left-1/2 hidden min-w-0 max-w-[320px] -translate-x-1/2 items-center gap-2 lg:flex">
+                                <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg">
+                                    {activeDetailPlatformIcon ? (
+                                        <img src={activeDetailPlatformIcon} alt="" className="h-5 w-5 object-contain" />
+                                    ) : (
+                                        <Box className="h-4 w-4 text-[rgb(var(--color-text-tertiary))]" />
+                                    )}
+                                </span>
+                                <div className="min-w-0">
+                                    <div className="truncate text-[11px] font-semibold text-[rgb(var(--color-text-secondary))]">
+                                        {detailVersionLabel(displayDetailVersion)}
+                                    </div>
+                                    <div className="mt-0.5 truncate text-sm font-semibold leading-none text-[rgb(var(--color-text-primary))]">
+                                        {activeDetailPlatform.name}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => void handleDownloadDetailPage()}
+                                disabled={isDetailPageDownloading || isDetailPageSubmitting || !hasPlatforms || detailImageDrafts.length === 0}
+                                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[rgb(var(--color-surface-secondary))] px-3 text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))] disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <Download className="h-4 w-4" />
+                                {isDetailPageDownloading ? '打包中' : '下载'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void handleSaveDetailPage()}
+                                disabled={isDetailPageSubmitting || !hasPlatforms}
+                                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-sm font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <Save className="h-4 w-4" />
+                                {isDetailPageSubmitting ? '保存中' : '保存'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="flex min-h-0 flex-1 bg-[rgb(var(--color-surface-primary))]">
+                    <aside className={clsx('hidden min-h-0 w-[250px] shrink-0 overflow-y-auto border-r border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] p-4 lg:block', isModalVariant && 'w-[220px]')}>
+                        <div className="mb-3 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">电商平台</div>
+                        {hasPlatforms ? (
+                            <div className="space-y-1">
+                                {enabledEcommercePlatforms.map((platform) => {
+                                    const active = activeDetailPlatform?.id === platform.id;
+                                    const iconPath = ecommercePlatformIconPath(platform.id);
+                                    return (
+                                        <button
+                                            key={platform.id}
+                                            type="button"
+                                            onClick={() => {
+                                                setSelectedDetailPlatformId(platform.id);
+                                                setSelectedDetailVersionKey('__default__');
+                                            }}
+                                            className={clsx(
+                                                'relative flex h-11 w-full items-center gap-2 rounded-xl border px-2.5 text-left text-xs font-semibold transition',
+                                                active
+                                                    ? 'border-black bg-white text-[rgb(var(--color-text-primary))] shadow-sm'
+                                                    : 'border-transparent text-[rgb(var(--color-text-secondary))] hover:border-[rgb(var(--color-border))] hover:bg-white hover:text-[rgb(var(--color-text-primary))]'
+                                            )}
+                                        >
+                                            {active && <span className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-black" />}
+                                            <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white">
+                                                {iconPath ? (
+                                                    <img src={iconPath} alt="" className="h-4 w-4 object-contain" />
+                                                ) : (
+                                                    <Box className="h-3.5 w-3.5" />
+                                                )}
+                                            </span>
+                                            <span className="min-w-0 flex-1 truncate">{platform.name}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <div className="rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-white px-3 py-3 text-xs leading-5 text-[rgb(var(--color-text-secondary))]">
+                                先在设置里开启电商平台。
+                            </div>
+                        )}
+                    </aside>
+
+                    <main className="min-w-0 flex-1 overflow-y-auto bg-white">
+                        <div className={clsx('mx-auto min-h-full w-full max-w-[1180px] space-y-5 bg-white py-5 pb-10', isModalVariant ? 'px-5' : 'px-8')}>
+                            <div className="flex gap-2 overflow-x-auto pb-1 lg:hidden">
+                                {enabledEcommercePlatforms.map((platform) => {
+                                    const active = activeDetailPlatform?.id === platform.id;
+                                    const iconPath = ecommercePlatformIconPath(platform.id);
+                                    return (
+                                        <button
+                                            key={platform.id}
+                                            type="button"
+                                            onClick={() => {
+                                                setSelectedDetailPlatformId(platform.id);
+                                                setSelectedDetailVersionKey('__default__');
+                                            }}
+                                            className={clsx(
+                                                'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-semibold transition',
+                                                active
+                                                    ? 'border-black bg-black text-white shadow-sm'
+                                                    : 'border-transparent bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-primary))]'
+                                            )}
+                                        >
+                                            {iconPath && <img src={iconPath} alt="" className="h-4 w-4 rounded-sm object-contain" />}
+                                            {platform.name}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {error && (
+                                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                                    {error}
+                                </div>
+                            )}
+
+                            {hasPlatforms && activeDetailPlatform ? (
+                                <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+                                    <div className="min-w-0 space-y-5">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            {detailVersionOptions.map((option) => {
+                                                const active = selectedDetailVersionKey === option.key
+                                                    || (!detailVersionOptions.some((item) => item.key === selectedDetailVersionKey) && activeDetailVersionOption?.key === option.key);
+                                                return (
+                                                    <button
+                                                        key={option.key}
+                                                        type="button"
+                                                        onClick={() => handleSelectDetailVersion(option)}
+                                                        className={clsx(
+                                                            'inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold transition',
+                                                            active
+                                                                ? 'bg-black text-white'
+                                                                : 'bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-primary))] hover:bg-[rgb(var(--color-surface-tertiary))]'
+                                                        )}
+                                                    >
+                                                        {detailVersionLabel(option)}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-3">
+                                            <label className="block">
+                                                <div className="mb-1.5 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">标题</div>
+                                                <input
+                                                    value={detailVersionDraft.title}
+                                                    onChange={(event) => setDetailVersionDraft((current) => ({ ...current, title: event.target.value }))}
+                                                    placeholder={`${activeDetailPlatform.name} 商品详情`}
+                                                    className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                />
+                                            </label>
+                                        </div>
+
+                                        <section className="space-y-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">商品详情页</div>
+                                                    <div className="mt-0.5 text-xs text-[rgb(var(--color-text-secondary))]">由 AI 根据商品资料生成</div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handleGenerateDetailPage()}
+                                                    disabled={isActiveDetailPageGenerating || isDetailPageSubmitting}
+                                                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-xs font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    <Sparkles className={clsx('h-3.5 w-3.5', isActiveDetailPageGenerating && 'animate-pulse')} />
+                                                    {isActiveDetailPageGenerating ? '生成中' : 'AI生成详情页'}
+                                                </button>
+                                            </div>
+
+                                            {detailImageDrafts.length === 0 && isActiveDetailPageGenerating ? (
+                                                <div className="space-y-4">
+                                                    {Array.from({ length: 3 }).map((_, index) => (
+                                                        <div key={`detail-page-loading-${index}`} className="relative aspect-[3/4] overflow-hidden bg-[rgb(var(--color-surface-secondary))]">
+                                                            <div className="absolute inset-0 animate-pulse bg-gradient-to-b from-[rgb(var(--color-surface-secondary))] via-white to-[rgb(var(--color-surface-secondary))]" />
+                                                            <div className="absolute left-4 top-4 h-3 w-24 animate-pulse bg-white/80" />
+                                                            <div className="absolute left-4 top-10 h-2 w-36 animate-pulse bg-white/70" />
+                                                            <div className="absolute bottom-5 left-4 right-4 h-24 animate-pulse bg-white/65" />
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : detailImageDrafts.length === 0 ? (
+                                                <div className="flex min-h-[360px] flex-col items-center justify-center rounded-xl border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-center text-[rgb(var(--color-text-secondary))]">
+                                                    <Sparkles className="mb-3 h-10 w-10 stroke-[1.6]" />
+                                                    <div className="text-sm font-semibold">还没有生成详情页</div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleGenerateDetailPage()}
+                                                        disabled={isActiveDetailPageGenerating || isDetailPageSubmitting}
+                                                        className="mt-4 inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-xs font-semibold text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        <Sparkles className={clsx('h-3.5 w-3.5', isActiveDetailPageGenerating && 'animate-pulse')} />
+                                                        {isActiveDetailPageGenerating ? '生成中' : 'AI生成详情页'}
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <div className="space-y-4">
+                                                    {detailImageDrafts.map((image, index) => (
+                                                        <div key={`${image.path || image.name}-${index}`} className="group relative overflow-hidden bg-[rgb(var(--color-surface-secondary))] shadow-sm">
+                                                            <img
+                                                                src={resolveAssetUrl(image.previewUrl)}
+                                                                alt={image.name}
+                                                                className="block h-auto w-full object-contain"
+                                                            />
+                                                            <div className="absolute left-2 top-2 rounded-md bg-black/60 px-2 py-1 text-[10px] font-semibold text-white">
+                                                                {index + 1}
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleRemoveDetailImage(index)}
+                                                                className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                                                                aria-label="删除详情页"
+                                                            >
+                                                                <X className="h-4 w-4" />
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                    {isActiveDetailPageGenerating && (
+                                                        <>
+                                                            {Array.from({ length: 2 }).map((_, index) => (
+                                                                <div key={`detail-page-loading-more-${index}`} className="relative aspect-[3/4] overflow-hidden bg-[rgb(var(--color-surface-secondary))]">
+                                                                    <div className="absolute inset-0 animate-pulse bg-gradient-to-b from-[rgb(var(--color-surface-secondary))] via-white to-[rgb(var(--color-surface-secondary))]" />
+                                                                    <div className="absolute left-4 top-4 h-3 w-24 animate-pulse bg-white/80" />
+                                                                    <div className="absolute left-4 top-10 h-2 w-36 animate-pulse bg-white/70" />
+                                                                    <div className="absolute bottom-5 left-4 right-4 h-24 animate-pulse bg-white/65" />
+                                                                </div>
+                                                            ))}
+                                                        </>
+                                                    )}
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleGenerateDetailPage()}
+                                                        disabled={isActiveDetailPageGenerating || isDetailPageSubmitting}
+                                                        className="flex min-h-[88px] w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-xs font-semibold text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))] disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        <Sparkles className={clsx('h-4 w-4', isActiveDetailPageGenerating && 'animate-pulse')} />
+                                                        {isActiveDetailPageGenerating ? '生成中' : '再生成一版'}
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </section>
+                                    </div>
+
+                                    <aside className="h-fit rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] p-3 xl:sticky xl:top-5">
+                                        <div className="mb-3 text-xs font-semibold text-[rgb(var(--color-text-secondary))]">商品资料</div>
+                                        <div className="grid grid-cols-4 gap-1.5">
+                                            {productInfoImages.map((asset) => (
+                                                <div key={asset.id} className="aspect-square overflow-hidden rounded-lg bg-white">
+                                                    <img src={resolveAssetUrl(asset.path)} alt="" className="h-full w-full object-cover" />
+                                                </div>
+                                            ))}
+                                            {productInfoImages.length === 0 && (
+                                                <div className="col-span-4 flex aspect-[4/3] items-center justify-center rounded-lg bg-white text-[rgb(var(--color-text-tertiary))]">
+                                                    <Package className="h-6 w-6" />
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="mt-3 space-y-2">
+                                            <div>
+                                                <div className="text-[11px] text-[rgb(var(--color-text-secondary))]">品牌</div>
+                                                <div className="truncate text-sm font-semibold text-[rgb(var(--color-text-primary))]">{activeDetailBrandBundle.brand.name}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-[11px] text-[rgb(var(--color-text-secondary))]">商品</div>
+                                                <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">{activeDetailProductBundle.product.name}</div>
+                                            </div>
+                                            {activeDetailProductBundle.product.description && (
+                                                <div className="text-xs leading-5 text-[rgb(var(--color-text-secondary))]">
+                                                    {activeDetailProductBundle.product.description}
+                                                </div>
+                                            )}
+                                            <div className="flex flex-wrap gap-1">
+                                                {activeDetailProductBundle.skus.length === 0 ? (
+                                                    <span className="rounded-md bg-white px-2 py-1 text-[11px] font-medium text-[rgb(var(--color-text-secondary))]">暂无 SKU</span>
+                                                ) : activeDetailProductBundle.skus.slice(0, 6).map((sku) => (
+                                                    <span key={sku.id} className="rounded-md bg-white px-2 py-1 text-[11px] font-medium text-[rgb(var(--color-text-secondary))]">
+                                                        {sku.name}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                            <div className="rounded-lg bg-white px-2.5 py-2 text-[11px] leading-5 text-[rgb(var(--color-text-secondary))]">
+                                                {activeDetailPlatform.name} · {detailVersionLabel(displayDetailVersion)}
+                                            </div>
+                                        </div>
+                                    </aside>
+                                </div>
+                            ) : (
+                                <div className="flex min-h-[54vh] flex-col items-center justify-center text-center text-[rgb(var(--color-text-secondary))]">
+                                    <Box className="mb-4 h-12 w-12 stroke-[1.8]" />
+                                    <div className="text-sm font-semibold">没有启用的电商平台</div>
+                                </div>
+                            )}
+                        </div>
+                    </main>
+                </div>
+            </div>
+        );
+    }
 
     return (
-        <div className="h-full flex flex-col bg-background">
-            <div className="border-b border-border px-4 py-2 bg-surface-secondary/45">
-                <div className="flex items-center gap-2 min-w-0">
+        <div className="flex h-full min-h-0 flex-col bg-white">
+            <div className={clsx(isModalVariant ? 'px-5 pt-4 pb-3' : 'px-8 pt-6 pb-4')}>
+                <div className="flex items-center gap-3">
                     {!isModalVariant && onReturnHome && (
                         <button
                             type="button"
                             onClick={onReturnHome}
-                            className="h-7 w-7 rounded-md border border-border bg-surface-primary text-text-secondary hover:bg-surface-secondary hover:text-text-primary inline-flex items-center justify-center shrink-0"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[rgb(var(--color-border))] bg-white text-[rgb(var(--color-text-primary))] shadow-sm transition hover:bg-[rgb(var(--color-surface-primary))] hover:text-[rgb(var(--color-text-primary))]"
                             aria-label="返回主页"
                             title="返回主页"
                         >
-                            <ArrowLeft className="w-3.5 h-3.5" />
+                            <ArrowLeft className="h-4 w-4" />
                         </button>
                     )}
-                    <div className="w-7 h-7 rounded-md bg-accent-primary/15 border border-accent-primary/20 text-accent-primary flex items-center justify-center shrink-0">
-                        <Package className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0">
-                        <h1 className="text-base leading-none font-semibold text-text-primary">资产库</h1>
-                        <div className="text-[11px] mt-0.5 text-text-tertiary truncate">媒体、资产和长期素材统一管理，便于创作时直接调用参考</div>
-                    </div>
-
-                    <div className="hidden xl:flex items-center gap-1.5 min-w-0 ml-2">
-                        <span className="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface-primary/70 text-text-secondary whitespace-nowrap">
-                            媒体 {mediaAssets.length}
-                        </span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface-primary/70 text-text-secondary whitespace-nowrap">
-                            资产 {subjects.length}
-                        </span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface-primary/70 text-text-secondary whitespace-nowrap">
-                            分类 {categories.length}
-                        </span>
-                    </div>
-
-                    <div className="ml-auto flex items-center gap-1.5">
+                    <h1 className={clsx('leading-none font-semibold tracking-[0.01em] text-[rgb(var(--color-text-primary))]', isModalVariant ? 'text-[20px]' : 'text-[26px]')}>资产库</h1>
+                    <div className="ml-auto flex items-center gap-3">
                         <button
                             onClick={() => void loadData()}
-                            className="h-7 px-2.5 text-[11px] rounded-md border border-border hover:bg-surface-secondary text-text-secondary"
+                            className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]"
                         >
-                            <span className="inline-flex items-center gap-1">
-                                <RefreshCw className={clsx('w-3.5 h-3.5', loading && 'animate-spin')} />
-                                刷新
-                            </span>
+                            <RefreshCw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} />
+                            刷新
                         </button>
-                        {activeLibraryTab === 'media' && (
+                        {!isBrandCategoryView && (
+                        <div className="inline-flex rounded-xl bg-[rgb(var(--color-surface-secondary))] p-1">
                             <button
-                                onClick={() => void handleImportMediaAssets()}
-                                className="h-7 px-2.5 text-[11px] rounded-md border border-accent-primary/30 bg-accent-primary/10 hover:bg-accent-primary/15 text-accent-primary"
+                                type="button"
+                                onClick={() => setViewMode('grid')}
+                                className={clsx(
+                                    'inline-flex h-8 w-8 items-center justify-center rounded-lg transition',
+                                    viewMode === 'grid' ? 'bg-white text-[rgb(var(--color-text-primary))] shadow-sm' : 'text-[rgb(var(--color-text-secondary))] hover:text-[rgb(var(--color-text-primary))]'
+                                )}
+                                aria-label="网格视图"
+                                title="网格视图"
                             >
-                                <span className="inline-flex items-center gap-1">
-                                    <ImagePlus className="w-3.5 h-3.5" />
-                                    导入
-                                </span>
+                                <Grid2X2 className="h-4 w-4" />
                             </button>
-                        )}
-                        {activeLibraryTab === 'assets' && (
                             <button
-                                onClick={openCreateModal}
-                                className="h-7 px-2.5 text-[11px] rounded-md border border-accent-primary/30 bg-accent-primary/10 hover:bg-accent-primary/15 text-accent-primary"
+                                type="button"
+                                onClick={() => setViewMode('list')}
+                                className={clsx(
+                                    'inline-flex h-8 w-8 items-center justify-center rounded-lg transition',
+                                    viewMode === 'list' ? 'bg-white text-[rgb(var(--color-text-primary))] shadow-sm' : 'text-[rgb(var(--color-text-secondary))] hover:text-[rgb(var(--color-text-primary))]'
+                                )}
+                                aria-label="列表视图"
+                                title="列表视图"
                             >
-                                <span className="inline-flex items-center gap-1">
-                                    <Plus className="w-3.5 h-3.5" />
-                                    {createAssetButtonLabel}
-                                </span>
+                                <List className="h-4 w-4" />
+                            </button>
+                        </div>
+                        )}
+                        {!showAssetControls && (
+                            <button
+                                type="button"
+                                onClick={() => setFilterOpen((value) => !value)}
+                                className={clsx(
+                                    'inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-[rgb(var(--color-text-primary))] transition',
+                                    filterOpen || query ? 'bg-[rgb(var(--color-surface-tertiary))]' : 'bg-[rgb(var(--color-surface-secondary))] hover:bg-[rgb(var(--color-surface-tertiary))]'
+                                )}
+                            >
+                                <SlidersHorizontal className="h-4 w-4" />
+                                筛选
                             </button>
                         )}
                         {isModalVariant && onClose && (
                             <button
                                 type="button"
                                 onClick={onClose}
-                                className="h-7 w-7 rounded-md border border-border bg-surface-primary text-text-secondary hover:bg-surface-secondary hover:text-text-primary inline-flex items-center justify-center"
-                                title="关闭资产库"
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
                                 aria-label="关闭资产库"
+                                title="关闭"
                             >
-                                <X className="w-3.5 h-3.5" />
+                                <X className="h-4 w-4" />
                             </button>
                         )}
                     </div>
                 </div>
             </div>
 
-            <div className="px-6 py-3 border-b border-border bg-surface-secondary/20 space-y-3">
-                <div className="flex items-center gap-1">
+            <div className={clsx('flex items-center gap-1 border-b border-[rgb(var(--color-border))] pb-2', isModalVariant ? 'mx-5' : 'mx-8')}>
                     {([
                         { id: 'media' as const, label: '媒体', icon: Clapperboard, count: mediaAssets.length },
                         { id: 'assets' as const, label: '资产', icon: Package, count: subjects.length },
@@ -1404,107 +3927,88 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             <button
                                 key={item.id}
                                 type="button"
-                                onClick={() => setActiveLibraryTab(item.id)}
+                                onClick={() => setLibraryTab(item.id)}
                                 className={clsx(
-                                    'inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-[12px] font-semibold transition-colors',
-                                    active
-                                        ? 'bg-[rgb(var(--color-text-primary))] text-white'
-                                        : 'text-text-secondary hover:bg-surface-primary hover:text-text-primary'
+                                    'inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition',
+                                    active ? 'bg-[rgb(var(--color-text-primary))] text-white' : 'text-[rgb(var(--color-text-secondary))] hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]'
                                 )}
                             >
                                 <Icon className="h-3.5 w-3.5" />
                                 {item.label}
-                                <span className={clsx('text-[10px]', active ? 'text-white/70' : 'text-text-tertiary')}>{item.count}</span>
+                                <span className={clsx('text-[10px]', active ? 'text-white/70' : 'text-[rgb(var(--color-text-tertiary))]')}>{item.count}</span>
                             </button>
                         );
                     })}
                 </div>
-                <div className="flex flex-col lg:flex-row lg:items-center gap-2">
-                    <div className="relative flex-1 min-w-0">
-                        <Search className="w-4 h-4 text-text-tertiary absolute left-3 top-1/2 -translate-y-1/2" />
+
+            {showAssetControls && (
+            <div className={clsx('flex min-h-[48px] items-end border-b border-[rgb(var(--color-border))]', isModalVariant ? 'mx-5' : 'mx-8')}>
+                <div className="flex min-w-0 flex-1 items-end gap-6 overflow-x-auto no-scrollbar">
+                    {categoryTabs.map((item) => {
+                        const active = categoryFilter === item.id;
+                        const Icon = item.icon;
+                        return (
+                            <button
+                                key={item.id}
+                                onClick={() => {
+                                    if (!item.disabled) setCategoryFilter(item.id);
+                                }}
+                                disabled={item.disabled}
+                                className={clsx(
+                                    'inline-flex h-10 items-center gap-2 border-b-2 px-0 pb-3 text-sm font-semibold transition-colors',
+                                    active
+                                        ? 'border-black text-[rgb(var(--color-text-primary))]'
+                                        : 'border-transparent text-[rgb(var(--color-text-secondary))] hover:text-[rgb(var(--color-text-primary))]',
+                                    item.disabled && 'cursor-wait opacity-50'
+                                )}
+                            >
+                                <Icon className="h-4 w-4" />
+                                {item.label}
+                            </button>
+                        );
+                    })}
+                    <button
+                        onClick={openCreateCategoryDialog}
+                        className="mb-3 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
+                        aria-label="新建分类"
+                        title="新建分类"
+                    >
+                        <Plus className="h-4 w-4" />
+                    </button>
+                </div>
+                <div className="mb-3 ml-auto flex shrink-0 items-center gap-4">
+                    <div className="hidden items-center gap-1.5 text-xs font-medium text-[rgb(var(--color-text-secondary))] md:inline-flex">
+                        <CalendarClock className="h-4 w-4" />
+                        按时间倒序展示
+                    </div>
+                    <div className="h-4 w-px bg-[rgb(var(--color-surface-tertiary))]" />
+                    <button
+                        type="button"
+                        onClick={openCreateModal}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-sm font-semibold text-white transition hover:bg-black/88"
+                    >
+                        <Plus className="h-4 w-4" />
+                        {createAssetButtonLabel}
+                    </button>
+                </div>
+            </div>
+            )}
+
+            {filterOpen && (
+                <div className={clsx('border-b border-[rgb(var(--color-border))] py-3', isModalVariant ? 'mx-5' : 'mx-8')}>
+                    <div className="relative max-w-[420px]">
+                        <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[rgb(var(--color-text-tertiary))]" />
                         <input
                             value={query}
                             onChange={(event) => setQuery(event.target.value)}
-                            placeholder={activeLibraryTab === 'media' ? '搜索媒体标题、项目、稿件、路径' : '搜索资产名称、标签、属性、描述'}
-                            className="w-full pl-9 pr-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                            placeholder={activeLibraryTab === 'media' ? '搜索媒体标题、项目、稿件、路径' : '搜索名称、标签、属性、描述'}
+                            className="h-9 w-full rounded-lg border border-[rgb(var(--color-border))] bg-white pl-10 pr-3 text-sm text-[rgb(var(--color-text-primary))] outline-none transition focus:border-[rgb(var(--color-border))]"
                         />
                     </div>
-                    {activeLibraryTab === 'assets' && (
-                        <div className="inline-flex h-9 shrink-0 rounded-lg border border-border bg-surface-primary p-1">
-                            <button
-                                type="button"
-                                onClick={() => setSubjectViewMode('grid')}
-                                className={clsx(
-                                    'inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors',
-                                    subjectViewMode === 'grid'
-                                        ? 'bg-surface-secondary text-text-primary'
-                                        : 'text-text-tertiary hover:text-text-primary'
-                                )}
-                                title="网格视图"
-                                aria-label="网格视图"
-                            >
-                                <Grid2X2 className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setSubjectViewMode('list')}
-                                className={clsx(
-                                    'inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors',
-                                    subjectViewMode === 'list'
-                                        ? 'bg-surface-secondary text-text-primary'
-                                        : 'text-text-tertiary hover:text-text-primary'
-                                )}
-                                title="列表视图"
-                                aria-label="列表视图"
-                            >
-                                <ListIcon className="h-3.5 w-3.5" />
-                            </button>
-                        </div>
-                    )}
                 </div>
+            )}
 
-                {activeLibraryTab === 'assets' && (
-                    <div className="flex min-h-[46px] items-end gap-4">
-                        <div className="flex min-w-0 flex-1 items-end gap-5 overflow-x-auto">
-                            {subjectCategoryTabs.map((item) => {
-                                const active = categoryFilter === item.id;
-                                const Icon = item.icon;
-                                return (
-                                    <button
-                                        key={item.id}
-                                        type="button"
-                                        onClick={() => void selectSubjectCategoryTab(item)}
-                                        className={clsx(
-                                            'inline-flex h-10 shrink-0 items-center gap-2 border-b-2 pb-3 text-sm font-semibold transition-colors',
-                                            active
-                                                ? 'border-[rgb(var(--color-text-primary))] text-text-primary'
-                                                : 'border-transparent text-text-secondary hover:text-text-primary'
-                                        )}
-                                    >
-                                        <Icon className="h-4 w-4" />
-                                        {item.label}
-                                        <span className="text-[10px] text-text-tertiary">{categoryStats.get(item.id) || 0}</span>
-                                    </button>
-                                );
-                            })}
-                            <button
-                                onClick={openCreateCategoryDialog}
-                                className="mb-3 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-text-secondary transition hover:bg-surface-primary hover:text-text-primary"
-                                aria-label="新建分类"
-                                title="新建分类"
-                            >
-                                <Plus className="h-4 w-4" />
-                            </button>
-                        </div>
-                        <div className="mb-3 hidden shrink-0 items-center gap-1.5 text-xs font-medium text-text-secondary md:inline-flex">
-                            <CalendarClock className="h-4 w-4" />
-                            按时间倒序展示
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            <div className="flex-1 overflow-auto p-6">
+            <div className={clsx('min-h-0 flex-1 overflow-auto py-5', isModalVariant ? 'px-5' : 'px-8')}>
                 {error && !isModalOpen && (
                     <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                         {error}
@@ -1513,16 +4017,19 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
                 {activeLibraryTab === 'media' ? (
                     loading && mediaAssets.length === 0 ? (
-                        <div className="text-sm text-text-tertiary">媒体加载中...</div>
+                        <div className="text-sm text-[rgb(var(--color-text-secondary))]">媒体加载中...</div>
                     ) : filteredMediaAssets.length === 0 ? (
-                        <div className={clsx('flex flex-col items-center justify-center text-center text-text-secondary', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
+                        <div className={clsx('flex flex-col items-center justify-center text-center text-[rgb(var(--color-text-secondary))]', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
                             <Clapperboard className="mb-4 h-12 w-12 stroke-[1.8]" />
                             <div className="text-sm font-medium">暂无媒体</div>
                         </div>
-                    ) : (
-                        <div className="space-y-4">
-                            <div className="columns-2 sm:columns-3 lg:columns-4 xl:columns-5 2xl:columns-6" style={{ columnGap: '0.625rem' }}>
+                    ) : viewMode === 'grid' ? (
+                        <>
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                                 {filteredMediaAssets.map((asset) => {
+                                    const sourceUrl = mediaAssetSourceUrl(asset);
+                                    const previewUrl = resolveAssetUrl(asset.thumbnailUrl || sourceUrl);
+                                    const source = normalizeMediaSource(asset.source);
                                     return (
                                         <div
                                             key={asset.id}
@@ -1535,101 +4042,276 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 event.preventDefault();
                                                 openMediaPreview(asset);
                                             }}
-                                            aria-label={asset.title || asset.id}
-                                            className="group mb-2.5 block w-full break-inside-avoid overflow-hidden rounded-lg border border-border bg-surface-primary text-left shadow-sm transition hover:shadow-md focus:outline-none focus:ring-2 focus:ring-accent-primary/30"
+                                            className="overflow-hidden rounded-lg border border-border bg-surface-primary text-left shadow-sm transition hover:shadow-md"
                                         >
-                                            <MediaMasonryThumb asset={asset} />
+                                            <div className="aspect-video overflow-hidden bg-surface-secondary/50">
+                                                {previewUrl && asset.exists ? (
+                                                    isAudioAsset(asset) ? (
+                                                        <AudioMediaThumb src={sourceUrl} />
+                                                    ) : isVideoAsset(asset) ? (
+                                                        <VideoMediaThumb
+                                                            sourceUrl={sourceUrl}
+                                                            thumbnailUrl={asset.thumbnailUrl}
+                                                            label={asset.title || asset.id}
+                                                        />
+                                                    ) : (
+                                                        <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
+                                                    )
+                                                ) : (
+                                                    <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+                                                        <Clapperboard className="h-6 w-6" />
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="space-y-1.5 p-2.5">
+                                                <div className="truncate text-xs font-semibold text-text-primary">{asset.title || asset.id}</div>
+                                                <div className="truncate text-[11px] text-text-tertiary">
+                                                    {asset.projectId || '未设置项目ID'}
+                                                </div>
+                                                <div className="flex items-center justify-between gap-2 text-[10px] text-text-tertiary">
+                                                    <span>{MEDIA_SOURCE_LABEL[source]}</span>
+                                                    <span>{mediaAssetKindLabel(asset)}</span>
+                                                </div>
+                                            </div>
                                         </div>
                                     );
                                 })}
                             </div>
-                            {mediaNextCursor && (
-                                <div className="flex justify-center">
-                                    <button
-                                        type="button"
-                                        onClick={() => void loadMoreMediaAssets()}
-                                        disabled={isLoadingMoreMedia}
-                                        className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-surface-primary px-3 text-xs text-text-secondary transition hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                        <RefreshCw className={clsx('h-3.5 w-3.5', isLoadingMoreMedia && 'animate-spin')} />
-                                        {isLoadingMoreMedia ? '加载中' : '加载更多'}
-                                    </button>
-                                </div>
-                            )}
-                        </div>
+                            {mediaLoadMoreControl}
+                        </>
+                    ) : (
+                        <>
+                            <div className="divide-y divide-[rgb(var(--color-border))] rounded-xl border border-[rgb(var(--color-border))] bg-white">
+                                {filteredMediaAssets.map((asset) => {
+                                    const sourceUrl = mediaAssetSourceUrl(asset);
+                                    const previewUrl = resolveAssetUrl(asset.thumbnailUrl || sourceUrl);
+                                    const source = normalizeMediaSource(asset.source);
+                                    return (
+                                        <button
+                                            key={asset.id}
+                                            type="button"
+                                            onClick={() => openMediaPreview(asset)}
+                                            onContextMenu={(event) => openMediaContextMenu(event, asset)}
+                                            className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-primary))]"
+                                        >
+                                            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
+                                                {previewUrl && asset.exists ? (
+                                                    isAudioAsset(asset) ? (
+                                                        <AudioMediaThumb src={sourceUrl} compact />
+                                                    ) : isVideoAsset(asset) ? (
+                                                        <VideoMediaThumb
+                                                            sourceUrl={sourceUrl}
+                                                            thumbnailUrl={asset.thumbnailUrl}
+                                                            label={asset.title || asset.id}
+                                                        />
+                                                    ) : (
+                                                        <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
+                                                    )
+                                                ) : (
+                                                    <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
+                                                        <Clapperboard className="h-5 w-5" />
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                                <div className="truncate text-xs font-semibold text-[rgb(var(--color-text-primary))]">{asset.title || asset.id}</div>
+                                                <div className="mt-0.5 truncate text-[11px] text-[rgb(var(--color-text-secondary))]">
+                                                    {MEDIA_SOURCE_LABEL[source]} · {asset.projectId || '未设置项目ID'}
+                                                    {asset.boundManuscriptPath ? ` · ${asset.boundManuscriptPath}` : ''}
+                                                </div>
+                                            </div>
+                                            <div className="hidden text-xs text-[rgb(var(--color-text-tertiary))] md:block">
+                                                {formatAssetDate(asset.updatedAt || asset.createdAt)}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            {mediaLoadMoreControl}
+                        </>
                     )
                 ) : loading && subjects.length === 0 && categories.length === 0 ? (
-                    <div className="text-sm text-text-tertiary">资产库加载中...</div>
+                    <div className="text-sm text-[rgb(var(--color-text-secondary))]">资产库加载中...</div>
+                ) : isBrandCategoryView ? (
+                    filteredBrandSubjects.length === 0 ? (
+                        <div className={clsx('flex flex-col items-center justify-center text-center text-[rgb(var(--color-text-secondary))]', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
+                            {brandWorkspaceError ? (
+                                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                                    {brandWorkspaceError}
+                                </div>
+                            ) : (
+                                <>
+                                    <Building2 className="mb-4 h-12 w-12 stroke-[1.8]" />
+                                    <div className="text-sm font-medium">暂无品牌</div>
+                                </>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="space-y-2">
+                            {brandWorkspaceError && (
+                                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                                    {brandWorkspaceError}
+                                </div>
+                            )}
+                            <div className="divide-y divide-[rgb(var(--color-border))] rounded-xl border border-[rgb(var(--color-border))] bg-white">
+                            {filteredBrandSubjects.map((bundle) => {
+                                const { brand, assets, products } = bundle;
+                                const expanded = expandedBrandIds.has(brand.id);
+                                const brandImage = assets.find((asset) => asset.role === 'image');
+                                return (
+                                    <div key={brand.id} className="bg-white">
+                                        <div className="flex items-center gap-3 px-3 py-2.5">
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleBrandExpanded(brand.id)}
+                                                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
+                                                aria-label={expanded ? '收起品牌商品' : '展开品牌商品'}
+                                                title={expanded ? '收起' : '展开'}
+                                            >
+                                                <ChevronDown className={clsx('h-4 w-4 transition-transform', !expanded && '-rotate-90')} />
+                                            </button>
+                                            <div className="h-11 w-11 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
+                                                {brandImage ? (
+                                                    <img src={resolveAssetUrl(brandImage.path)} alt={brand.name} className="h-full w-full object-cover" />
+                                                ) : (
+                                                    <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
+                                                        <Building2 className="h-5 w-5" />
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleBrandExpanded(brand.id)}
+                                                className="min-w-0 flex-1 text-left"
+                                            >
+                                                <div className="truncate text-sm font-semibold text-[rgb(var(--color-text-primary))]">{brand.name}</div>
+                                                <div className="mt-0.5 truncate text-[11px] text-[rgb(var(--color-text-secondary))]">
+                                                    {products.length} 个商品
+                                                    {brand.description ? ` · ${brand.description}` : ''}
+                                                </div>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => openEditBrandModal(brand, assets)}
+                                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
+                                                aria-label="编辑品牌"
+                                                title="编辑品牌"
+                                            >
+                                                <Pencil className="h-4 w-4" />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => openCreateProductModal(brand)}
+                                                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-black px-3 text-xs font-semibold text-white transition hover:bg-black/85"
+                                            >
+                                                <Plus className="h-3.5 w-3.5" />
+                                                商品
+                                            </button>
+                                        </div>
+                                        {expanded && (
+                                            <div className="border-t border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] px-3 py-2">
+                                                {products.length === 0 ? (
+                                                    <div className="rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-white px-3 py-3 text-xs text-[rgb(var(--color-text-secondary))]">
+                                                        还没有商品
+                                                    </div>
+                                                ) : (
+                                                    <div className="space-y-1.5">
+                                                        {products.map((productBundle) => {
+                                                            const { product, skus, assets } = productBundle;
+                                                            const productImage = assets.find((asset) => asset.role === 'image');
+                                                            const detailThumbnails = productDetailThumbnailsByProductId.get(product.id) || [];
+                                                            return (
+                                                            <div
+                                                                key={product.id}
+                                                                role="button"
+                                                                tabIndex={0}
+                                                                onClick={() => openProductDetailPage(brand, productBundle)}
+                                                                onKeyDown={(event) => {
+                                                                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                                                                    event.preventDefault();
+                                                                    openProductDetailPage(brand, productBundle);
+                                                                }}
+                                                                className="flex w-full items-center gap-3 rounded-lg bg-white px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-secondary))]"
+                                                            >
+                                                                <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
+                                                                    {productImage ? (
+                                                                        <img src={resolveAssetUrl(productImage.path)} alt={product.name} className="h-full w-full object-cover" />
+                                                                    ) : (
+                                                                        <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
+                                                                            <Package className="h-4 w-4" />
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                <div className="min-w-0 flex-1">
+                                                                    <div className="truncate text-xs font-semibold text-[rgb(var(--color-text-primary))]">{product.name}</div>
+                                                                    <div className="mt-0.5 truncate text-[11px] text-[rgb(var(--color-text-secondary))]">
+                                                                        {skus.length} 个SKU
+                                                                        {product.description ? ` · ${product.description}` : ''}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="hidden min-w-0 shrink-0 items-center gap-1 sm:flex">
+                                                                    {detailThumbnails.slice(0, 4).map((asset) => (
+                                                                        <div key={asset.id} className="h-8 w-8 overflow-hidden rounded-md bg-[rgb(var(--color-surface-secondary))]">
+                                                                            <img src={resolveAssetUrl(asset.path)} alt="" className="h-full w-full object-cover" />
+                                                                        </div>
+                                                                    ))}
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={(event) => {
+                                                                            event.stopPropagation();
+                                                                            openProductDetailPage(brand, productBundle);
+                                                                        }}
+                                                                        className="inline-flex h-8 items-center gap-1 rounded-md border border-dashed border-[rgb(var(--color-border))] px-2 text-[11px] font-semibold text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-primary))] hover:text-[rgb(var(--color-text-primary))]"
+                                                                    >
+                                                                        <ImagePlus className="h-3.5 w-3.5" />
+                                                                        详情图
+                                                                    </button>
+                                                                </div>
+                                                                <div className="hidden text-xs text-[rgb(var(--color-text-tertiary))] md:block">
+                                                                    {new Date(product.updatedAt).toLocaleDateString()}
+                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={(event) => {
+                                                                        event.stopPropagation();
+                                                                        openEditProductModal(brand, productBundle);
+                                                                    }}
+                                                                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
+                                                                    aria-label="编辑商品"
+                                                                    title="编辑商品"
+                                                                >
+                                                                    <Pencil className="h-4 w-4" />
+                                                                </button>
+                                                            </div>
+                                                        );})}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                            </div>
+                        </div>
+                    )
                 ) : filteredSubjects.length === 0 ? (
-                    <div className={clsx('flex flex-col items-center justify-center text-center text-text-secondary', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
+                    <div className={clsx('flex flex-col items-center justify-center text-center text-[rgb(var(--color-text-secondary))]', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
                         <CalendarClock className="mb-4 h-12 w-12 stroke-[1.8]" />
                         <div className="text-sm font-medium">暂无数据，尝试刷新</div>
-                        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 text-xs text-text-secondary">已加载全部</div>
+                        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 text-xs text-[rgb(var(--color-text-secondary))]">已加载全部</div>
                     </div>
-                ) : subjectViewMode === 'list' ? (
-                    <div className="space-y-2">
-                        {filteredSubjects.map((subject) => (
-                            <button
-                                key={subject.id}
-                                type="button"
-                                onClick={() => openEditModal(subject)}
-                                className="flex w-full items-center gap-3 rounded-xl border border-border bg-surface-primary p-3 text-left shadow-sm transition-colors hover:bg-surface-secondary/40"
-                            >
-                                <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-surface-secondary/60">
-                                    {subject.primaryPreviewUrl ? (
-                                        <img
-                                            src={resolveAssetUrl(subject.primaryPreviewUrl)}
-                                            alt={subject.name}
-                                            className="h-full w-full object-cover"
-                                        />
-                                    ) : (
-                                        <div className="flex h-full w-full items-center justify-center text-text-tertiary">
-                                            <Package className="h-6 w-6" />
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                    <div className="flex min-w-0 items-center gap-2">
-                                        <div className="truncate text-sm font-semibold text-text-primary">{subject.name}</div>
-                                        <span className="shrink-0 rounded-md border border-border bg-surface-secondary/50 px-1.5 py-0.5 text-[10px] text-text-tertiary">
-                                            {categoryNameMap.get(subject.categoryId || '') || '未分类'}
-                                        </span>
-                                    </div>
-                                    {subject.description && (
-                                        <div className="mt-1 line-clamp-1 text-xs text-text-secondary">
-                                            {subject.description}
-                                        </div>
-                                    )}
-                                    {subject.tags.length > 0 && (
-                                        <div className="mt-2 flex flex-wrap gap-1">
-                                            {subject.tags.slice(0, 5).map((tag) => (
-                                                <span
-                                                    key={`${subject.id}-list-${tag}`}
-                                                    className="rounded-md border border-border bg-surface-secondary/50 px-1.5 py-0.5 text-[10px] text-text-secondary"
-                                                >
-                                                    {tag}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="hidden shrink-0 items-center gap-3 text-[11px] text-text-tertiary md:flex">
-                                    <span>属性 {subject.attributes.length}</span>
-                                    <span>图片 {(subject.previewUrls || []).length}</span>
-                                    <span>{subject.voicePreviewUrl ? '声音参考' : '无声音'}</span>
-                                    {isRoleSubject(subject) && (
-                                        <span>{subject.videoPreviewUrl ? '视频参考' : '无视频'}</span>
-                                    )}
-                                </div>
-                            </button>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
-                        {filteredSubjects.map((subject) => (
+                ) : viewMode === 'grid' ? (
+                    <div className={clsx('grid gap-3', isModalVariant ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4' : 'grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5')}>
+                        {filteredSubjects.map((subject) => {
+                            const voiceInfo = subjectVoiceInfo(subject, voiceJobsById[subjectVoiceString(subject, ['jobId'])]);
+                            const voiceSlots = subjectVoiceSlots(subject);
+                            const categoryName = categoryNameMap.get(subject.categoryId || '') || '未分类';
+                            const brandName = subject.brandId ? subjectNameMap.get(subject.brandId) || '' : '';
+                            const productCount = productCountByBrandId.get(subject.id) || 0;
+                            return (
                             <div
                                 key={subject.id}
-                                className="rounded-xl border border-border bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow"
+                                className="overflow-hidden rounded-lg border border-border bg-surface-primary shadow-sm transition-shadow hover:shadow-md"
                             >
                                 <button
                                     type="button"
@@ -1645,19 +4327,20 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             />
                                         ) : (
                                             <div className="w-full h-full flex items-center justify-center text-text-tertiary">
-                                                <Package className="w-8 h-8" />
+                                                <Package className="w-6 h-6" />
                                             </div>
                                         )}
                                     </div>
-                                    <div className="p-3 space-y-2">
+                                    <div className="space-y-1.5 p-2.5">
                                         <div>
-                                            <div className="text-sm font-semibold text-text-primary truncate">{subject.name}</div>
-                                            <div className="text-xs text-text-tertiary mt-1">
-                                                {categoryNameMap.get(subject.categoryId || '') || '未分类'}
+                                            <div className="truncate text-xs font-semibold text-text-primary">{subject.name}</div>
+                                            <div className="mt-0.5 text-[11px] text-text-tertiary">
+                                                {categoryName}
+                                                {brandName ? ` · ${brandName}` : ''}
                                             </div>
                                         </div>
                                         {subject.description && (
-                                            <div className="text-xs text-text-secondary line-clamp-2">
+                                            <div className="line-clamp-2 text-[11px] text-text-secondary">
                                                 {subject.description}
                                             </div>
                                         )}
@@ -1673,455 +4356,71 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 ))}
                                             </div>
                                         )}
-                                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-text-tertiary">
+                                        <VoiceSlotBadges slots={voiceSlots} compact />
+                                            <div className="flex items-center justify-between text-[9px] text-text-tertiary">
                                             <span>属性 {subject.attributes.length}</span>
                                             <span>图片 {(subject.previewUrls || []).length}</span>
-                                            <span>{subject.voicePreviewUrl ? '有声音参考' : '无声音参考'}</span>
-                                            {isRoleSubject(subject) && (
-                                                <span>{subject.videoPreviewUrl ? '有视频参考' : '无视频参考'}</span>
-                                            )}
+                                            {categoryName === '品牌' && <span>商品 {productCount}</span>}
+                                            {categoryName === '商品' && <span>SKU {(subject.skus || []).length}</span>}
+                                            <span className={clsx('rounded-md border px-1.5 py-0.5', voiceInfoClassName(voiceInfo.tone))}>
+                                                {voiceInfo.targetTtsModel ? `${voiceInfo.label} · ${shortVoiceId(voiceInfo.targetTtsModel)}` : voiceInfo.label}
+                                            </span>
                                         </div>
                                     </div>
                                 </button>
                             </div>
-                        ))}
+                            );
+                        })}
+                    </div>
+                ) : (
+                    <div className="divide-y divide-[rgb(var(--color-border))] rounded-xl border border-[rgb(var(--color-border))] bg-white">
+                        {filteredSubjects.map((subject) => {
+                            const voiceInfo = subjectVoiceInfo(subject, voiceJobsById[subjectVoiceString(subject, ['jobId'])]);
+                            const voiceSlots = subjectVoiceSlots(subject);
+                            const categoryName = categoryNameMap.get(subject.categoryId || '') || '未分类';
+                            const brandName = subject.brandId ? subjectNameMap.get(subject.brandId) || '' : '';
+                            const productCount = productCountByBrandId.get(subject.id) || 0;
+                            return (
+                            <button
+                                key={subject.id}
+                                type="button"
+                                onClick={() => openEditModal(subject)}
+                                className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-primary))]"
+                            >
+                                <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
+                                    {subject.primaryPreviewUrl ? (
+                                        <img src={resolveAssetUrl(subject.primaryPreviewUrl)} alt={subject.name} className="h-full w-full object-cover" />
+                                    ) : (
+                                        <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
+                                            <Package className="h-5 w-5" />
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <div className="truncate text-xs font-semibold text-[rgb(var(--color-text-primary))]">{subject.name}</div>
+                                    <div className="mt-0.5 truncate text-[11px] text-[rgb(var(--color-text-secondary))]">
+                                        {categoryName}
+                                        {brandName ? ` · ${brandName}` : ''}
+                                        {categoryName === '品牌' && productCount > 0 ? ` · ${productCount} 个商品` : ''}
+                                        {categoryName === '商品' && (subject.skus || []).length > 0 ? ` · ${(subject.skus || []).length} 个SKU` : ''}
+                                        {subject.description ? ` · ${subject.description}` : ''}
+                                    </div>
+                                </div>
+                                <div className="hidden text-xs text-[rgb(var(--color-text-tertiary))] md:block">
+                                    {new Date(subject.updatedAt).toLocaleDateString()}
+                                </div>
+                                <div className="hidden max-w-[280px] md:block">
+                                    <VoiceSlotBadges slots={voiceSlots} compact />
+                                </div>
+                                <div className={clsx('hidden rounded-md border px-2 py-1 text-[11px] md:block', voiceInfoClassName(voiceInfo.tone))}>
+                                    {voiceInfo.targetTtsModel ? `${voiceInfo.label} · ${shortVoiceId(voiceInfo.targetTtsModel)}` : voiceInfo.label}
+                                </div>
+                            </button>
+                            );
+                        })}
                     </div>
                 )}
             </div>
-
-            {isModalOpen && (
-                <div className="absolute inset-0 z-30 bg-black/45 backdrop-blur-[1px] flex items-center justify-center p-6">
-                    <div className="w-full max-w-5xl max-h-[90vh] overflow-hidden rounded-3xl border border-border bg-background shadow-2xl">
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-surface-secondary/30">
-                            <div>
-                                <div className="text-base font-semibold text-text-primary">
-                                    {draft.id ? `编辑${draftEntityLabel}` : `新建${draftEntityLabel}`}
-                                </div>
-                                <div className="text-xs text-text-tertiary mt-0.5">
-                                    名称必填，图片最多 5 张。保存后可在创作时直接引用这些{draftEntityLabel}资料。
-                                </div>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={closeModal}
-                                className="rounded-full p-2 text-text-tertiary hover:bg-surface-secondary hover:text-text-primary"
-                            >
-                                <X className="w-4 h-4" />
-                            </button>
-                        </div>
-
-                        <div className="max-h-[calc(90vh-140px)] overflow-auto p-6">
-                            {error && (
-                                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                                    {error}
-                                </div>
-                            )}
-
-                            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6">
-                                <div className="space-y-5">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <label className="block">
-                                            <div className="text-sm font-medium text-text-primary mb-2">{draftEntityLabel}名称 *</div>
-                                            <input
-                                                value={draft.name}
-                                                onChange={(event) => updateDraft({ name: event.target.value })}
-                                                placeholder={`${draftEntityLabel}名称`}
-                                                className="w-full px-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                            />
-                                        </label>
-
-                                        <label className="block">
-                                            <div className="text-sm font-medium text-text-primary mb-2">分类</div>
-                                            <div className="flex gap-2">
-                                                <select
-                                                    value={draft.categoryId}
-                                                    onChange={(event) => updateDraft({ categoryId: event.target.value })}
-                                                    className="flex-1 px-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none"
-                                                >
-                                                    <option value="">未分类</option>
-                                                    {draftCategoryOptions.map((category) => (
-                                                        <option key={category.id} value={category.id}>{category.name}</option>
-                                                    ))}
-                                                </select>
-                                                <button
-                                                    type="button"
-                                                    onClick={openCreateCategoryDialog}
-                                                    className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary"
-                                                >
-                                                    新建
-                                                </button>
-                                            </div>
-                                            {draft.categoryId && (
-                                                <div className="mt-2 flex items-center gap-2 text-xs text-text-tertiary">
-                                                    <button type="button" onClick={() => {
-                                                        const category = categories.find((item) => item.id === draft.categoryId);
-                                                        if (category) openRenameCategoryDialog(category);
-                                                    }} className="hover:text-text-primary">
-                                                        重命名当前分类
-                                                    </button>
-                                                    <span>·</span>
-                                                    <button type="button" onClick={() => {
-                                                        const category = categories.find((item) => item.id === draft.categoryId);
-                                                        if (category) void handleDeleteCategory(category);
-                                                    }} className="hover:text-red-600">
-                                                        删除当前分类
-                                                    </button>
-                                                </div>
-                                            )}
-                                        </label>
-                                    </div>
-
-                                    <label className="block">
-                                        <div className="text-sm font-medium text-text-primary mb-2">{draftEntityLabel}描述</div>
-                                        <div className="relative">
-                                            <textarea
-                                                value={draft.description}
-                                                onChange={(event) => updateDraft({ description: event.target.value.slice(0, 200) })}
-                                                rows={5}
-                                                maxLength={200}
-                                                placeholder={`描述${draftEntityLabel}特征或用途`}
-                                                className="w-full px-3 py-2 pr-12 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary resize-y"
-                                            />
-                                            <div className="absolute bottom-2.5 right-3 text-xs text-text-tertiary">{draft.description.length}/200</div>
-                                        </div>
-                                    </label>
-
-                                    {isRoleDraft && (
-                                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                                            <label className="block">
-                                                <div className="text-sm font-medium text-text-primary mb-2">性别</div>
-                                                <select
-                                                    value={draftAttributeValue('性别')}
-                                                    onChange={(event) => handleNamedAttributeChange('性别', event.target.value)}
-                                                    className="w-full px-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                                >
-                                                    <option value="">选择性别</option>
-                                                    <option value="女性">女性</option>
-                                                    <option value="男性">男性</option>
-                                                    <option value="中性">中性</option>
-                                                    <option value="其他">其他</option>
-                                                </select>
-                                            </label>
-                                            <label className="block">
-                                                <div className="text-sm font-medium text-text-primary mb-2">年龄</div>
-                                                <input
-                                                    value={draftAttributeValue('年龄')}
-                                                    onChange={(event) => handleNamedAttributeChange('年龄', event.target.value)}
-                                                    placeholder="角色年龄"
-                                                    className="w-full px-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                                />
-                                            </label>
-                                        </div>
-                                    )}
-
-                                    <label className="block">
-                                        <div className="text-sm font-medium text-text-primary mb-2">标签</div>
-                                        <div className="relative">
-                                            <Tag className="w-4 h-4 text-text-tertiary absolute left-3 top-1/2 -translate-y-1/2" />
-                                            <input
-                                                value={draft.tagsText}
-                                                onChange={(event) => updateDraft({ tagsText: event.target.value })}
-                                                placeholder="多个标签用逗号分隔，例如：运动鞋, 白色, 男款"
-                                                className="w-full pl-9 pr-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                            />
-                                        </div>
-                                    </label>
-
-                                    <div className="rounded-2xl border border-border bg-surface-primary p-4 space-y-4">
-                                        <div className="flex items-center justify-between">
-                                            <div>
-                                                <div className="text-sm font-medium text-text-primary">扩展属性</div>
-                                                <div className="text-xs text-text-tertiary mt-0.5">用 key-value 描述规格、外观、背景、价格等</div>
-                                            </div>
-                                            <button
-                                                type="button"
-                                                onClick={handleAddAttribute}
-                                                className="px-3 py-1.5 text-xs rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary"
-                                            >
-                                                添加属性
-                                            </button>
-                                        </div>
-
-                                        {visibleDraftAttributes.length === 0 ? (
-                                            <div className="rounded-lg border border-dashed border-border px-4 py-4 text-sm text-text-tertiary">
-                                                还没有属性。比如：颜色、材质、职业、人设、价格区间。
-                                            </div>
-                                        ) : (
-                                            <div className="space-y-3">
-                                                {visibleDraftAttributes.map(({ attribute, index }) => (
-                                                    <div key={index} className="grid grid-cols-[minmax(0,180px)_minmax(0,1fr)_40px] gap-3">
-                                                        <input
-                                                            value={attribute.key}
-                                                            onChange={(event) => handleAttributeChange(index, { key: event.target.value })}
-                                                            placeholder="属性名"
-                                                            className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                                        />
-                                                        <input
-                                                            value={attribute.value}
-                                                            onChange={(event) => handleAttributeChange(index, { value: event.target.value })}
-                                                            placeholder="属性值"
-                                                            className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                                        />
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleRemoveAttribute(index)}
-                                                            className="rounded-md border border-border text-text-tertiary hover:bg-surface-secondary hover:text-red-600"
-                                                        >
-                                                            <X className="w-4 h-4 mx-auto" />
-                                                        </button>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-
-                                <div className="rounded-2xl border border-border bg-surface-primary p-4 h-fit">
-                                    <div className="flex items-center justify-between mb-4">
-                                        <div>
-                                            <div className="text-sm font-medium text-text-primary">{draftEntityLabel}图片</div>
-                                            <div className="text-xs text-text-tertiary mt-0.5">最多 5 张，本地复制进资产库</div>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            {isRoleDraft && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void handleGenerateCharacterCard()}
-                                                    disabled={working || generatingCardSubjectId === draft.id || draft.images.length === 0}
-                                                    className="inline-flex items-center gap-1 rounded-md bg-[rgb(var(--color-text-primary))] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[rgb(var(--color-surface-elevated))] disabled:cursor-not-allowed disabled:opacity-50"
-                                                    title="生成角色卡"
-                                                >
-                                                    <Sparkles className={clsx('h-4 w-4', generatingCardSubjectId === draft.id && 'animate-pulse')} />
-                                                    {generatingCardSubjectId === draft.id ? '生成中' : '角色卡'}
-                                                </button>
-                                            )}
-                                            <label className={clsx(
-                                                'inline-flex items-center gap-1 px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary cursor-pointer',
-                                                draft.images.length >= 5 && 'pointer-events-none opacity-50'
-                                            )}>
-                                                <ImagePlus className="w-4 h-4" />
-                                                上传图片
-                                                <input
-                                                    type="file"
-                                                    accept="image/*"
-                                                    multiple
-                                                    className="hidden"
-                                                    onChange={(event) => {
-                                                        void handleImageInput(event.target.files);
-                                                        event.currentTarget.value = '';
-                                                    }}
-                                                />
-                                            </label>
-                                        </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-3">
-                                        {draft.images.map((image, index) => (
-                                            <div key={`${image.relativePath || image.name}-${index}`} className="group relative rounded-xl overflow-hidden border border-border bg-surface-secondary/40 aspect-[4/5]">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setPreviewImage(image)}
-                                                    className="h-full w-full"
-                                                    aria-label="预览图片"
-                                                >
-                                                    <img
-                                                        src={resolveAssetUrl(image.previewUrl)}
-                                                        alt={image.name}
-                                                        className="w-full h-full object-cover"
-                                                    />
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleRemoveImage(index)}
-                                                    className="absolute right-2 top-2 rounded-full bg-black/60 p-1.5 text-white opacity-0 transition group-hover:opacity-100"
-                                                >
-                                                    <X className="w-3.5 h-3.5" />
-                                                </button>
-                                            </div>
-                                        ))}
-                                        {draft.images.length === 0 && (
-                                            <div className="col-span-2 rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-text-tertiary">
-                                                暂无图片。上传后 AI 可以读取这些资产图片路径作为参考。
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    {draft.id && (
-                                        <div className="mt-4 rounded-lg bg-surface-secondary/40 px-4 py-3 text-xs text-text-tertiary space-y-1">
-                                            <div>ID：{draft.id}</div>
-                                            {isRoleDraft && (
-                                                <div className="flex flex-wrap gap-x-3 gap-y-1">
-                                                    <span>{draft.voice?.previewUrl ? '有声音' : '未录音'}</span>
-                                                    <span>{draft.video?.previewUrl ? '有视频' : '无视频'}</span>
-                                                </div>
-                                            )}
-                                            <div>保存后可在创作时直接通过{draftEntityLabel}名称引用这些资料。</div>
-                                        </div>
-                                    )}
-
-                                    {isRoleDraft && (
-                                        <div className="mt-4 rounded-xl border border-border bg-surface-secondary/30 p-4 space-y-3">
-                                            <div>
-                                                <div className="text-sm font-medium text-text-primary">角色视频</div>
-                                                <div className="text-xs text-text-tertiary mt-0.5">可保存一段角色动态参考，体积不超过 200MB。</div>
-                                            </div>
-                                            {draft.video?.previewUrl ? (
-                                                <div className="overflow-hidden rounded-lg border border-border bg-black">
-                                                    <video
-                                                        src={resolveAssetUrl(draft.video.previewUrl)}
-                                                        className="aspect-video w-full object-cover"
-                                                        muted
-                                                        playsInline
-                                                        controls
-                                                        preload="metadata"
-                                                    />
-                                                    <div className="flex items-center justify-between gap-3 bg-black/75 px-3 py-2 text-xs text-white">
-                                                        <span className="truncate">{draft.video.name}</span>
-                                                        <button
-                                                            type="button"
-                                                            onClick={handleRemoveVideo}
-                                                            className="shrink-0 rounded-md bg-white/10 px-2 py-1 hover:bg-white/20"
-                                                        >
-                                                            删除视频
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                <label className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-border bg-surface-primary text-sm font-medium text-text-secondary transition hover:bg-surface-secondary hover:text-text-primary">
-                                                    上传视频
-                                                    <input
-                                                        type="file"
-                                                        accept="video/*,.mp4,.webm,.mov,.m4v,.mkv"
-                                                        className="hidden"
-                                                        onChange={(event) => {
-                                                            void handleVideoFileInput(event.target.files);
-                                                            event.currentTarget.value = '';
-                                                        }}
-                                                    />
-                                                </label>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    {isRoleDraft && (
-                                    <div className="mt-4 rounded-xl border border-border bg-surface-secondary/30 p-4 space-y-3">
-                                        <div>
-                                            <div className="text-sm font-medium text-text-primary">声音参考</div>
-                                            <div className="text-xs text-text-tertiary mt-0.5">录制 5 到 10 秒，体积不超过 10MB。以后参考图视频可直接带这条声音参考。</div>
-                                        </div>
-
-                                        <div className="rounded-2xl border border-border bg-surface-primary px-4 py-4 space-y-3">
-                                            <div className="text-xs font-medium uppercase tracking-[0.18em] text-text-tertiary">
-                                                朗读采样句
-                                            </div>
-                                            <div className="text-xl leading-9 font-medium text-text-primary">
-                                                {SUBJECT_VOICE_SAMPLE_TEXT}
-                                            </div>
-                                            <div className="text-xs leading-5 text-text-tertiary">
-                                                请保持自然语速、音量稳定、吐字清晰。点击录音后会自动开始 6 秒采样，建议在安静环境下完成。
-                                            </div>
-                                        </div>
-
-                                        <div className="flex items-center gap-2">
-                                            <button
-                                                type="button"
-                                                onClick={() => void handleRecordVoice()}
-                                                disabled={audioRecording.isRecording || audioRecording.isWorking}
-                                                className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary disabled:opacity-60"
-                                            >
-                                                <span className="inline-flex items-center gap-1">
-                                                    <Mic className="w-4 h-4" />
-                                                    {audioRecording.isRecording ? `录音中 ${recordingCountdown}s` : '点击录音'}
-                                                </span>
-                                            </button>
-                                            <label className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary cursor-pointer">
-                                                导入音频
-                                                <input
-                                                    type="file"
-                                                    accept="audio/*"
-                                                    className="hidden"
-                                                    onChange={(event) => {
-                                                        void handleVoiceFileInput(event.target.files);
-                                                        event.currentTarget.value = '';
-                                                    }}
-                                                />
-                                            </label>
-                                            {draft.voice?.previewUrl && (
-                                                <button
-                                                    type="button"
-                                                    onClick={handleRemoveVoice}
-                                                    className="px-3 py-2 text-sm rounded-md border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
-                                                >
-                                                    删除声音
-                                                </button>
-                                            )}
-                                        </div>
-
-                                        {audioRecording.isRecording && (
-                                            <div className="rounded-lg border border-accent-primary/25 bg-accent-primary/8 px-3 py-2 text-xs text-accent-primary">
-                                                采样倒计时：{recordingCountdown} 秒。请持续朗读示例句，录音会自动结束。
-                                            </div>
-                                        )}
-                                        {recordingHint && (
-                                            <div className="text-xs text-text-tertiary">{recordingHint}</div>
-                                        )}
-                                        {recordingError && (
-                                            <div className="text-xs text-red-600">{recordingError}</div>
-                                        )}
-                                        {draft.voice?.previewUrl && (
-                                            <div className="rounded-lg border border-border bg-surface-primary px-3 py-3 space-y-2">
-                                                <div className="text-xs text-text-secondary">{draft.voice.name}</div>
-                                                <audio controls src={resolveAssetUrl(draft.voice.previewUrl)} className="w-full" />
-                                            </div>
-                                        )}
-                                    </div>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="flex items-center justify-between px-6 py-4 border-t border-border bg-surface-secondary/30">
-                            <div className="text-xs text-text-tertiary">
-                                {draft.id ? `编辑现有${draftEntityLabel}` : `创建新${draftEntityLabel}`}
-                            </div>
-                            <div className="flex items-center gap-2">
-                                {draft.id && (
-                                    <button
-                                        type="button"
-                                        onClick={() => void handleDeleteSubject()}
-                                        disabled={working}
-                                        className="px-3 py-2 text-sm rounded-md border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60"
-                                    >
-                                        <span className="inline-flex items-center gap-1">
-                                            <Trash2 className="w-4 h-4" />
-                                            删除
-                                        </span>
-                                    </button>
-                                )}
-                                <button
-                                    type="button"
-                                    onClick={closeModal}
-                                    disabled={working}
-                                    className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary disabled:opacity-60"
-                                >
-                                    取消
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => void handleSave()}
-                                    disabled={working}
-                                    className="px-3 py-2 text-sm rounded-md border border-accent-primary/30 bg-accent-primary/10 hover:bg-accent-primary/15 text-accent-primary disabled:opacity-60"
-                                >
-                                    <span className="inline-flex items-center gap-1">
-                                        {draft.id ? <Pencil className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-                                        {working ? '处理中...' : draft.id ? '保存修改' : `创建${draftEntityLabel}`}
-                                    </span>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {mediaContextMenu.visible && mediaContextMenu.asset && (
                 <LiquidGlassMenuPanel
@@ -2135,7 +4434,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             const asset = mediaContextMenu.asset;
                             setMediaContextMenu({ visible: false, x: 0, y: 0, asset: null });
                             if (asset) {
-                                void handleShowMediaAssetInFolder(asset);
+                                void handleShowMediaInFolder(asset);
                             }
                         }}
                         className={getLiquidGlassMenuItemClassName()}
@@ -2158,6 +4457,871 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                         删除
                     </button>
                 </LiquidGlassMenuPanel>
+            )}
+
+            {isBrandModalOpen && (
+                <div className="fixed inset-0 z-[125] flex items-center justify-center bg-black/35 p-4">
+                    <div className="flex max-h-[86vh] w-full max-w-[560px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+                        <div className="flex items-center justify-between px-6 py-5">
+                            <h2 className="text-lg font-semibold leading-none text-[rgb(var(--color-text-primary))]">
+                                {brandDraft.id ? '编辑品牌' : '新建品牌'}
+                            </h2>
+                            <button
+                                type="button"
+                                onClick={closeBrandModal}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]"
+                                aria-label="关闭"
+                            >
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+                        <div className="min-h-0 flex-1 space-y-4 overflow-auto px-6 pb-5">
+                            {error && (
+                                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                    {error}
+                                </div>
+                            )}
+                            <label className="block">
+                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">品牌名称 <span className="text-red-500">*</span></div>
+                                <input
+                                    value={brandDraft.name}
+                                    onChange={(event) => updateBrandDraft({ name: event.target.value })}
+                                    placeholder="品牌名称"
+                                    className="h-10 w-full rounded-lg border border-violet-500 bg-white px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none ring-2 ring-violet-500/15 placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-violet-500/20"
+                                />
+                            </label>
+                            <label className="block">
+                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">品牌描述</div>
+                                <textarea
+                                    value={brandDraft.description}
+                                    onChange={(event) => updateBrandDraft({ description: event.target.value.slice(0, 300) })}
+                                    rows={5}
+                                    maxLength={300}
+                                    placeholder="品牌定位、风格、目标用户、适用场景"
+                                    className="min-h-[120px] w-full resize-y rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 py-2.5 text-sm leading-5 text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
+                                />
+                            </label>
+                            <div className="space-y-2">
+                                <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">品牌图片</div>
+                                <BrandWorkspaceImageGrid
+                                    images={brandDraft.images}
+                                    onAdd={(files) => void handleBrandImageInput(files)}
+                                    onRemove={handleRemoveBrandImage}
+                                    label="上传品牌图片"
+                                />
+                            </div>
+                        </div>
+                        <div className="flex justify-end gap-2 border-t border-[rgb(var(--color-border))] px-6 py-4">
+                            <button
+                                type="button"
+                                onClick={closeBrandModal}
+                                disabled={isBrandModalSubmitting}
+                                className="inline-flex h-9 items-center rounded-lg bg-[rgb(var(--color-surface-secondary))] px-3 text-sm font-medium text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))] disabled:opacity-50"
+                            >
+                                取消
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void handleSaveBrand()}
+                                disabled={isBrandModalSubmitting}
+                                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-sm font-semibold text-white transition hover:bg-black/85 disabled:opacity-50"
+                            >
+                                <Save className="h-4 w-4" />
+                                {isBrandModalSubmitting ? '保存中' : '保存'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isProductModalOpen && (
+                <div className="fixed inset-0 z-[125] flex items-center justify-center bg-black/35 p-4">
+                    <div className="flex max-h-[86vh] w-full max-w-[680px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+                        <div className="flex items-center justify-between px-6 py-5">
+                            <div className="min-w-0">
+                                <div className="truncate text-xs font-medium text-[rgb(var(--color-text-secondary))]">
+                                    {productDraftBrand?.name || '品牌'}
+                                </div>
+                                <h2 className="mt-1 text-lg font-semibold leading-none text-[rgb(var(--color-text-primary))]">
+                                    {productDraft.id ? '编辑商品' : '新建商品'}
+                                </h2>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closeProductModal}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]"
+                                aria-label="关闭"
+                            >
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+                        <div className="min-h-0 flex-1 space-y-4 overflow-auto px-6 pb-5">
+                            {error && (
+                                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                    {error}
+                                </div>
+                            )}
+                            <label className="block">
+                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">商品名称 <span className="text-red-500">*</span></div>
+                                <input
+                                    value={productDraft.name}
+                                    onChange={(event) => updateProductDraft({ name: event.target.value })}
+                                    placeholder="商品名称"
+                                    className="h-10 w-full rounded-lg border border-violet-500 bg-white px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none ring-2 ring-violet-500/15 placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-violet-500/20"
+                                />
+                            </label>
+                            <label className="block">
+                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">商品描述</div>
+                                <textarea
+                                    value={productDraft.description}
+                                    onChange={(event) => updateProductDraft({ description: event.target.value.slice(0, 200) })}
+                                    rows={4}
+                                    maxLength={200}
+                                    placeholder="商品卖点、材质、适用场景"
+                                    className="min-h-[88px] w-full resize-y rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 py-2.5 text-sm leading-5 text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
+                                />
+                            </label>
+                            <div className="space-y-2">
+                                <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">商品图片</div>
+                                <BrandWorkspaceImageGrid
+                                    images={productDraft.images}
+                                    onAdd={(files) => void handleProductImageInput(files)}
+                                    onRemove={handleRemoveProductImage}
+                                    label="上传商品图片"
+                                />
+                            </div>
+                            <div className="space-y-2 rounded-xl bg-[rgb(var(--color-surface-primary))] p-4">
+                                <div className="flex items-center justify-between">
+                                    <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">SKU</div>
+                                    <button
+                                        type="button"
+                                        onClick={handleAddProductSku}
+                                        className="inline-flex h-8 items-center gap-1 rounded-lg bg-white px-2.5 text-xs font-medium text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]"
+                                    >
+                                        <Plus className="h-3.5 w-3.5" />
+                                        添加
+                                    </button>
+                                </div>
+                                {productDraft.skus.length === 0 ? (
+                                    <div className="rounded-lg border border-dashed border-[rgb(var(--color-border))] bg-white px-3 py-2.5 text-xs text-[rgb(var(--color-text-secondary))]">
+                                        为商品添加颜色、规格、尺码等 SKU。
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {productDraft.skus.map((sku, skuIndex) => (
+                                            <div key={sku.id || skuIndex} className="rounded-lg bg-white p-3">
+                                                <div className="grid grid-cols-[minmax(0,1fr)_32px] gap-2">
+                                                    <input
+                                                        value={sku.name}
+                                                        onChange={(event) => handleProductSkuChange(skuIndex, { name: event.target.value })}
+                                                        placeholder="SKU 名称"
+                                                        className="h-9 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleRemoveProductSku(skuIndex)}
+                                                        className="inline-flex h-9 items-center justify-center rounded-lg bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-secondary))] transition hover:bg-red-50 hover:text-red-600"
+                                                        aria-label="删除 SKU"
+                                                    >
+                                                        <X className="h-4 w-4" />
+                                                    </button>
+                                                </div>
+                                                <textarea
+                                                    value={sku.variantText}
+                                                    onChange={(event) => handleProductSkuChange(skuIndex, { variantText: event.target.value.slice(0, 160) })}
+                                                    rows={2}
+                                                    maxLength={160}
+                                                    placeholder="规格描述，如：颜色：樱桃红；容量：3.5g"
+                                                    className="mt-2 min-h-[58px] w-full resize-y rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 py-2 text-xs leading-5 text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
+                                                />
+                                                <div className="mt-2 space-y-2">
+                                                    <div className="text-xs font-semibold text-[rgb(var(--color-text-primary))]">SKU 图片</div>
+                                                    <BrandWorkspaceImageGrid
+                                                        images={sku.images}
+                                                        onAdd={(files) => void handleProductSkuImageInput(skuIndex, files)}
+                                                        onRemove={(imageIndex) => handleRemoveProductSkuImage(skuIndex, imageIndex)}
+                                                        label="上传 SKU 图片"
+                                                    />
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex justify-end gap-2 border-t border-[rgb(var(--color-border))] px-6 py-4">
+                            <button
+                                type="button"
+                                onClick={closeProductModal}
+                                disabled={isProductModalSubmitting}
+                                className="inline-flex h-9 items-center rounded-lg bg-[rgb(var(--color-surface-secondary))] px-3 text-sm font-medium text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))] disabled:opacity-50"
+                            >
+                                取消
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void handleSaveProduct()}
+                                disabled={isProductModalSubmitting}
+                                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-sm font-semibold text-white transition hover:bg-black/85 disabled:opacity-50"
+                            >
+                                <Save className="h-4 w-4" />
+                                {isProductModalSubmitting ? '保存中' : '保存'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isAssetModalVisible && (
+                <div
+                    className={clsx(
+                        'asset-library-modal-backdrop fixed inset-0 z-[120] flex items-center justify-center p-4',
+                        assetModalPhase === 'open' ? 'asset-library-modal-backdrop--open' : 'asset-library-modal-backdrop--closed'
+                    )}
+                >
+                    <div
+                        className={clsx(
+                            'asset-library-modal-panel flex max-h-[88vh] w-full max-w-[960px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl',
+                            assetModalPhase === 'open' ? 'asset-library-modal-panel--open' : 'asset-library-modal-panel--closed'
+                        )}
+                    >
+                        <div className="flex items-center justify-between px-8 pb-4 pt-6">
+                            <h2 className="text-xl font-semibold leading-none text-[rgb(var(--color-text-primary))]">
+                                {draft.id ? `编辑${draftEntityLabel}` : `新建${draftEntityLabel}`}
+                            </h2>
+                            <button
+                                type="button"
+                                onClick={closeModal}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]"
+                                aria-label="关闭"
+                            >
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+
+                        <div className="min-h-0 flex-1 overflow-auto px-8 pb-5">
+                            {error && (
+                                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                    {error}
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+                                <div className="space-y-4">
+                                    <div className="block">
+                                        <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">类别</div>
+                                        <div className="flex gap-2">
+                                            <div className="relative flex-1">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setIsDraftCategoryMenuOpen((value) => !value)}
+                                                    className={clsx(
+                                                        'flex h-10 w-full items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm transition',
+                                                        isDraftCategoryMenuOpen
+                                                            ? 'border-violet-400 bg-white ring-2 ring-violet-500/15'
+                                                            : 'border-transparent bg-[rgb(var(--color-surface-secondary))] hover:bg-[rgb(var(--color-surface-tertiary))]/70'
+                                                    )}
+                                                >
+                                                    <span className="flex min-w-0 items-center gap-2">
+                                                        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white text-[rgb(var(--color-text-secondary))] shadow-sm">
+                                                            <SelectedDraftCategoryIcon className="h-3.5 w-3.5" />
+                                                        </span>
+                                                        <span className="truncate font-medium text-[rgb(var(--color-text-primary))]">{selectedDraftCategory.name}</span>
+                                                    </span>
+                                                    <ChevronDown className={clsx('h-4 w-4 shrink-0 text-[rgb(var(--color-text-tertiary))] transition-transform', isDraftCategoryMenuOpen && 'rotate-180')} />
+                                                </button>
+
+                                                {isDraftCategoryMenuOpen && (
+                                                    <div className="absolute left-0 right-0 top-full z-[140] mt-1.5 overflow-hidden rounded-xl border border-[rgb(var(--color-border))] bg-white shadow-[0_18px_50px_rgba(15,23,42,0.16)]">
+                                                        <div className="max-h-60 overflow-y-auto p-1">
+                                                            {draftCategoryOptions.map((category) => {
+                                                                const Icon = category.icon;
+                                                                const selected = category.id === draft.categoryId;
+                                                                return (
+                                                                    <button
+                                                                        key={category.id || '__uncategorized__'}
+                                                                        type="button"
+                                                                        onClick={() => {
+                                                                            handleDraftCategoryChange(category.id);
+                                                                            setIsDraftCategoryMenuOpen(false);
+                                                                        }}
+                                                                        className={clsx(
+                                                                            'flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-sm transition',
+                                                                            selected ? 'bg-violet-50 text-violet-700' : 'text-[rgb(var(--color-text-primary))] hover:bg-[rgb(var(--color-surface-primary))]'
+                                                                        )}
+                                                                    >
+                                                                        <span className={clsx(
+                                                                            'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md',
+                                                                            selected ? 'bg-violet-100 text-violet-700' : 'bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-secondary))]'
+                                                                        )}>
+                                                                            <Icon className="h-3.5 w-3.5" />
+                                                                        </span>
+                                                                        <span className="min-w-0 flex-1 truncate font-medium">{category.name}</span>
+                                                                        {selected && <Check className="h-4 w-4 shrink-0" />}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIsDraftCategoryMenuOpen(false);
+                                                    openCreateCategoryDialog();
+                                                }}
+                                                className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))]"
+                                                aria-label="新建分类"
+                                                title="新建分类"
+                                            >
+                                                <Plus className="h-4 w-4" />
+                                            </button>
+                                        </div>
+                                        {draft.categoryId && (
+                                            <div className="mt-2 flex items-center gap-2 text-xs text-[rgb(var(--color-text-secondary))]">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const category = categories.find((item) => item.id === draft.categoryId);
+                                                        if (category) openRenameCategoryDialog(category);
+                                                    }}
+                                                    className="transition hover:text-[rgb(var(--color-text-primary))]"
+                                                >
+                                                    重命名当前分类
+                                                </button>
+                                                <span>·</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const category = categories.find((item) => item.id === draft.categoryId);
+                                                        if (category) void handleDeleteCategory(category);
+                                                    }}
+                                                    className="transition hover:text-red-600"
+                                                >
+                                                    删除当前分类
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <label className="block">
+                                        <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">
+                                            {draftEntityLabel}名称 <span className="text-red-500">*</span>
+                                        </div>
+                                        <input
+                                            value={draft.name}
+                                            onChange={(event) => updateDraft({ name: event.target.value })}
+                                            placeholder={`${draftEntityLabel}名称`}
+                                            className="h-10 w-full rounded-lg border border-violet-500 bg-white px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none ring-2 ring-violet-500/15 placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-violet-500/20"
+                                        />
+                                    </label>
+
+                                    <label className="block">
+                                        <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">{draftEntityLabel}描述</div>
+                                        <div className="relative">
+                                            <textarea
+                                                value={draft.description}
+                                                onChange={(event) => updateDraft({ description: event.target.value.slice(0, 200) })}
+                                                rows={5}
+                                                maxLength={200}
+                                                placeholder={`描述${draftEntityLabel}特征或用途`}
+                                                className="min-h-[92px] w-full resize-y rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 py-2.5 pr-12 text-sm leading-5 text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
+                                            />
+                                            <div className="absolute bottom-2.5 right-3 text-xs text-[rgb(var(--color-text-secondary))]">{draft.description.length}/200</div>
+                                        </div>
+                                    </label>
+
+                                    {isRoleDraft && (
+                                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                            <label className="block">
+                                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">性别</div>
+                                                <SelectMenu
+                                                    value={draftAttributeValue('性别')}
+                                                    onChange={(value) => handleNamedAttributeChange('性别', value)}
+                                                    options={[
+                                                        { value: '', label: '选择性别' },
+                                                        { value: '女性', label: '女性' },
+                                                        { value: '男性', label: '男性' },
+                                                        { value: '中性', label: '中性' },
+                                                        { value: '其他', label: '其他' },
+                                                    ]}
+                                                />
+                                            </label>
+                                            <label className="block">
+                                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">年龄</div>
+                                                <input
+                                                    value={draftAttributeValue('年龄')}
+                                                    onChange={(event) => handleNamedAttributeChange('年龄', event.target.value)}
+                                                    placeholder="角色年龄"
+                                                    className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
+                                                />
+                                            </label>
+                                        </div>
+                                    )}
+
+                                    <label className="block">
+                                        <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">标签</div>
+                                        <div className="relative">
+                                            <Tag className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[rgb(var(--color-text-tertiary))]" />
+                                            <input
+                                                value={draft.tagsText}
+                                                onChange={(event) => updateDraft({ tagsText: event.target.value })}
+                                                placeholder="多个标签用逗号分隔"
+                                                className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] pl-9 pr-3 text-sm text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
+                                            />
+                                        </div>
+                                    </label>
+
+                                    {isProductDraft && (
+                                        <div className="space-y-3 rounded-xl bg-[rgb(var(--color-surface-primary))] p-4">
+                                            <div className="block">
+                                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">所属品牌</div>
+                                                <div className="flex h-9 items-center rounded-lg bg-white px-3 text-sm font-medium text-[rgb(var(--color-text-primary))]">
+                                                    {selectedBrandName || '未绑定品牌'}
+                                                </div>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">SKU</div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleAddSku}
+                                                        className="inline-flex h-8 items-center gap-1 rounded-lg bg-white px-2.5 text-xs font-medium text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]"
+                                                    >
+                                                        <Plus className="h-3.5 w-3.5" />
+                                                        添加
+                                                    </button>
+                                                </div>
+                                                {draft.skus.length === 0 ? (
+                                                    <div className="rounded-lg border border-dashed border-[rgb(var(--color-border))] px-3 py-2.5 text-xs text-[rgb(var(--color-text-secondary))]">
+                                                        为商品添加颜色、尺码、规格等可选项。
+                                                    </div>
+                                                ) : (
+                                                    <div className="space-y-2">
+                                                        {draft.skus.map((sku, skuIndex) => (
+                                                            <div key={sku.id || skuIndex} className="rounded-lg bg-white p-3">
+                                                                <div className="grid grid-cols-[minmax(0,1fr)_32px] gap-2">
+                                                                    <input
+                                                                        value={sku.name}
+                                                                        onChange={(event) => handleSkuChange(skuIndex, { name: event.target.value })}
+                                                                        placeholder="SKU 名称"
+                                                                        className="h-9 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                                    />
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleRemoveSku(skuIndex)}
+                                                                        className="inline-flex h-9 items-center justify-center rounded-lg bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-secondary))] transition hover:bg-red-50 hover:text-red-600"
+                                                                        aria-label="删除 SKU"
+                                                                    >
+                                                                        <X className="h-4 w-4" />
+                                                                    </button>
+                                                                </div>
+                                                                <div className="mt-2 space-y-2">
+                                                                    {sku.attributes.map((attribute, attributeIndex) => (
+                                                                        <div key={`${sku.id}-${attributeIndex}`} className="grid grid-cols-[minmax(0,120px)_minmax(0,1fr)_32px] gap-2">
+                                                                            <input
+                                                                                value={attribute.key}
+                                                                                onChange={(event) => handleSkuAttributeChange(skuIndex, attributeIndex, { key: event.target.value })}
+                                                                                placeholder="属性"
+                                                                                className="h-8 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-2.5 text-xs text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                                            />
+                                                                            <input
+                                                                                value={attribute.value}
+                                                                                onChange={(event) => handleSkuAttributeChange(skuIndex, attributeIndex, { value: event.target.value })}
+                                                                                placeholder="值"
+                                                                                className="h-8 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-2.5 text-xs text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                                            />
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => handleRemoveSkuAttribute(skuIndex, attributeIndex)}
+                                                                                className="inline-flex h-8 items-center justify-center rounded-lg text-[rgb(var(--color-text-secondary))] transition hover:bg-red-50 hover:text-red-600"
+                                                                                aria-label="删除 SKU 属性"
+                                                                            >
+                                                                                <X className="h-3.5 w-3.5" />
+                                                                            </button>
+                                                                        </div>
+                                                                    ))}
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleAddSkuAttribute(skuIndex)}
+                                                                        className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
+                                                                    >
+                                                                        <Plus className="h-3.5 w-3.5" />
+                                                                        属性
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">扩展属性</div>
+                                            <button
+                                                type="button"
+                                                onClick={handleAddAttribute}
+                                                className="inline-flex h-8 items-center gap-1 rounded-lg bg-[rgb(var(--color-surface-secondary))] px-2.5 text-xs font-medium text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))]"
+                                            >
+                                                <Plus className="h-3.5 w-3.5" />
+                                                添加
+                                            </button>
+                                        </div>
+                                        {visibleDraftAttributes.length === 0 ? (
+                                            <div className="rounded-lg border border-dashed border-[rgb(var(--color-border))] px-3 py-2.5 text-xs text-[rgb(var(--color-text-secondary))]">
+                                                可添加颜色、材质、职业、人设、价格区间等结构化信息。
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-2">
+                                                {visibleDraftAttributes.map(({ attribute, index }) => (
+                                                    <div key={index} className="grid grid-cols-[minmax(0,140px)_minmax(0,1fr)_36px] gap-2">
+                                                        <input
+                                                            value={attribute.key}
+                                                            onChange={(event) => handleAttributeChange(index, { key: event.target.value })}
+                                                            placeholder="属性名"
+                                                            className="h-9 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                        />
+                                                        <input
+                                                            value={attribute.value}
+                                                            onChange={(event) => handleAttributeChange(index, { value: event.target.value })}
+                                                            placeholder="属性值"
+                                                            className="h-9 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleRemoveAttribute(index)}
+                                                            className="inline-flex h-9 items-center justify-center rounded-lg bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-secondary))] transition hover:bg-red-50 hover:text-red-600"
+                                                            aria-label="删除属性"
+                                                        >
+                                                            <X className="h-4 w-4" />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">{draftEntityLabel}图片</div>
+                                            {isRoleDraft && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handleGenerateCharacterCard()}
+                                                    disabled={working || generatingCardSubjectId === draft.id || draft.images.length === 0}
+                                                    className="inline-flex h-8 items-center gap-1 rounded-lg bg-[rgb(var(--color-text-primary))] px-2.5 text-xs font-semibold text-white transition hover:bg-[rgb(var(--color-surface-elevated))] disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    <Sparkles className={clsx('h-3.5 w-3.5', generatingCardSubjectId === draft.id && 'animate-pulse')} />
+                                                    {generatingCardSubjectId === draft.id ? '生成中' : '角色卡'}
+                                                </button>
+                                            )}
+                                        </div>
+                                        <label className={clsx(
+                                            'flex h-10 cursor-pointer items-center justify-center rounded-lg bg-[rgb(var(--color-surface-secondary))] text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))]',
+                                            draft.images.length >= 5 && 'pointer-events-none opacity-50'
+                                        )}>
+                                            选择图片
+                                            <input
+                                                type="file"
+                                                accept="image/*"
+                                                multiple
+                                                className="hidden"
+                                                onChange={(event) => {
+                                                    void handleImageInput(event.target.files);
+                                                    event.currentTarget.value = '';
+                                                }}
+                                            />
+                                        </label>
+                                        {draft.images.length > 0 && (
+                                            <div className="grid grid-cols-6 gap-2">
+                                                {draft.images.map((image, index) => (
+                                                    <div key={`${image.relativePath || image.name}-${index}`} className="group relative aspect-video overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setPreviewImage(image)}
+                                                            className="h-full w-full"
+                                                            aria-label="预览图片"
+                                                        >
+                                                            <img src={resolveAssetUrl(image.previewUrl)} alt={image.name} className="h-full w-full object-cover" />
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleRemoveImage(index)}
+                                                            className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                                                            aria-label="删除图片"
+                                                        >
+                                                            <X className="h-3 w-3" />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {isRoleDraft && (
+                                        <div className="space-y-2">
+                                            <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">角色视频</div>
+                                            {draft.video?.previewUrl ? (
+                                                <div className="group relative overflow-hidden rounded-lg bg-black">
+                                                    <video
+                                                        src={resolveAssetUrl(draft.video.previewUrl)}
+                                                        className="aspect-video w-full object-cover"
+                                                        muted
+                                                        playsInline
+                                                        controls
+                                                        preload="metadata"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleRemoveVideo}
+                                                        className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                                                        aria-label="删除角色视频"
+                                                    >
+                                                        <X className="h-3.5 w-3.5" />
+                                                    </button>
+                                                    <div className="truncate bg-black/75 px-3 py-2 text-xs font-medium text-white">{draft.video.name}</div>
+                                                </div>
+                                            ) : (
+                                                <label className="flex h-10 cursor-pointer items-center justify-center rounded-lg bg-[rgb(var(--color-surface-secondary))] text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))]">
+                                                    上传视频
+                                                    <input
+                                                        type="file"
+                                                        accept="video/*,.mp4,.webm,.mov,.m4v,.mkv"
+                                                        className="hidden"
+                                                        onChange={(event) => {
+                                                            void handleVideoFileInput(event.target.files);
+                                                            event.currentTarget.value = '';
+                                                        }}
+                                                    />
+                                                </label>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {isRoleDraft && (
+                                        <div className="space-y-2 rounded-xl bg-[rgb(var(--color-surface-primary))] p-4">
+                                            <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">声音参考</div>
+                                            <div className="rounded-xl bg-white px-4 py-3">
+                                                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[rgb(var(--color-text-tertiary))]">朗读采样句</div>
+                                                <div className="mt-1.5 text-sm font-medium leading-6 text-[rgb(var(--color-text-primary))]">{SUBJECT_VOICE_SAMPLE_TEXT}</div>
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (audioRecording.isRecording) {
+                                                            void handleFinishVoiceRecording();
+                                                        } else {
+                                                            void handleRecordVoice();
+                                                        }
+                                                    }}
+                                                    disabled={audioRecording.isWorking}
+                                                    className={clsx(
+                                                        'inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-white transition disabled:opacity-60',
+                                                        audioRecording.isRecording
+                                                            ? canFinishVoiceRecording
+                                                                ? 'bg-emerald-600 hover:bg-emerald-700'
+                                                                : 'bg-violet-600 hover:bg-violet-700'
+                                                            : 'bg-black hover:bg-black/85',
+                                                    )}
+                                                >
+                                                    <Mic className="h-3.5 w-3.5" />
+                                                    {audioRecording.isWorking
+                                                        ? '处理中'
+                                                        : audioRecording.isRecording
+                                                            ? (canFinishVoiceRecording ? '完成采样' : `录音中 ${recordingElapsedSeconds}s`)
+                                                            : '录制音频'}
+                                                </button>
+                                                <label className={clsx(
+                                                    'inline-flex h-9 items-center rounded-lg bg-white px-3 text-xs font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]',
+                                                    audioRecording.isRecording || audioRecording.isWorking
+                                                        ? 'pointer-events-none opacity-50'
+                                                        : 'cursor-pointer',
+                                                )}>
+                                                    导入音频
+                                                    <input
+                                                        type="file"
+                                                        accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.webm"
+                                                        className="hidden"
+                                                        onChange={(event) => {
+                                                            void handleVoiceFileInput(event.target.files);
+                                                            event.currentTarget.value = '';
+                                                        }}
+                                                    />
+                                                </label>
+                                                {draft.voice?.previewUrl && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleRemoveVoice}
+                                                        className="inline-flex h-9 items-center rounded-lg bg-red-50 px-3 text-xs font-semibold text-red-700 transition hover:bg-red-100"
+                                                    >
+                                                        删除声音
+                                                    </button>
+                                                )}
+                                            </div>
+                                            {audioRecording.isRecording && (
+                                                <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700">
+                                                    已录 {voiceRecordingElapsedSeconds} 秒
+                                                </div>
+                                            )}
+                                            {recordingHint && <div className="text-xs text-[rgb(var(--color-text-secondary))]">{recordingHint}</div>}
+                                            {recordingError && <div className="text-xs text-red-600">{recordingError}</div>}
+                                            {draft.voice?.previewUrl && (
+                                                <div className="space-y-2 rounded-lg bg-white px-3 py-2.5">
+                                                    <div className="text-xs text-[rgb(var(--color-text-secondary))]">{draft.voice.name}</div>
+                                                    <audio controls src={resolveAssetUrl(draft.voice.previewUrl)} className="w-full" />
+                                                </div>
+                                            )}
+                                            {activeDraftSubject && activeDraftVoiceInfo && (
+                                                <div className="space-y-2">
+                                                    <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                                                        <SelectMenu
+                                                            value={selectedVoiceCloneTtsModel}
+                                                            onChange={setSelectedVoiceCloneTtsModel}
+                                                            options={voiceCloneModelOptions}
+                                                            placeholder="选择 TTS 模型"
+                                                            className="w-full"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void handleRetryVoiceClone(activeDraftSubject)}
+                                                            disabled={!activeDraftVoiceInfo.canRetry || retryingVoiceSubjectId === activeDraftSubject.id || activeDraftVoiceInfo.tone === 'active'}
+                                                            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))] disabled:cursor-not-allowed disabled:opacity-50"
+                                                        >
+                                                            <RefreshCw className={clsx('h-3.5 w-3.5', (retryingVoiceSubjectId === activeDraftSubject.id || activeDraftVoiceInfo.tone === 'active') && 'animate-spin')} />
+                                                            {retryingVoiceSubjectId === activeDraftSubject.id
+                                                                ? '提交中'
+                                                                : activeDraftVoiceInfo.tone === 'active'
+                                                                    ? '音色复刻中'
+                                                                    : '克隆音色'}
+                                                        </button>
+                                                    </div>
+                                                    <div className={clsx('rounded-lg border px-3 py-2 text-xs', voiceInfoClassName(activeDraftVoiceInfo.tone))}>
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <span className="font-semibold">{activeDraftVoiceInfo.label}</span>
+                                                            {activeDraftVoiceInfo.detail && (
+                                                                <span className="font-mono text-[11px] opacity-80">{activeDraftVoiceInfo.detail}</span>
+                                                            )}
+                                                            {activeDraftVoiceInfo.targetTtsModel && (
+                                                                <span className="rounded-md bg-white/65 px-1.5 py-0.5 font-mono text-[10px] opacity-85">
+                                                                    {displayModelName(activeDraftVoiceInfo.targetTtsModel)}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        {activeDraftVoiceInfo.error && (
+                                                            <div className="mt-1 line-clamp-2 opacity-80">{activeDraftVoiceInfo.error}</div>
+                                                        )}
+                                                    </div>
+                                                    <VoiceSlotBadges slots={activeDraftVoiceSlots} />
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <aside className="h-fit rounded-2xl bg-[rgb(var(--color-surface-secondary))] p-4">
+                                    <div className="mb-3 text-base font-semibold text-[rgb(var(--color-text-primary))]">{draft.id ? '编辑预览' : '新增预览'}</div>
+                                    <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-xl bg-white">
+                                        {draftPreviewImage ? (
+                                            <img src={resolveAssetUrl(draftPreviewImage)} alt={draft.name || draftEntityLabel} className="h-full w-full object-cover" />
+                                        ) : (
+                                            <div className="flex items-center gap-2 text-sm font-medium text-[rgb(var(--color-text-secondary))]">
+                                                <ImagePlus className="h-5 w-5" />
+                                                暂无封面
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="mt-4 space-y-2">
+                                        <div className="flex items-center gap-1.5 text-xs font-medium text-[rgb(var(--color-text-secondary))]">
+                                            <span className="rounded-full bg-white px-2 py-0.5">{draftCategoryName || '未分类'}</span>
+                                            <span>{draft.images.length}/5 张图片</span>
+                                            {isBrandDraft && <span>{productCountByBrandId.get(draft.id || '') || 0} 个商品</span>}
+                                            {isProductDraft && <span>{draft.skus.length} 个SKU</span>}
+                                            {isRoleDraft && <span>{draft.voice?.previewUrl ? '有声音' : '未录音'}</span>}
+                                            {isRoleDraft && <span>{draft.video?.previewUrl ? '有视频' : '无视频'}</span>}
+                                        </div>
+                                        <div className="text-base font-semibold text-[rgb(var(--color-text-primary))]">{draft.name || `${draftEntityLabel}名称`}</div>
+                                        <div className="min-h-[36px] text-xs leading-5 text-[rgb(var(--color-text-secondary))]">
+                                            {draft.description || `选择图片后实时查看${draftEntityLabel}素材预览`}
+                                        </div>
+                                        {isProductDraft && selectedBrandName && (
+                                            <div className="text-xs font-medium text-[rgb(var(--color-text-secondary))]">
+                                                品牌：{selectedBrandName}
+                                            </div>
+                                        )}
+                                    </div>
+                                    {draft.id && (
+                                        <div className="mt-4 space-y-1 rounded-lg bg-white px-3 py-2 text-[11px] leading-5 text-[rgb(var(--color-text-secondary))]">
+                                            <div>ID：{draft.id}</div>
+                                            {isBrandDraft && (
+                                                <div>绑定商品：{productCountByBrandId.get(draft.id) || 0}</div>
+                                            )}
+                                            {isProductDraft && selectedBrandName && (
+                                                <div>所属品牌：{selectedBrandName}</div>
+                                            )}
+                                            {isProductDraft && (
+                                                <div>SKU数量：{draft.skus.length}</div>
+                                            )}
+                                            {activeDraftVoiceInfo?.voiceId && (
+                                                <div>音色ID：<span className="font-mono">{activeDraftVoiceInfo.voiceId}</span></div>
+                                            )}
+                                            {activeDraftVoiceInfo?.targetTtsModel && (
+                                                <div>TTS模型：<span className="font-mono">{activeDraftVoiceInfo.targetTtsModel}</span></div>
+                                            )}
+                                            {activeDraftVoiceInfo?.cloneModel && (
+                                                <div>克隆模型：<span className="font-mono">{activeDraftVoiceInfo.cloneModel}</span></div>
+                                            )}
+                                            {activeDraftVoiceSlots.length > 0 && (
+                                                <div className="pt-1">
+                                                    <VoiceSlotBadges slots={activeDraftVoiceSlots} />
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </aside>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-between px-8 py-5">
+                            <div>
+                                {draft.id && (
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleDeleteSubject()}
+                                        disabled={working}
+                                        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-red-50 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:opacity-60"
+                                    >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                        删除
+                                    </button>
+                                )}
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <button
+                                    type="button"
+                                    onClick={closeModal}
+                                    disabled={working}
+                                    className="h-9 rounded-lg bg-[rgb(var(--color-surface-secondary))] px-5 text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))] disabled:opacity-60"
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void handleSave()}
+                                    disabled={working}
+                                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-5 text-sm font-semibold text-white transition hover:bg-black/85 disabled:opacity-60"
+                                >
+                                    {draft.id ? <Pencil className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
+                                    {working ? '处理中...' : draft.id ? '保存' : '创建'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {previewImage && (
@@ -2190,15 +5354,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 <MediaAssetPreviewDialog
                     asset={previewMediaAsset}
                     onClose={() => setPreviewMediaAsset(null)}
-                    onOpenFile={(asset) => {
-                        void handleOpenMediaAsset(asset);
-                    }}
-                    onShowInFolder={(asset) => {
-                        void handleShowMediaAssetInFolder(asset);
-                    }}
-                    onDelete={(asset) => {
-                        void handleDeleteMediaAsset(asset);
-                    }}
                 />
             )}
 

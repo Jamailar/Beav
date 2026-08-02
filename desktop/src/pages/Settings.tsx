@@ -1,16 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical, Database, Lightbulb, ExternalLink, ArrowLeft, Users, GripVertical, Server, Store, Brain } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type SetStateAction } from 'react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical, Users, GripVertical, Settings as SettingsIcon, ArrowLeft, Server, Store, X, MessageSquareText } from 'lucide-react';
 import clsx from 'clsx';
 import {
   AI_SOURCE_PRESETS,
   type AiSourcePreset,
   type AiSourceConfig,
   DEFAULT_AI_PRESET_ID,
+  OFFICIAL_AUTO_SOURCE_ID,
+  OFFICIAL_AI_SOURCE_DISPLAY_NAME,
+  canonicalizeOfficialAutoSourceId,
+  createOfficialAiSource,
   findAiPresetById,
-  inferPresetIdByEndpoint
+  inferPresetIdByEndpoint,
+  isOfficialAutoSourceId
 } from '../config/aiSources';
-import { subscribeSettingsUpdated, subscribeYoutubeInstallProgress } from '../bridge/appEvents';
 import { appAlert, appConfirm } from '../utils/appDialogs';
+import { AdvisorModal, AdvisorSettingsPanel, type Advisor } from './Advisors';
+import { subscribeSettingsUpdated } from '../bridge/appEvents';
+import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import {
   type AgentTaskSnapshot,
   type AgentTaskTrace,
@@ -24,16 +31,11 @@ import {
   type McpServerRuntimeItem,
   type McpServerConfig,
   type McpSessionState,
-  type MemoryHistoryEntry,
-  type MemoryMaintenanceStatus,
-  type MemorySearchResult,
   type RuntimePerfBenchmarkMode,
-  type RuntimePerfPreset,
   type RuntimePerfRunResult,
   type RuntimePerfTimelineItem,
   type ToolDiagnosticDescriptor,
   type ToolDiagnosticRunResult,
-  type UserMemory,
   AiPresetLogo,
   AiPresetSelect,
   AiModelSelect,
@@ -47,21 +49,15 @@ import {
   buildModelCapabilityBadges,
   buildModelInputIcons,
   createAiSourceFromPreset,
-  createDefaultMcpServer,
   filterAiModelsByCapability,
   generateAiSourceId,
   inferImageTemplateByProvider,
-  isImageTemplateRemoteModelFetchEnabled,
-  isLikelyLocalEndpoint,
-  normalizeImageModelFetchBaseURL,
   normalizeAiModelDescriptors,
   normalizeSourceModels,
   parseAiSources,
   parseEnvText,
   parseMcpServers,
   resolveDefaultImageEndpoint,
-  resolveImageModelFetchPresetId,
-  resolveImageModelFetchProtocol,
   stringifyEnvRecord,
   toAiModelDescriptor,
 } from './settings/shared';
@@ -72,8 +68,11 @@ import type {
   CliRuntimeToolRecord,
   DiagnosticsLogStatus,
   DiagnosticsPendingReport,
-  NotificationPermissionState,
+  CodexPluginMarketplaceItem,
   NotificationSettingsPayload,
+  ThriveSkillMarketplaceItem,
+  ThrivePluginMarketplaceItem,
+  ThrivePluginSummary,
 } from '../types';
 import {
   REDBOX_OFFICIAL_VIDEO_BASE_URL,
@@ -85,33 +84,6 @@ import {
   type RedclawOnboardingState,
 } from './redclaw/onboardingState';
 import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProps } from '../features/official';
-import type { AdvisorProfile } from './Advisors';
-import type { SettingsNavigationTarget } from '../features/app-shell/types';
-import {
-  DEFAULT_VISUAL_INDEX_PROMPT_VERSION,
-  FILE_INDEX_DASHBOARD_CACHE_TTL_MS,
-  RUNTIME_PERF_CHECKPOINT_WINDOW_MS,
-  RUNTIME_PERF_HISTORY_LIMIT,
-  RUNTIME_PERF_PRESETS,
-  RUNTIME_PERF_TIMELINE_LIMIT,
-  formatSettingsSkillSource as formatSettingsSkillSourceScope,
-  normalizeVisualIndexPromptVersion,
-} from '../features/settings/settingsModel';
-import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
-import {
-  GeneralSettingsSection,
-  ExperimentalSettingsSection,
-  RemoteConnectionSettingsSection,
-  SettingsSaveBar,
-  ToolsSettingsSection,
-  MemorySettingsSection,
-  type FileIndexDashboard,
-} from './settings/SettingsSections';
-import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
-import { playTestNotificationSound } from '../notifications/audio';
-import { DEFAULT_NOTIFICATION_SETTINGS, parseNotificationSettings } from '../notifications/types';
-import { dispatchAppIntent } from '../features/app-shell/appIntent';
-import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import {
   ECOMMERCE_PLATFORM_GROUPS,
   ECOMMERCE_PLATFORM_IDS,
@@ -121,6 +93,66 @@ import {
   serializeEcommercePlatformsSettings,
   type EcommercePlatformsSettings,
 } from '../features/ecommerce-platforms/catalog';
+import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
+import { useI18n, type I18nKey } from '../i18n';
+import {
+  GeneralSettingsSection,
+  ExperimentalSettingsSection,
+  RemoteConnectionSettingsSection,
+  SettingsSaveBar,
+  ToolsSettingsSection,
+  type FileIndexDashboard,
+} from './settings/SettingsSections';
+import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
+import { playTestNotificationSound } from '../notifications/audio';
+import { DEFAULT_NOTIFICATION_SETTINGS, parseNotificationSettings } from '../notifications/types';
+import { APP_BRAND } from '../config/brand';
+import { SHOW_CURRENT_RELEASE_NOTES_EVENT } from '../utils/currentReleaseNotes';
+import {
+  DEFAULT_VOICE_TTS_MODEL,
+  DEFAULT_VOICE_CLONE_MODEL,
+  MINIMAX_VOICE_CLONE_MODEL,
+  FILE_INDEX_DASHBOARD_CACHE_TTL_MS,
+  FILE_INDEX_DASHBOARD_POLL_MS,
+  DEFAULT_VISUAL_INDEX_PROMPT_VERSION,
+  RUNTIME_PERF_HISTORY_LIMIT,
+  RUNTIME_PERF_TIMELINE_LIMIT,
+  RUNTIME_PERF_CHECKPOINT_WINDOW_MS,
+  AiPricingRate,
+  AiPricingModel,
+  AiPricingGroup,
+  AiPricingCatalog,
+  normalizePricingNumber,
+  formatPricingPoints,
+  hasMeaningfulPricingValue,
+  formatPricingUpdatedAt,
+  parseAiPricingCatalog,
+  pricingModeLabel,
+  pricingRateLabel,
+  pricingRateValue,
+  pricingRateCellValue,
+  pricingModelFields,
+  RUNTIME_PERF_PRESETS,
+  SettingsTab,
+  SettingsNavigationTarget,
+  AiModelRouteMode,
+  AiModelRouteScope,
+  AiModelRouteConfig,
+  AiModelRoutes,
+  DEFAULT_VIDEO_ANALYSIS_ENABLED,
+  DEFAULT_VISUAL_INDEX_ENABLED,
+  DEFAULT_AI_MODEL_ROUTES,
+  normalizeModelKey,
+  cloneModelForVoiceTtsModel,
+  SettingsSkill,
+  McpServerDraft,
+  formatSettingsSkillSource,
+  formatMcpTime,
+  mcpDraftFromServer,
+  mcpServerFromDraft,
+  normalizeVisualIndexPromptVersion,
+  normalizeAiModelRoutes,
+} from '../features/settings/settingsModel';
 
 const MIN_CHAT_MAX_TOKENS = 1024;
 const DEFAULT_CHAT_MAX_TOKENS = 262144;
@@ -129,43 +161,41 @@ const DEVELOPER_MODE_UNLOCK_TAP_COUNT = 7;
 const DEVELOPER_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 const SETTINGS_ACTIVATION_DEBOUNCE_MS = 80;
 const SETTINGS_TAB_POLL_DELAY_MS = 300;
-type SettingsTab = 'general' | 'ai' | 'team' | 'platforms' | 'skills' | 'tools' | 'profile' | 'memory' | 'remote' | 'mcp' | 'experimental';
-
 const FILE_INDEX_DASHBOARD_CACHE_KEY = 'redbox:file-index-dashboard:v1';
-const TEAM_SECTION_STORAGE_KEY = 'redbox:team-section:v1';
-const TEAM_CREATE_STORAGE_KEY = 'redbox:team-create:v1';
-
-type FileIndexDashboardCacheRecord = {
-  savedAt: number;
-  dashboard: FileIndexDashboard;
+type RedclawProfileDraft = {
+  user: string;
+  creatorProfile: string;
 };
 
-function readCachedFileIndexDashboard(): FileIndexDashboardCacheRecord | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(FILE_INDEX_DASHBOARD_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<FileIndexDashboardCacheRecord>;
-    if (!parsed || typeof parsed.savedAt !== 'number' || !parsed.dashboard) return null;
-    return {
-      savedAt: parsed.savedAt,
-      dashboard: parsed.dashboard,
-    };
-  } catch (error) {
-    console.warn('Failed to read cached file index dashboard:', error);
-    return null;
-  }
+type WorkspaceSpace = {
+  id: string;
+  name: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+const EMPTY_REDCLAW_PROFILE_DRAFT: RedclawProfileDraft = {
+  user: '',
+  creatorProfile: '',
+};
+
+const DEFAULT_SPACE_ID = 'default';
+
+function teamAdvisorOrder(advisor: Advisor, index: number): number {
+  return Number.isFinite(advisor.redclawOrder) ? Number(advisor.redclawOrder) : index;
 }
 
-function sortTeamAdvisors(advisors: AdvisorProfile[]): AdvisorProfile[] {
-  return [...advisors].sort((left, right) => {
-    const leftOrder = Number.isFinite(Number(left.redclawOrder)) ? Number(left.redclawOrder) : Number.MAX_SAFE_INTEGER;
-    const rightOrder = Number.isFinite(Number(right.redclawOrder)) ? Number(right.redclawOrder) : Number.MAX_SAFE_INTEGER;
-    return leftOrder - rightOrder || String(left.name || '').localeCompare(String(right.name || ''));
-  });
+function sortTeamAdvisors(advisors: Advisor[]): Advisor[] {
+  return advisors
+    .map((advisor, index) => ({ advisor, index }))
+    .sort((left, right) => {
+      const orderDelta = teamAdvisorOrder(left.advisor, left.index) - teamAdvisorOrder(right.advisor, right.index);
+      return orderDelta || left.index - right.index;
+    })
+    .map(({ advisor }) => advisor);
 }
 
-function advisorAvatarLabel(advisor: AdvisorProfile): string {
+function advisorAvatarLabel(advisor: Advisor): string {
   return String(advisor.avatar || advisor.name || '成').trim().slice(0, 2);
 }
 
@@ -176,20 +206,18 @@ function TeamSettingsSection({
   draggingAdvisorId,
   onCreateAdvisor,
   onToggleVisible,
-  onOpenManager,
-  onRefresh,
+  onOpenSettings,
   onDragStart,
   onDragOver,
   onDragEnd,
 }: {
-  advisors: AdvisorProfile[];
+  advisors: Advisor[];
   loading: boolean;
   busyAdvisorId: string | null;
   draggingAdvisorId: string | null;
   onCreateAdvisor: () => void;
-  onToggleVisible: (advisor: AdvisorProfile) => void;
-  onOpenManager: () => void;
-  onRefresh: () => void;
+  onToggleVisible: (advisor: Advisor) => void;
+  onOpenSettings: (advisor: Advisor) => void;
   onDragStart: (advisorId: string) => void;
   onDragOver: (advisorId: string) => void;
   onDragEnd: () => void;
@@ -199,31 +227,20 @@ function TeamSettingsSection({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-lg font-medium text-text-primary">团队</h2>
-          <p className="mt-1 text-sm text-text-tertiary">管理 RedClaw 新对话里出现的成员和顺序。</p>
+          <p className="mt-1 text-sm text-text-tertiary">管理 {APP_BRAND.aiDisplayName} 新对话里出现的成员和顺序。</p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={loading}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
-          >
-            <RefreshCw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} />
-            刷新
-          </button>
-          <button
-            type="button"
-            onClick={onCreateAdvisor}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            新增成员
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onCreateAdvisor}
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border px-3 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          新增成员
+        </button>
       </div>
 
       <div className="overflow-hidden rounded-xl border border-border bg-surface-primary">
-        {loading && advisors.length === 0 ? (
+        {loading ? (
           <div className="flex items-center gap-2 px-4 py-5 text-sm text-text-tertiary">
             <RefreshCw className="h-4 w-4 animate-spin" />
             正在读取成员
@@ -273,6 +290,13 @@ function TeamSettingsSection({
                 >
                   <button
                     type="button"
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('text/plain', advisor.id);
+                      onDragStart(advisor.id);
+                    }}
+                    onDragEnd={onDragEnd}
                     className="flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary active:cursor-grabbing"
                     title="拖动排序"
                     aria-label="拖动排序"
@@ -302,7 +326,7 @@ function TeamSettingsSection({
                       visible ? 'bg-[#34c759]' : 'bg-[#d1d1d6]'
                     )}
                     title={visible ? '已展示' : '已隐藏'}
-                    aria-label={visible ? '已展示' : '已隐藏'}
+                    aria-label={visible ? `在 ${APP_BRAND.aiDisplayName} 展示` : `不在 ${APP_BRAND.aiDisplayName} 展示`}
                   >
                     <span
                       className={clsx(
@@ -314,11 +338,12 @@ function TeamSettingsSection({
 
                   <button
                     type="button"
-                    onClick={onOpenManager}
-                    className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                    onClick={() => onOpenSettings(advisor)}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                    title="设置成员"
+                    aria-label="设置成员"
                   >
-                    <ExternalLink className="h-3.5 w-3.5" />
-                    管理
+                    <SettingsIcon className="h-4 w-4" />
                   </button>
                 </div>
               );
@@ -409,62 +434,19 @@ function EcommercePlatformsSettingsSection({
   );
 }
 
-function sortSettingsSkills(skills: SkillDefinition[]): SkillDefinition[] {
-  return [...skills].sort((left, right) => {
-    const leftBuiltin = left.isBuiltin || left.sourceScope === 'builtin' ? 0 : 1;
-    const rightBuiltin = right.isBuiltin || right.sourceScope === 'builtin' ? 0 : 1;
-    return leftBuiltin - rightBuiltin || String(left.name || '').localeCompare(String(right.name || ''));
-  });
-}
-
-function writeCachedFileIndexDashboard(dashboard: FileIndexDashboard): number {
-  const savedAt = Date.now();
-  if (typeof window === 'undefined') return savedAt;
-  try {
-    window.localStorage.setItem(
-      FILE_INDEX_DASHBOARD_CACHE_KEY,
-      JSON.stringify({ savedAt, dashboard }),
-    );
-  } catch (error) {
-    console.warn('Failed to cache file index dashboard:', error);
-  }
-  return savedAt;
-}
-
-function clearCachedFileIndexDashboard() {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.removeItem(FILE_INDEX_DASHBOARD_CACHE_KEY);
-  } catch (error) {
-    console.warn('Failed to clear cached file index dashboard:', error);
-  }
-}
-
-type RedclawProfileDraft = {
-  user: string;
-  creatorProfile: string;
-};
-
-const EMPTY_REDCLAW_PROFILE_DRAFT: RedclawProfileDraft = {
-  user: '',
-  creatorProfile: '',
-};
-
-const DEFAULT_SPACE_ID = 'default';
-
-function normalizeNotificationPermissionState(
-  value: unknown,
-): NotificationPermissionState['state'] {
-  const state = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (state === 'granted' || state === 'denied' || state === 'prompt') {
-    return state;
-  }
-  return 'unknown';
-}
-
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
+type AcpGatewayStatus = NonNullable<AssistantDaemonStatus['acpGateway']>;
+type AcpClientStatus = AcpGatewayStatus['clients'][number];
 type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
 type CliRuntimeInstallMethodOption = 'npm' | 'pnpm' | 'python' | 'uv' | 'cargo' | 'go' | 'binary';
+type CliRuntimeExecutionMode = 'managed' | 'host_compatible' | 'unrestricted';
+const normalizeCliRuntimeExecutionMode = (value: unknown): CliRuntimeExecutionMode => {
+  const normalized = String(value || '').trim();
+  if (normalized === 'managed' || normalized === 'host_compatible' || normalized === 'unrestricted') {
+    return normalized;
+  }
+  return 'host_compatible';
+};
 type CliRuntimeInstallQueueItem = {
   installId: string;
   toolName: string;
@@ -495,6 +477,16 @@ type AssistantDaemonDraft = {
     enabled: boolean;
     endpointPath: string;
     authToken: string;
+  };
+  acpGateway: {
+    enabled: boolean;
+    requireToken: boolean;
+    localOnly: boolean;
+    endpointPath: string;
+    manifestPath: string;
+    guidePath: string;
+    defaultRuntimeMode: string;
+    defaultClientLabel: string;
   };
   weixin: {
     enabled: boolean;
@@ -542,6 +534,16 @@ const createDefaultAssistantDaemonDraft = (): AssistantDaemonDraft => ({
     endpointPath: '/hooks/channel/relay',
     authToken: '',
   },
+  acpGateway: {
+    enabled: false,
+    requireToken: false,
+    localOnly: true,
+    endpointPath: '/acp/v1',
+    manifestPath: '/acp/v1/manifest',
+    guidePath: '/acp/v1/guide',
+    defaultRuntimeMode: 'default',
+    defaultClientLabel: 'External Agent',
+  },
   weixin: {
     enabled: false,
     endpointPath: '/hooks/weixin/relay',
@@ -579,6 +581,16 @@ const assistantDaemonStatusToDraft = (status?: AssistantDaemonStatus | null): As
       endpointPath: String(status.relay?.endpointPath || '/hooks/channel/relay'),
       authToken: String(status.relay?.authToken || ''),
     },
+    acpGateway: {
+      enabled: Boolean(status.acpGateway?.enabled),
+      requireToken: Boolean(status.acpGateway?.requireToken),
+      localOnly: status.acpGateway?.localOnly !== false,
+      endpointPath: String(status.acpGateway?.endpointPath || '/acp/v1'),
+      manifestPath: String(status.acpGateway?.manifestPath || '/acp/v1/manifest'),
+      guidePath: String(status.acpGateway?.guidePath || '/acp/v1/guide'),
+      defaultRuntimeMode: String(status.acpGateway?.defaultRuntimeMode || 'default'),
+      defaultClientLabel: String(status.acpGateway?.defaultClientLabel || 'External Agent'),
+    },
     weixin: {
       enabled: Boolean(status.weixin?.enabled),
       endpointPath: String(status.weixin?.endpointPath || '/hooks/weixin/relay'),
@@ -604,6 +616,7 @@ type RuntimeSessionListItem = {
   } | null;
   transcriptCount: number;
   checkpointCount: number;
+  metadata?: Record<string, unknown> | null;
   chatSession?: {
     id: string;
     title?: string;
@@ -654,6 +667,18 @@ type RuntimeHookDefinition = {
   type: string;
   matcher?: string;
   enabled?: boolean;
+  sourceScope?: string;
+  pluginId?: string;
+  pluginRoot?: string;
+  pluginDataRoot?: string;
+  sourcePath?: string;
+  sourceRelativePath?: string;
+  command?: string;
+  commandWindows?: string;
+  timeoutSec?: number;
+  async?: boolean;
+  statusMessage?: string;
+  raw?: unknown;
 };
 
 type RuntimePerfCollector = {
@@ -757,7 +782,7 @@ function normalizeCliRuntimeEnvironmentRecord(value: unknown): CliRuntimeEnviron
 }
 
 function runtimePerfContextTypeForMode(mode: RuntimePerfBenchmarkMode): string {
-  if (mode === 'chatroom') return 'chatroom';
+  if (mode === 'team') return 'team';
   if (mode === 'diagnostics') return 'diagnostics';
   return mode;
 }
@@ -774,20 +799,106 @@ const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => 
   return String(Math.floor(parsed));
 };
 
+type FileIndexDashboardCacheRecord = {
+  savedAt: number;
+  dashboard: FileIndexDashboard;
+};
+
+function readCachedFileIndexDashboard(): FileIndexDashboardCacheRecord | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(FILE_INDEX_DASHBOARD_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<FileIndexDashboardCacheRecord>;
+    if (!parsed || typeof parsed.savedAt !== 'number' || !parsed.dashboard) return null;
+    return {
+      savedAt: parsed.savedAt,
+      dashboard: parsed.dashboard,
+    };
+  } catch (error) {
+    console.warn('Failed to read cached file index dashboard:', error);
+    return null;
+  }
+}
+
+function writeCachedFileIndexDashboard(dashboard: FileIndexDashboard): number {
+  const savedAt = Date.now();
+  if (typeof window === 'undefined') return savedAt;
+  try {
+    window.localStorage.setItem(
+      FILE_INDEX_DASHBOARD_CACHE_KEY,
+      JSON.stringify({ savedAt, dashboard }),
+    );
+  } catch (error) {
+    console.warn('Failed to cache file index dashboard:', error);
+  }
+  return savedAt;
+}
+
+function clearCachedFileIndexDashboard() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(FILE_INDEX_DASHBOARD_CACHE_KEY);
+  } catch (error) {
+    console.warn('Failed to clear cached file index dashboard:', error);
+  }
+}
+
+
+
 export function Settings({
   isActive = true,
+  onOpenAppOnboarding,
   onOpenRedClawOnboarding,
   redclawOnboardingVersion = 0,
   navigationTarget,
   onReturn,
 }: {
   isActive?: boolean;
+  onOpenAppOnboarding?: () => void;
   onOpenRedClawOnboarding?: () => void;
   redclawOnboardingVersion?: number;
   navigationTarget?: SettingsNavigationTarget | null;
   onReturn?: () => void;
 }) {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<SettingsTab>('ai');
+  const [teamAdvisors, setTeamAdvisors] = useState<Advisor[]>([]);
+  const [isTeamAdvisorsLoading, setIsTeamAdvisorsLoading] = useState(false);
+  const [teamAdvisorBusyId, setTeamAdvisorBusyId] = useState<string | null>(null);
+  const [settingsSkills, setSettingsSkills] = useState<SettingsSkill[]>([]);
+  const [isSettingsSkillsLoading, setIsSettingsSkillsLoading] = useState(false);
+  const [settingsSkillBusyName, setSettingsSkillBusyName] = useState('');
+  const [settingsSkillStatusMessage, setSettingsSkillStatusMessage] = useState('');
+  const [areBuiltinSkillsExpanded, setAreBuiltinSkillsExpanded] = useState(false);
+  const [isSkillMarketplaceOpen, setIsSkillMarketplaceOpen] = useState(false);
+  const [skillMarketplaceItems, setSkillMarketplaceItems] = useState<ThriveSkillMarketplaceItem[]>([]);
+  const [isSkillMarketplaceLoading, setIsSkillMarketplaceLoading] = useState(false);
+  const [skillMarketplaceBusyId, setSkillMarketplaceBusyId] = useState('');
+  const [isCreatingTeamAdvisor, setIsCreatingTeamAdvisor] = useState(false);
+  const [editingTeamAdvisor, setEditingTeamAdvisor] = useState<Advisor | null>(null);
+  const [settingsTeamAdvisor, setSettingsTeamAdvisor] = useState<Advisor | null>(null);
+  const [draggingTeamAdvisorId, setDraggingTeamAdvisorId] = useState<string | null>(null);
+  const [isTeamSystemPromptExpanded, setIsTeamSystemPromptExpanded] = useState(false);
+  const [isTeamOptimizingPrompt, setIsTeamOptimizingPrompt] = useState(false);
+  const teamAdvisorOrderRef = useRef<Advisor[]>([]);
+  const teamAdvisorDragIdRef = useRef<string | null>(null);
+  const initialFileIndexDashboardCache = useMemo(() => readCachedFileIndexDashboard(), []);
+  const [baseSettingsLoadedRevision, setBaseSettingsLoadedRevision] = useState(0);
+  const [settingsSubView, setSettingsSubView] = useState<'main' | 'ai-pricing'>('main');
+  const [aiPricingCatalog, setAiPricingCatalog] = useState<AiPricingCatalog | null>(null);
+  const [aiPricingLoading, setAiPricingLoading] = useState(false);
+  const [aiPricingError, setAiPricingError] = useState('');
+  const [aiPricingActiveGroup, setAiPricingActiveGroup] = useState('');
+  const [aiPricingSearch, setAiPricingSearch] = useState('');
+  const builtinSettingsSkills = useMemo(
+    () => settingsSkills.filter((skill) => skill.isBuiltin),
+    [settingsSkills]
+  );
+  const editableSettingsSkills = useMemo(
+    () => settingsSkills.filter((skill) => !skill.isBuiltin),
+    [settingsSkills]
+  );
   const [formData, setFormData] = useState<any>({
     api_endpoint: '',
     api_key: '',
@@ -799,18 +910,49 @@ export function Settings({
     embedding_endpoint: '',
     embedding_key: '',
     embedding_model: '',
+    visual_index_enabled: DEFAULT_VISUAL_INDEX_ENABLED,
+    visual_index_provider: 'openai-compatible',
+    visual_index_endpoint: '',
+    visual_index_api_key: '',
+    visual_index_model: '',
+    visual_index_prompt_version: DEFAULT_VISUAL_INDEX_PROMPT_VERSION,
+    visual_index_timeout_seconds: '90',
+    visual_index_max_image_edge: '1536',
+    visual_index_skip_small_images: true,
+    visual_index_pdf_max_pages: '12',
+    visual_index_pdf_render_dpi: '144',
+    visual_index_concurrency: '1',
+    video_analysis_enabled: DEFAULT_VIDEO_ANALYSIS_ENABLED,
+    video_analysis_endpoint: '',
+    video_analysis_api_key: '',
+    video_analysis_model: '',
+    video_analysis_protocol: 'gemini',
+    video_analysis_max_direct_video_bytes: String(64 * 1024 * 1024),
+    docling_endpoint: '',
+    tika_endpoint: '',
+    unstructured_endpoint: '',
+    parser_api_key: '',
+    parser_timeout_seconds: '90',
+    rerank_endpoint: '',
+    rerank_api_key: '',
+    rerank_model: '',
+    rerank_timeout_seconds: '30',
     image_provider: 'openai-compatible',
     image_endpoint: '',
     image_api_key: '',
-    image_model: 'gpt-image-1',
+    image_model: '',
+    voice_endpoint: '',
+    voice_api_key: '',
+    voice_tts_model: DEFAULT_VOICE_TTS_MODEL,
+    tts_model: DEFAULT_VOICE_TTS_MODEL,
+    voice_clone_model: DEFAULT_VOICE_CLONE_MODEL,
     video_endpoint: '',
     video_api_key: '',
     video_model: String(REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video']),
     image_provider_template: 'openai-images',
     image_aspect_ratio: '3:4',
     image_size: '',
-    image_quality: 'auto',
-    ecommerce_platforms_json: serializeEcommercePlatformsSettings(createDefaultEcommercePlatformsSettings()),
+    image_quality: 'medium',
     model_name_wander: '',
     model_name_chatroom: '',
     model_name_knowledge: '',
@@ -823,36 +965,20 @@ export function Settings({
     chat_max_tokens_deepseek: String(DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK),
     wander_deep_think_enabled: false,
     debug_log_enabled: false,
-    diagnostics_upload_consent: 'prompt',
+    diagnostics_upload_consent: 'approved',
     diagnostics_include_advanced_context: false,
     diagnostics_auto_send_same_crash: false,
     diagnostics_last_prompted_at: '',
+    analytics_consent: 'approved',
     release_log_retention_days: '7',
     release_log_max_file_mb: '10',
-    visual_index_enabled: false,
-    visual_index_provider: 'openai-compatible',
-    visual_index_endpoint: '',
-    visual_index_api_key: '',
-    visual_index_model: '',
-    visual_index_prompt_version: DEFAULT_VISUAL_INDEX_PROMPT_VERSION,
-    visual_index_timeout_seconds: '90',
-    visual_index_max_image_edge: '1536',
-    visual_index_skip_small_images: true,
-    visual_index_pdf_max_pages: '12',
-    visual_index_pdf_render_dpi: '144',
-    visual_index_concurrency: '1',
-    docling_endpoint: '',
-    tika_endpoint: '',
-    unstructured_endpoint: '',
-    parser_api_key: '',
-    parser_timeout_seconds: '60',
-    rerank_endpoint: '',
-    rerank_api_key: '',
-    rerank_model: '',
-    rerank_timeout_seconds: '30',
+    cli_runtime_execution_mode: 'host_compatible',
     developer_mode_enabled: false,
     developer_mode_unlocked_at: '',
+    ai_model_routes_json: JSON.stringify(DEFAULT_AI_MODEL_ROUTES),
+    ecommerce_platforms_json: serializeEcommercePlatformsSettings(createDefaultEcommercePlatformsSettings()),
   });
+  const [aiModelRoutes, setAiModelRoutes] = useState<AiModelRoutes>(DEFAULT_AI_MODEL_ROUTES);
   const [aiSources, setAiSources] = useState<AiSourceConfig[]>([]);
   const [defaultAiSourceId, setDefaultAiSourceId] = useState('');
   const [activeAiSourceId, setActiveAiSourceId] = useState('');
@@ -864,18 +990,21 @@ export function Settings({
   const [addModelModalSourceId, setAddModelModalSourceId] = useState('');
   const [isCreateAiSourceModalOpen, setIsCreateAiSourceModalOpen] = useState(false);
   const [createAiSourceDraft, setCreateAiSourceDraft] = useState<CreateAiSourceDraft>(() => createAiSourceDraftFromPreset(DEFAULT_AI_PRESET_ID));
+  const [missingCustomSourceNoticeScope, setMissingCustomSourceNoticeScope] = useState<AiModelRouteScope | null>(null);
   const [transcriptionSourceId, setTranscriptionSourceId] = useState('');
   const [embeddingSourceId, setEmbeddingSourceId] = useState('');
+  const [visualIndexSourceId, setVisualIndexSourceId] = useState('');
+  const [videoAnalysisSourceId, setVideoAnalysisSourceId] = useState('');
   const [imageSourceId, setImageSourceId] = useState('');
-  const [modelsBySource, setModelsBySource] = useState<Record<string, AiModelDescriptor[]>>({});
-  const [fetchingModelsBySourceId, setFetchingModelsBySourceId] = useState<Record<string, boolean>>({});
+  const [voiceSourceId, setVoiceSourceId] = useState('');
   const [testStatus, setTestStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [testMsg, setTestMsg] = useState('');
-  const [imageAvailableModels, setImageAvailableModels] = useState<Array<{ id: string; source: 'remote' | 'suggested' }>>([]);
-  const [isFetchingImageModels, setIsFetchingImageModels] = useState(false);
-  const [imageModelStatus, setImageModelStatus] = useState('');
   const [recentDebugLogs, setRecentDebugLogs] = useState<string[]>([]);
   const [isDebugLogsLoading, setIsDebugLogsLoading] = useState(false);
+  const [fileIndexDashboard, setFileIndexDashboard] = useState<FileIndexDashboard | null>(
+    () => initialFileIndexDashboardCache?.dashboard ?? null,
+  );
+  const [isFileIndexDashboardLoading, setIsFileIndexDashboardLoading] = useState(false);
   const [logStatus, setLogStatus] = useState<DiagnosticsLogStatus | null>(null);
   const [pendingDiagnosticReports, setPendingDiagnosticReports] = useState<DiagnosticsPendingReport[]>([]);
   const [diagnosticsActionBusy, setDiagnosticsActionBusy] = useState<string | null>(null);
@@ -898,7 +1027,7 @@ export function Settings({
   const [selectedBackgroundTaskId, setSelectedBackgroundTaskId] = useState('');
   const [selectedBackgroundTaskDetail, setSelectedBackgroundTaskDetail] = useState<BackgroundTaskItem | null>(null);
   const [runtimeDraftInput, setRuntimeDraftInput] = useState('');
-  const [runtimeDraftMode, setRuntimeDraftMode] = useState<'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics'>('redclaw');
+  const [runtimeDraftMode, setRuntimeDraftMode] = useState<'redclaw' | 'knowledge' | 'team' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics'>('redclaw');
   const [isRuntimeLoading, setIsRuntimeLoading] = useState(false);
   const [isRuntimeTraceLoading, setIsRuntimeTraceLoading] = useState(false);
   const [isRuntimeSessionLoading, setIsRuntimeSessionLoading] = useState(false);
@@ -915,35 +1044,6 @@ export function Settings({
   const [runtimePerfResults, setRuntimePerfResults] = useState<RuntimePerfRunResult[]>([]);
   const [activeRuntimePerfRunId, setActiveRuntimePerfRunId] = useState('');
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [settingsSkillsSummary, setSettingsSkillsSummary] = useState({ total: 0, enabled: 0, disabled: 0 });
-  const [settingsSkills, setSettingsSkills] = useState<SkillDefinition[]>([]);
-  const [isSettingsSkillsLoading, setIsSettingsSkillsLoading] = useState(false);
-  const [settingsSkillsMessage, setSettingsSkillsMessage] = useState('');
-  const [settingsSkillBusyName, setSettingsSkillBusyName] = useState('');
-  const [areBuiltinSettingsSkillsExpanded, setAreBuiltinSettingsSkillsExpanded] = useState(false);
-  const [newMemoryType, setNewMemoryType] = useState<UserMemory['type']>('general');
-  const [newMemoryContent, setNewMemoryContent] = useState('');
-  const [memories, setMemories] = useState<UserMemory[]>([]);
-  const [archivedMemories, setArchivedMemories] = useState<UserMemory[]>([]);
-  const [memoryHistory, setMemoryHistory] = useState<MemoryHistoryEntry[]>([]);
-  const [maintenanceStatus, setMaintenanceStatus] = useState<MemoryMaintenanceStatus | null>(null);
-  const [isMemoryLoading, setIsMemoryLoading] = useState(false);
-  const [memorySearchQuery, setMemorySearchQuery] = useState('');
-  const [includeArchivedInSearch, setIncludeArchivedInSearch] = useState(false);
-  const [memorySearchResults, setMemorySearchResults] = useState<MemorySearchResult[]>([]);
-  const [isMemorySearching, setIsMemorySearching] = useState(false);
-  const [teamAdvisors, setTeamAdvisors] = useState<AdvisorProfile[]>([]);
-  const [isTeamAdvisorsLoading, setIsTeamAdvisorsLoading] = useState(false);
-  const [teamAdvisorBusyId, setTeamAdvisorBusyId] = useState<string | null>(null);
-  const [draggingTeamAdvisorId, setDraggingTeamAdvisorId] = useState<string | null>(null);
-  const initialFileIndexDashboardCache = useMemo(() => readCachedFileIndexDashboard(), []);
-  const [fileIndexDashboard, setFileIndexDashboard] = useState<FileIndexDashboard | null>(null);
-  const [isFileIndexDashboardLoading, setIsFileIndexDashboardLoading] = useState(false);
-  const fileIndexDashboardCurrentRef = useRef<FileIndexDashboard | null>(null);
-  const fileIndexDashboardLoadedAtRef = useRef(0);
-  const fileIndexDashboardInFlightRef = useRef<Promise<FileIndexDashboard | null> | null>(null);
-  const fileIndexDashboardLoadRequestRef = useRef(0);
-  const fileIndexDashboardRefreshTimerRef = useRef<number | null>(null);
   const [redclawProfileDraft, setRedclawProfileDraft] = useState<RedclawProfileDraft>(EMPTY_REDCLAW_PROFILE_DRAFT);
   const [savedRedclawProfileDraft, setSavedRedclawProfileDraft] = useState<RedclawProfileDraft>(EMPTY_REDCLAW_PROFILE_DRAFT);
   const [redclawProfileRoot, setRedclawProfileRoot] = useState('');
@@ -952,21 +1052,17 @@ export function Settings({
   const [redclawProfileMessage, setRedclawProfileMessage] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
   const [redclawOnboardingState, setRedclawOnboardingState] = useState<RedclawOnboardingState>(null);
   const [currentSpaceId, setCurrentSpaceId] = useState(DEFAULT_SPACE_ID);
-  const [currentSpaceName, setCurrentSpaceName] = useState('默认空间');
+  const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
   const [assistantDaemonStatus, setAssistantDaemonStatus] = useState<AssistantDaemonStatus | null>(null);
   const [assistantDaemonDraft, setAssistantDaemonDraftState] = useState<AssistantDaemonDraft>(() => createDefaultAssistantDaemonDraft());
   const [assistantDaemonLogs, setAssistantDaemonLogs] = useState<string[]>([]);
   const [assistantDaemonBusy, setAssistantDaemonBusy] = useState(false);
   const [assistantDaemonDraftDirty, setAssistantDaemonDraftDirty] = useState(false);
+  const [assistantDaemonAcpToken, setAssistantDaemonAcpToken] = useState('');
   const [assistantDaemonWeixinLoginBusy, setAssistantDaemonWeixinLoginBusy] = useState(false);
   const [assistantDaemonWeixinLogin, setAssistantDaemonWeixinLogin] = useState<AssistantDaemonWeixinLoginState | null>(null);
-  const [showScopedModelOverrides, setShowScopedModelOverrides] = useState(false);
   const [developerVersionTapCount, setDeveloperVersionTapCount] = useState(0);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsPayload>(DEFAULT_NOTIFICATION_SETTINGS);
-  const [notificationPermissionState, setNotificationPermissionState] = useState<NotificationPermissionState['state']>('unknown');
-  const [notificationStatusMessage, setNotificationStatusMessage] = useState('');
-  const teamAdvisorDragIdRef = useRef('');
-  const teamAdvisorOrderRef = useRef<AdvisorProfile[]>([]);
   const hasSelectedRuntimeSession = useMemo(
     () => Boolean(selectedRuntimeSessionId && runtimeSessions.some((session) => session.id === selectedRuntimeSessionId)),
     [runtimeSessions, selectedRuntimeSessionId],
@@ -975,271 +1071,28 @@ export function Settings({
     () => isRedClawOnboardingCompleted(redclawOnboardingState),
     [redclawOnboardingState],
   );
-
-  const loadSettingsSkillsSummary = useCallback(async () => {
-    setIsSettingsSkillsLoading(true);
-    setSettingsSkillsMessage('');
-    try {
-      const list = await window.ipcRenderer.listSkills() as SkillDefinition[];
-      const skills = sortSettingsSkills(Array.isArray(list) ? list : []);
-      const disabled = skills.filter((skill) => Boolean(skill.disabled)).length;
-      setSettingsSkills(skills);
-      setSettingsSkillsSummary({
-        total: skills.length,
-        enabled: skills.length - disabled,
-        disabled,
-      });
-    } catch (error) {
-      console.error('Failed to load settings skills summary:', error);
-      setSettingsSkillsMessage('技能统计读取失败');
-    } finally {
-      setIsSettingsSkillsLoading(false);
-    }
-  }, []);
-
-  const builtinSettingsSkills = useMemo(
-    () => settingsSkills.filter((skill) => skill.isBuiltin || skill.sourceScope === 'builtin'),
-    [settingsSkills],
+  const currentSpaceName = useMemo(
+    () => spaces.find((space) => space.id === currentSpaceId)?.name || currentSpaceId,
+    [currentSpaceId, spaces],
   );
-  const editableSettingsSkills = useMemo(
-    () => settingsSkills.filter((skill) => !(skill.isBuiltin || skill.sourceScope === 'builtin')),
-    [settingsSkills],
+  const ecommercePlatformsSettings = useMemo(
+    () => normalizeEcommercePlatformsSettings(formData.ecommerce_platforms_json),
+    [formData.ecommerce_platforms_json],
   );
 
-  const handleToggleSettingsSkill = useCallback(async (skill: SkillDefinition) => {
-    if (skill.isBuiltin || skill.sourceScope === 'builtin') return;
-    const nextDisabled = !skill.disabled;
-    setSettingsSkillBusyName(skill.name);
-    setSettingsSkillsMessage('');
-    setSettingsSkills((prev) => prev.map((item) => (
-      item.name === skill.name ? { ...item, disabled: nextDisabled } : item
-    )));
-    setSettingsSkillsSummary((prev) => ({
-      total: prev.total,
-      enabled: prev.enabled + (nextDisabled ? -1 : 1),
-      disabled: prev.disabled + (nextDisabled ? 1 : -1),
-    }));
-    try {
-      const result = nextDisabled
-        ? await window.ipcRenderer.skills.disable<{ success?: boolean; error?: string }>({ name: skill.name })
-        : await window.ipcRenderer.skills.enable<{ success?: boolean; error?: string }>({ name: skill.name });
-      if (!result?.success) {
-        throw new Error(result?.error || '技能状态保存失败');
-      }
-      await loadSettingsSkillsSummary();
-    } catch (error) {
-      console.error('Failed to toggle settings skill:', error);
-      setSettingsSkills((prev) => prev.map((item) => (
-        item.name === skill.name ? { ...item, disabled: skill.disabled } : item
-      )));
-      setSettingsSkillsMessage(error instanceof Error ? error.message : '技能状态保存失败');
-      await loadSettingsSkillsSummary();
-    } finally {
-      setSettingsSkillBusyName('');
-    }
-  }, [loadSettingsSkillsSummary]);
-
-  const loadMemoryDashboard = useCallback(async () => {
-    const requestId = ++memoryLoadRequestRef.current;
-    setIsMemoryLoading(true);
-    try {
-      const [activeList, archivedList, historyList, statusSnapshot] = await Promise.all([
-        window.ipcRenderer.memory.list<UserMemory[]>(),
-        window.ipcRenderer.memory.archived<UserMemory[]>(),
-        window.ipcRenderer.memory.history<MemoryHistoryEntry[]>(),
-        window.ipcRenderer.memory.maintenanceStatus<MemoryMaintenanceStatus | null>(),
-      ]);
-      if (requestId !== memoryLoadRequestRef.current) return;
-      setMemories(Array.isArray(activeList) ? activeList as UserMemory[] : []);
-      setArchivedMemories(Array.isArray(archivedList) ? archivedList as UserMemory[] : []);
-      setMemoryHistory(Array.isArray(historyList) ? historyList as MemoryHistoryEntry[] : []);
-      setMaintenanceStatus(statusSnapshot && typeof statusSnapshot === 'object' ? statusSnapshot as MemoryMaintenanceStatus : null);
-    } catch (error) {
-      if (requestId !== memoryLoadRequestRef.current) return;
-      console.error('Failed to load memory dashboard:', error);
-      void appAlert(`加载记忆失败：${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' });
-    } finally {
-      if (requestId === memoryLoadRequestRef.current) {
-        setIsMemoryLoading(false);
-      }
-    }
-  }, []);
-
-  const handleSearchMemories = useCallback(async () => {
-    const query = memorySearchQuery.trim();
-    if (!query) {
-      setMemorySearchResults([]);
-      return;
-    }
-    const requestId = ++memorySearchRequestRef.current;
-    setIsMemorySearching(true);
-    try {
-      const results = await window.ipcRenderer.memory.search<MemorySearchResult[]>({
-        query,
-        includeArchived: includeArchivedInSearch,
-        limit: 50,
-      });
-      if (requestId !== memorySearchRequestRef.current) return;
-      setMemorySearchResults(Array.isArray(results) ? results as MemorySearchResult[] : []);
-    } catch (error) {
-      if (requestId !== memorySearchRequestRef.current) return;
-      console.error('Failed to search memories:', error);
-      setMemorySearchResults([]);
-      void appAlert(`搜索记忆失败：${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' });
-    } finally {
-      if (requestId === memorySearchRequestRef.current) {
-        setIsMemorySearching(false);
-      }
-    }
-  }, [includeArchivedInSearch, memorySearchQuery]);
-
-  const handleAddMemory = useCallback(async () => {
-    const content = newMemoryContent.trim();
-    if (!content) return;
-    try {
-      await window.ipcRenderer.memory.add({
-        content,
-        type: newMemoryType,
-        tags: [],
-      });
-      setNewMemoryContent('');
-      await loadMemoryDashboard();
-      if (memorySearchQuery.trim()) {
-        await handleSearchMemories();
-      }
-    } catch (error) {
-      console.error('Failed to add memory:', error);
-      void appAlert(`添加记忆失败：${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' });
-    }
-  }, [handleSearchMemories, loadMemoryDashboard, memorySearchQuery, newMemoryContent, newMemoryType]);
-
-  const handleRunMemoryMaintenance = useCallback(async () => {
-    try {
-      const result = await window.ipcRenderer.memory.runMaintenance<MemoryMaintenanceStatus | null>();
-      if (result && typeof result === 'object') {
-        setMaintenanceStatus(result as MemoryMaintenanceStatus);
-      }
-      await loadMemoryDashboard();
-    } catch (error) {
-      console.error('Failed to run memory maintenance:', error);
-      void appAlert(`整理记忆失败：${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' });
-    }
-  }, [loadMemoryDashboard]);
-
-  const handleDeleteMemory = useCallback((id: string) => {
-    const memoryId = String(id || '').trim();
-    if (!memoryId) return;
-    void (async () => {
-      const confirmed = await appConfirm('删除后这条长期记忆会进入历史轨迹，当前生效记忆中不再使用它。', {
-        title: '删除记忆',
-        confirmLabel: '删除',
-        tone: 'danger',
-      });
-      if (!confirmed) return;
-      try {
-        await window.ipcRenderer.memory.delete(memoryId);
-        setMemorySearchResults((prev) => prev.filter((item) => item.id !== memoryId));
-        await loadMemoryDashboard();
-      } catch (error) {
-        console.error('Failed to delete memory:', error);
-        void appAlert(`删除记忆失败：${error instanceof Error ? error.message : String(error)}`, { tone: 'danger' });
-      }
-    })();
-  }, [loadMemoryDashboard]);
-
-  const loadTeamAdvisors = useCallback(async () => {
-    setIsTeamAdvisorsLoading(true);
-    try {
-      const list = await window.ipcRenderer.advisors.list<AdvisorProfile>();
-      const sorted = sortTeamAdvisors(Array.isArray(list) ? list : []);
-      setTeamAdvisors(sorted);
-      teamAdvisorOrderRef.current = sorted;
-      return sorted;
-    } catch (error) {
-      console.error('Failed to load team advisors:', error);
-      setStatus('error');
-      return [];
-    } finally {
-      setIsTeamAdvisorsLoading(false);
-    }
-  }, []);
-
-  const openTeamMembersPage = useCallback(() => {
-    window.localStorage.setItem(TEAM_SECTION_STORAGE_KEY, 'members');
-    dispatchAppIntent({ type: 'settings.open', tab: 'team' });
-  }, []);
-
-  const openTeamCreatePage = useCallback(() => {
-    window.localStorage.setItem(TEAM_SECTION_STORAGE_KEY, 'members');
-    window.localStorage.setItem(TEAM_CREATE_STORAGE_KEY, 'manual');
-    dispatchAppIntent({ type: 'settings.open', tab: 'team' });
-  }, []);
-
-  const persistTeamAdvisorOrder = useCallback(async (items: AdvisorProfile[]) => {
-    await Promise.all(items.map((advisor, index) => (
-      window.ipcRenderer.advisors.update({
-        id: advisor.id,
-        redclawOrder: index,
-        redclawVisible: advisor.redclawVisible !== false,
-      })
-    )));
-    teamAdvisorOrderRef.current = items;
-    window.dispatchEvent(new Event('redclaw:team-settings-changed'));
-  }, []);
-
-  const handleToggleTeamAdvisorVisible = useCallback((advisor: AdvisorProfile) => {
-    const nextVisible = advisor.redclawVisible === false;
-    setTeamAdvisorBusyId(advisor.id);
-    setTeamAdvisors((prev) => prev.map((item) => (
-      item.id === advisor.id ? { ...item, redclawVisible: nextVisible } : item
-    )));
-    void window.ipcRenderer.advisors.update({
-      id: advisor.id,
-      redclawVisible: nextVisible,
-    }).then(() => {
-      window.dispatchEvent(new Event('redclaw:team-settings-changed'));
-    }).catch((error) => {
-      console.error('Failed to update advisor visibility:', error);
-      setTeamAdvisors((prev) => prev.map((item) => (
-        item.id === advisor.id ? { ...item, redclawVisible: advisor.redclawVisible } : item
-      )));
-      setStatus('error');
-    }).finally(() => {
-      setTeamAdvisorBusyId(null);
+  const handleToggleEcommercePlatform = useCallback((platformId: string, enabled: boolean) => {
+    setFormData((prev: any) => {
+      const nextSettings = normalizeEcommercePlatformsSettings(prev.ecommerce_platforms_json);
+      nextSettings.enabledById = {
+        ...nextSettings.enabledById,
+        [platformId]: enabled,
+      };
+      return {
+        ...prev,
+        ecommerce_platforms_json: serializeEcommercePlatformsSettings(nextSettings),
+      };
     });
   }, []);
-
-  const handleTeamAdvisorDragStart = useCallback((advisorId: string) => {
-    teamAdvisorDragIdRef.current = advisorId;
-    setDraggingTeamAdvisorId(advisorId);
-  }, []);
-
-  const handleTeamAdvisorDragOver = useCallback((targetAdvisorId: string) => {
-    setTeamAdvisors((prev) => {
-      const draggingId = teamAdvisorDragIdRef.current;
-      if (!draggingId || draggingId === targetAdvisorId) return prev;
-      const fromIndex = prev.findIndex((item) => item.id === draggingId);
-      const toIndex = prev.findIndex((item) => item.id === targetAdvisorId);
-      if (fromIndex < 0 || toIndex < 0) return prev;
-      const next = [...prev];
-      const [moved] = next.splice(fromIndex, 1);
-      next.splice(toIndex, 0, moved);
-      const ordered = next.map((item, index) => ({ ...item, redclawOrder: index }));
-      teamAdvisorOrderRef.current = ordered;
-      return ordered;
-    });
-  }, []);
-
-  const handleTeamAdvisorDragEnd = useCallback(() => {
-    if (!teamAdvisorDragIdRef.current) return;
-    teamAdvisorDragIdRef.current = '';
-    setDraggingTeamAdvisorId(null);
-    void persistTeamAdvisorOrder(teamAdvisorOrderRef.current).catch((error) => {
-      console.error('Failed to persist advisor order:', error);
-      setStatus('error');
-      void loadTeamAdvisors();
-    });
-  }, [loadTeamAdvisors, persistTeamAdvisorOrder]);
 
   const updateRuntimePerfRun = useCallback((runId: string, updater: (run: RuntimePerfRunResult) => RuntimePerfRunResult) => {
     setRuntimePerfResults((prev) =>
@@ -1309,28 +1162,18 @@ export function Settings({
     return normalized;
   }, []);
 
-  useEffect(() => {
-    let disposed = false;
-    const loadCurrentSpaceName = async () => {
-      const fallbackName = currentSpaceId === DEFAULT_SPACE_ID ? '默认空间' : currentSpaceId;
-      try {
-        const result = await window.ipcRenderer.spaces.list();
-        if (disposed) return;
-        const spaces = Array.isArray(result?.spaces) ? result.spaces : [];
-        const matchedSpace = spaces.find((space) => space.id === currentSpaceId);
-        const nextName = String(matchedSpace?.name || fallbackName).trim() || fallbackName;
-        setCurrentSpaceName(nextName);
-      } catch {
-        if (!disposed) {
-          setCurrentSpaceName(fallbackName);
-        }
+  const loadSpaceContext = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.spaces.list() as { spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null;
+      const nextSpaces = Array.isArray(result?.spaces) ? result.spaces : [];
+      setSpaces(nextSpaces);
+      if (result?.activeSpaceId) {
+        setCurrentSpaceState(result.activeSpaceId);
       }
-    };
-    void loadCurrentSpaceName();
-    return () => {
-      disposed = true;
-    };
-  }, [currentSpaceId]);
+    } catch (error) {
+      console.error('Failed to load settings spaces:', error);
+    }
+  }, [setCurrentSpaceState]);
 
   const resetRedclawProfileState = useCallback(() => {
     redclawProfileLoadRequestRef.current += 1;
@@ -1375,7 +1218,7 @@ export function Settings({
       setRedclawProfileMessage(null);
     } catch (error) {
       if (requestId !== redclawProfileLoadRequestRef.current) return;
-      console.error('Failed to load RedClaw profile bundle', error);
+      console.error('Failed to load AI profile bundle', error);
       setRedclawProfileMessage({
         tone: 'error',
         text: `加载用户档案失败：${error instanceof Error ? error.message : String(error)}`,
@@ -1402,25 +1245,6 @@ export function Settings({
     setStatus('idle');
   }, [savedRedclawProfileDraft.creatorProfile, savedRedclawProfileDraft.user, setRedclawProfileDirtyState]);
 
-  const handleToggleEcommercePlatform = useCallback((platformId: string, enabled: boolean) => {
-    setFormData((prev: any) => {
-      const nextSettings = normalizeEcommercePlatformsSettings(prev.ecommerce_platforms_json);
-      return {
-        ...prev,
-        ecommerce_platforms_json: serializeEcommercePlatformsSettings({
-          ...nextSettings,
-          enabledById: {
-            ...nextSettings.enabledById,
-            [platformId]: enabled,
-          },
-        }),
-      };
-    });
-    setStatus('idle');
-  }, []);
-
-  const fetchModelsRequestRef = useRef<Record<string, number>>({});
-  const fetchImageModelsRequestRef = useRef(0);
   const settingsLoadRequestRef = useRef(0);
   const debugLogsLoadRequestRef = useRef(0);
   const runtimeTasksLoadRequestRef = useRef(0);
@@ -1433,17 +1257,23 @@ export function Settings({
   const runtimePerfRunCounterRef = useRef(0);
   const backgroundTasksLoadRequestRef = useRef(0);
   const backgroundWorkerPoolLoadRequestRef = useRef(0);
+  const fileIndexDashboardLoadRequestRef = useRef(0);
+  const fileIndexDashboardInFlightRef = useRef<Promise<FileIndexDashboard | null> | null>(null);
+  const fileIndexDashboardRefreshTimerRef = useRef<number | null>(null);
+  const fileIndexDashboardCurrentRef = useRef<FileIndexDashboard | null>(
+    initialFileIndexDashboardCache?.dashboard ?? null,
+  );
+  const fileIndexDashboardLoadedAtRef = useRef(initialFileIndexDashboardCache?.savedAt ?? 0);
   const assistantDaemonLogBufferRef = useRef<string[]>([]);
   const assistantDaemonLogFlushTimerRef = useRef<number | null>(null);
   const aiSourceAutosaveTimerRef = useRef<number | null>(null);
   const remoteTabWarmTimerRef = useRef<number | null>(null);
   const settingsActivationTimerRef = useRef<number | null>(null);
   const redclawProfileLoadRequestRef = useRef(0);
-  const memoryLoadRequestRef = useRef(0);
-  const memorySearchRequestRef = useRef(0);
   const baseSettingsLoadedRef = useRef(false);
   const baseSettingsInFlightRef = useRef(false);
   const aiSourceDraftDirtyRef = useRef(false);
+  const aiSourceEditGenerationRef = useRef(0);
   const redclawProfileDirtyRef = useRef(false);
   const currentSpaceIdRef = useRef(DEFAULT_SPACE_ID);
   const tabWarmRef = useRef<Record<SettingsTab, boolean>>({
@@ -1452,11 +1282,10 @@ export function Settings({
     team: false,
     platforms: false,
     skills: false,
+    mcp: false,
     tools: false,
     profile: false,
-    memory: false,
     remote: false,
-    mcp: false,
     experimental: false,
   });
   const tabInFlightRef = useRef<Record<SettingsTab, boolean>>({
@@ -1465,37 +1294,45 @@ export function Settings({
     team: false,
     platforms: false,
     skills: false,
+    mcp: false,
     tools: false,
     profile: false,
-    memory: false,
     remote: false,
-    mcp: false,
     experimental: false,
   });
 
-  const defaultAiSource = useMemo(() => {
-    if (!aiSources.length) return null;
-    return aiSources.find((source) => source.id === defaultAiSourceId) || aiSources[0];
-  }, [aiSources, defaultAiSourceId]);
+  const markAiSourceDraftDirty = useCallback(() => {
+    aiSourceDraftDirtyRef.current = true;
+    aiSourceEditGenerationRef.current += 1;
+  }, []);
 
-  const ecommercePlatformsSettings = useMemo(
-    () => normalizeEcommercePlatformsSettings(formData.ecommerce_platforms_json),
-    [formData.ecommerce_platforms_json],
-  );
+  const clearAiSourceDraftDirty = useCallback((expectedGeneration?: number) => {
+    if (
+      typeof expectedGeneration === 'number'
+      && aiSourceEditGenerationRef.current !== expectedGeneration
+    ) {
+      return;
+    }
+    aiSourceDraftDirtyRef.current = false;
+  }, []);
+
+  const officialAiSourcePlaceholder = useMemo(() => createOfficialAiSource(), []);
 
   const activeAiSource = useMemo(() => {
-    if (!aiSources.length) return null;
-    return aiSources.find((source) => source.id === activeAiSourceId) || defaultAiSource || aiSources[0];
-  }, [aiSources, activeAiSourceId, defaultAiSource]);
+    const normalizedActiveId = canonicalizeOfficialAutoSourceId(activeAiSourceId);
+    if (!aiSources.length) {
+      return isOfficialAutoSourceId(normalizedActiveId) ? officialAiSourcePlaceholder : null;
+    }
+    const matchedSource = aiSources.find((source) => source.id === normalizedActiveId);
+    if (matchedSource) return matchedSource;
+    if (isOfficialAutoSourceId(normalizedActiveId)) return officialAiSourcePlaceholder;
+    return aiSources[0] || null;
+  }, [aiSources, activeAiSourceId, officialAiSourcePlaceholder]);
 
   const addModelModalSource = useMemo(() => {
     if (!addModelModalSourceId) return null;
     return aiSources.find((source) => source.id === addModelModalSourceId) || null;
   }, [aiSources, addModelModalSourceId]);
-
-  const getSourceAvailableModels = useCallback((sourceId: string) => {
-    return modelsBySource[sourceId] || [];
-  }, [modelsBySource]);
 
   const getSourceModelList = useCallback((source: AiSourceConfig) => {
     const merged = new Map<string, AiModelDescriptor>();
@@ -1514,18 +1351,8 @@ export function Settings({
         inputCapabilities: Array.from(new Set([...(previous?.inputCapabilities || []), ...descriptor.inputCapabilities])),
       });
     }
-    for (const remoteModel of (modelsBySource[source.id] || [])) {
-      const descriptor = toAiModelDescriptor(remoteModel);
-      if (!descriptor) continue;
-      const previous = merged.get(descriptor.id);
-      merged.set(descriptor.id, {
-        id: descriptor.id,
-        capabilities: Array.from(new Set([...(previous?.capabilities || []), ...descriptor.capabilities])),
-        inputCapabilities: Array.from(new Set([...(previous?.inputCapabilities || []), ...descriptor.inputCapabilities])),
-      });
-    }
     return Array.from(merged.values());
-  }, [modelsBySource]);
+  }, []);
 
   const getAddedSourceModelList = useCallback((source: AiSourceConfig) => {
     return normalizeAiModelDescriptors([
@@ -1536,10 +1363,11 @@ export function Settings({
   }, []);
 
   const getAiSourceById = useCallback((sourceId: string): AiSourceConfig | null => {
-    const normalizedSourceId = String(sourceId || '').trim();
+    const normalizedSourceId = canonicalizeOfficialAutoSourceId(sourceId);
     if (!normalizedSourceId) return null;
-    return aiSources.find((source) => source.id === normalizedSourceId) || null;
-  }, [aiSources]);
+    return aiSources.find((source) => source.id === normalizedSourceId)
+      || (isOfficialAutoSourceId(normalizedSourceId) ? officialAiSourcePlaceholder : null);
+  }, [aiSources, officialAiSourcePlaceholder]);
 
   const pickBestModelForSource = useCallback((
     source: AiSourceConfig | null,
@@ -1559,6 +1387,75 @@ export function Settings({
     }
     return String(matchingModels[0]?.id || currentDefault || sourceModels[0]?.id || '').trim();
   }, [getSourceModelList]);
+
+  const pickCapabilityModelForSource = useCallback((
+    source: AiSourceConfig | null,
+    preferredModel: string,
+    capability: ModelCapability,
+  ): string => {
+    if (!source) return '';
+    const normalizedPreferredModel = String(preferredModel || '').trim();
+    const matchingModels = filterAiModelsByCapability(getSourceModelList(source), capability);
+    if (normalizedPreferredModel && matchingModels.some((item) => item.id === normalizedPreferredModel)) {
+      return normalizedPreferredModel;
+    }
+    const currentDefault = String(source.model || '').trim();
+    if (currentDefault && matchingModels.some((item) => item.id === currentDefault)) {
+      return currentDefault;
+    }
+    return String(matchingModels[0]?.id || '').trim();
+  }, [getSourceModelList]);
+
+  const filterVisualIndexModels = useCallback((models: AiModelDescriptor[]): AiModelDescriptor[] => {
+    const multimodalChatModels = models.filter((model) => (
+      model.capabilities.includes('chat') && model.inputCapabilities.includes('image')
+    ));
+    if (multimodalChatModels.length > 0) return multimodalChatModels;
+    const chatModels = filterAiModelsByCapability(models, 'chat');
+    return chatModels.length > 0 ? chatModels : models;
+  }, []);
+
+  const filterVideoAnalysisModels = useCallback((models: AiModelDescriptor[]): AiModelDescriptor[] => {
+    return models.filter((model) => (
+      model.inputCapabilities.includes('video')
+    ));
+  }, []);
+
+  const pickBestVisualIndexModelForSource = useCallback((
+    source: AiSourceConfig | null,
+    preferredModel?: string,
+  ): string => {
+    if (!source) return '';
+    const normalizedPreferredModel = String(preferredModel || '').trim();
+    const sourceModels = getSourceModelList(source);
+    const visualModels = filterVisualIndexModels(sourceModels);
+    if (normalizedPreferredModel && visualModels.some((item) => item.id === normalizedPreferredModel)) {
+      return normalizedPreferredModel;
+    }
+    const currentDefault = String(source.model || '').trim();
+    if (currentDefault && visualModels.some((item) => item.id === currentDefault)) {
+      return currentDefault;
+    }
+    return String(visualModels[0]?.id || currentDefault || sourceModels[0]?.id || '').trim();
+  }, [filterVisualIndexModels, getSourceModelList]);
+
+  const pickBestVideoAnalysisModelForSource = useCallback((
+    source: AiSourceConfig | null,
+    preferredModel?: string,
+  ): string => {
+    if (!source) return '';
+    const normalizedPreferredModel = String(preferredModel || '').trim();
+    const sourceModels = getSourceModelList(source);
+    const videoModels = filterVideoAnalysisModels(sourceModels);
+    if (normalizedPreferredModel && videoModels.some((item) => item.id === normalizedPreferredModel)) {
+      return normalizedPreferredModel;
+    }
+    const currentDefault = String(source.model || '').trim();
+    if (currentDefault && videoModels.some((item) => item.id === currentDefault)) {
+      return currentDefault;
+    }
+    return String(videoModels[0]?.id || '').trim();
+  }, [filterVideoAnalysisModels, getSourceModelList]);
 
   const resolveLinkedSourceId = useCallback((options: {
     endpoint?: string;
@@ -1590,8 +1487,8 @@ export function Settings({
     if (bestScore > 0 && bestSourceId) return bestSourceId;
     const fallbackId = String(options.fallbackId || '').trim();
     if (fallbackId && aiSources.some((source) => source.id === fallbackId)) return fallbackId;
-    return defaultAiSourceId || aiSources[0]?.id || '';
-  }, [aiSources, defaultAiSourceId, getSourceModelList]);
+    return aiSources[0]?.id || '';
+  }, [aiSources, getSourceModelList]);
 
   const inferImageRoutingFromSource = useCallback((source: AiSourceConfig) => {
     const presetId = String(source.presetId || inferPresetIdByEndpoint(source.baseURL || '') || '').trim().toLowerCase();
@@ -1613,13 +1510,17 @@ export function Settings({
     return { provider: 'openai-compatible', template: 'openai-images' };
   }, []);
 
-  const handleLinkedSourceChange = useCallback((feature: 'transcription' | 'embedding' | 'image' | 'video', nextSourceId: string) => {
+  const handleLinkedSourceChange = useCallback((feature: 'transcription' | 'embedding' | 'visual' | 'videoAnalysis' | 'image' | 'voice' | 'video', nextSourceId: string) => {
     const source = getAiSourceById(nextSourceId);
     if (!source) return;
+    markAiSourceDraftDirty();
 
     if (feature === 'transcription') setTranscriptionSourceId(nextSourceId);
     if (feature === 'embedding') setEmbeddingSourceId(nextSourceId);
+    if (feature === 'visual') setVisualIndexSourceId(nextSourceId);
+    if (feature === 'videoAnalysis') setVideoAnalysisSourceId(nextSourceId);
     if (feature === 'image') setImageSourceId(nextSourceId);
+    if (feature === 'voice') setVoiceSourceId(nextSourceId);
     setFormData((prev) => {
       if (feature === 'transcription') {
         return {
@@ -1637,8 +1538,40 @@ export function Settings({
           embedding_model: pickBestModelForSource(source, prev.embedding_model, 'embedding'),
         };
       }
+      if (feature === 'visual') {
+        return {
+          ...prev,
+          visual_index_provider: 'openai-compatible',
+          visual_index_endpoint: String(source.baseURL || '').trim(),
+          visual_index_api_key: String(source.apiKey || '').trim(),
+          visual_index_model: pickBestVisualIndexModelForSource(source, prev.visual_index_model),
+        };
+      }
+      if (feature === 'videoAnalysis') {
+        return {
+          ...prev,
+          video_analysis_endpoint: String(source.baseURL || '').trim(),
+          video_analysis_api_key: String(source.apiKey || '').trim(),
+          video_analysis_protocol: source.protocol || findAiPresetById(source.presetId)?.protocol || 'openai',
+          video_analysis_model: pickBestVideoAnalysisModelForSource(source, prev.video_analysis_model),
+        };
+      }
       if (feature === 'video') {
         return prev;
+      }
+      if (feature === 'voice') {
+        const ttsModel = pickBestModelForSource(source, prev.voice_tts_model || prev.tts_model, 'tts')
+          || pickBestModelForSource(source, prev.voice_tts_model || prev.tts_model, 'audio');
+        const nextTtsModel = ttsModel || prev.voice_tts_model || DEFAULT_VOICE_TTS_MODEL;
+        const nextCloneModel = cloneModelForVoiceTtsModel(nextTtsModel, prev.voice_clone_model || DEFAULT_VOICE_CLONE_MODEL);
+        return {
+          ...prev,
+          voice_endpoint: String(source.baseURL || '').trim(),
+          voice_api_key: String(source.apiKey || '').trim(),
+          voice_tts_model: nextTtsModel,
+          tts_model: nextTtsModel,
+          voice_clone_model: nextCloneModel,
+        };
       }
 
       const nextRouting = inferImageRoutingFromSource(source);
@@ -1656,7 +1589,7 @@ export function Settings({
         image_model: nextModel,
       };
     });
-  }, [getAiSourceById, inferImageRoutingFromSource, pickBestModelForSource]);
+  }, [getAiSourceById, inferImageRoutingFromSource, markAiSourceDraftDirty, pickBestModelForSource, pickBestVideoAnalysisModelForSource, pickBestVisualIndexModelForSource]);
 
   const selectedTranscriptionSource = useMemo(() => {
     return getAiSourceById(transcriptionSourceId);
@@ -1666,9 +1599,21 @@ export function Settings({
     return getAiSourceById(embeddingSourceId);
   }, [embeddingSourceId, getAiSourceById]);
 
+  const selectedVisualIndexSource = useMemo(() => {
+    return getAiSourceById(visualIndexSourceId);
+  }, [getAiSourceById, visualIndexSourceId]);
+
+  const selectedVideoAnalysisSource = useMemo(() => {
+    return getAiSourceById(videoAnalysisSourceId);
+  }, [getAiSourceById, videoAnalysisSourceId]);
+
   const selectedImageSource = useMemo(() => {
     return getAiSourceById(imageSourceId);
   }, [getAiSourceById, imageSourceId]);
+
+  const selectedVoiceSource = useMemo(() => {
+    return getAiSourceById(voiceSourceId);
+  }, [getAiSourceById, voiceSourceId]);
 
   const transcriptionSourceModels = useMemo(() => {
     return selectedTranscriptionSource ? filterAiModelsByCapability(getSourceModelList(selectedTranscriptionSource), 'transcription') : [];
@@ -1678,37 +1623,28 @@ export function Settings({
     return selectedEmbeddingSource ? filterAiModelsByCapability(getSourceModelList(selectedEmbeddingSource), 'embedding') : [];
   }, [getSourceModelList, selectedEmbeddingSource]);
 
+  const visualIndexSourceModels = useMemo(() => {
+    return selectedVisualIndexSource ? filterVisualIndexModels(getSourceModelList(selectedVisualIndexSource)) : [];
+  }, [filterVisualIndexModels, getSourceModelList, selectedVisualIndexSource]);
+
+  const videoAnalysisSourceModels = useMemo(() => {
+    return selectedVideoAnalysisSource ? filterVideoAnalysisModels(getSourceModelList(selectedVideoAnalysisSource)) : [];
+  }, [filterVideoAnalysisModels, getSourceModelList, selectedVideoAnalysisSource]);
+
   const imageSourceModels = useMemo(() => {
     return selectedImageSource ? filterAiModelsByCapability(getSourceModelList(selectedImageSource), 'image') : [];
   }, [getSourceModelList, selectedImageSource]);
 
-  const allConfiguredModels = useMemo(() => {
-    const collected: string[] = [];
-    for (const source of aiSources) {
-      const models = getSourceModelList(source);
-      collected.push(...models.map((item) => item.id));
-    }
-    return normalizeSourceModels(collected);
-  }, [aiSources, getSourceModelList]);
-
-  const scopedModelOverridesCount = useMemo(() => {
-    return [
-      formData.model_name_wander,
-      formData.model_name_chatroom,
-      formData.model_name_knowledge,
-      formData.model_name_redclaw,
-    ].filter((value) => String(value || '').trim()).length;
-  }, [
-    formData.model_name_wander,
-    formData.model_name_chatroom,
-    formData.model_name_knowledge,
-    formData.model_name_redclaw,
-  ]);
+  const voiceTtsSourceModels = useMemo(() => {
+    const sourceModels = selectedVoiceSource ? getSourceModelList(selectedVoiceSource) : [];
+    const ttsModels = filterAiModelsByCapability(sourceModels, 'tts');
+    return ttsModels.length > 0 ? ttsModels : filterAiModelsByCapability(sourceModels, 'audio');
+  }, [getSourceModelList, selectedVoiceSource]);
 
   const addModelModalRemoteModels = useMemo(() => {
     if (!addModelModalSource) return [];
-    return getSourceAvailableModels(addModelModalSource.id);
-  }, [addModelModalSource, getSourceAvailableModels]);
+    return getAddedSourceModelList(addModelModalSource);
+  }, [addModelModalSource, getAddedSourceModelList]);
 
   const addModelModalDraft = addModelModalSource
     ? String(sourceModelDrafts[addModelModalSource.id] || '')
@@ -1729,19 +1665,15 @@ export function Settings({
   }, []);
 
   // Tools State
-  const [ytdlpStatus, setYtdlpStatus] = useState<{ installed: boolean; version?: string; path?: string } | null>(null);
-  const [isInstallingTool, setIsInstallingTool] = useState(false);
-  const [installProgress, setInstallProgress] = useState(0);
-  const [browserPluginStatus, setBrowserPluginStatus] = useState<{
-    success: boolean;
-    bundled: boolean;
-    exportPath: string;
-    pluginPath?: string;
-    exported: boolean;
-    bundledPath?: string;
-    error?: string;
-  } | null>(null);
-  const [isPreparingBrowserPlugin, setIsPreparingBrowserPlugin] = useState(false);
+  const [thrivePlugins, setThrivePlugins] = useState<ThrivePluginSummary[]>([]);
+  const [thrivePluginMarketplace, setThrivePluginMarketplace] = useState<ThrivePluginMarketplaceItem[]>([]);
+  const [codexPluginMarketplace, setCodexPluginMarketplace] = useState<CodexPluginMarketplaceItem[]>([]);
+  const [thrivePluginMarketplaceLoading, setThrivePluginMarketplaceLoading] = useState(false);
+  const [codexPluginMarketplaceLoading, setCodexPluginMarketplaceLoading] = useState(false);
+  const [thrivePluginsLoading, setThrivePluginsLoading] = useState(false);
+  const [thrivePluginBusyId, setThrivePluginBusyId] = useState('');
+  const [thrivePluginStatusMessage, setThrivePluginStatusMessage] = useState('');
+  const [thrivePluginRepoInput, setThrivePluginRepoInput] = useState('');
   const [cliRuntimeTools, setCliRuntimeTools] = useState<CliRuntimeToolRecord[]>([]);
   const [cliRuntimeEnvironments, setCliRuntimeEnvironments] = useState<CliRuntimeEnvironmentRecord[]>([]);
   const [cliRuntimeInstallDraft, setCliRuntimeInstallDraft] = useState<{
@@ -1761,6 +1693,7 @@ export function Settings({
   const [isCliRuntimeRefreshing, setIsCliRuntimeRefreshing] = useState(false);
   const [cliRuntimeInspectingToolId, setCliRuntimeInspectingToolId] = useState('');
   const [cliRuntimeDiagnosticCommand, setCliRuntimeDiagnosticCommand] = useState('');
+  const [cliRuntimeExecutionMode, setCliRuntimeExecutionMode] = useState<CliRuntimeExecutionMode>('host_compatible');
   const [cliRuntimeDiscoverQuery, setCliRuntimeDiscoverQuery] = useState('');
   const [cliRuntimeDiscoverResults, setCliRuntimeDiscoverResults] = useState<CliRuntimeToolRecord[]>([]);
   const [cliRuntimeDiscovering, setCliRuntimeDiscovering] = useState(false);
@@ -1773,14 +1706,48 @@ export function Settings({
   const [mcpLiveSessions, setMcpLiveSessions] = useState<McpSessionState[]>([]);
   const [mcpRuntimeItems, setMcpRuntimeItems] = useState<McpServerRuntimeItem[]>([]);
   const [mcpInspectingId, setMcpInspectingId] = useState('');
+  const [mcpDraft, setMcpDraft] = useState<McpServerDraft | null>(null);
+  const [mcpDraftOriginalId, setMcpDraftOriginalId] = useState('');
+  const settingsMcpRuntimeMap = useMemo(
+    () => Object.fromEntries(mcpRuntimeItems.map((item) => [item.server.id, item.session || null])) as Record<string, McpSessionState | null>,
+    [mcpRuntimeItems],
+  );
 
   // Update State
   const [appVersion, setAppVersion] = useState<string | null>(null);
 
-  const [aiModelSubTab, setAiModelSubTab] = useState<'custom' | 'login'>('custom');
+  const [showAiModelSettings, setShowAiModelSettings] = useState(false);
   const [officialAiPanelEnabled, setOfficialAiPanelEnabled] = useState(false);
   const [OfficialAiPanelComponent, setOfficialAiPanelComponent] = useState<ComponentType<OfficialAiPanelProps> | null>(null);
+  const officialAiPanelRef = useRef<HTMLDivElement | null>(null);
+  const pendingOfficialAiPanelScrollRef = useRef(false);
   const { snapshot: officialAuthState, bootstrapped: officialAuthBootstrapped } = useOfficialAuthState();
+
+  useEffect(() => {
+    if (!navigationTarget) return;
+    if (navigationTarget.tab) {
+      setActiveTab(navigationTarget.tab);
+    }
+    if (navigationTarget.tab === 'ai' && navigationTarget.aiModelSubTab === 'custom') {
+      setShowAiModelSettings(true);
+    }
+    if (navigationTarget.tab === 'ai' && navigationTarget.aiModelSubTab === 'login') {
+      setShowAiModelSettings(false);
+      pendingOfficialAiPanelScrollRef.current = true;
+      window.setTimeout(() => {
+        officialAiPanelRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }, 80);
+    }
+  }, [navigationTarget]);
+
+  useEffect(() => {
+    if (activeTab !== 'ai' || !officialAiPanelEnabled || !pendingOfficialAiPanelScrollRef.current) return;
+    const handle = window.setTimeout(() => {
+      officialAiPanelRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      pendingOfficialAiPanelScrollRef.current = false;
+    }, OfficialAiPanelComponent ? 80 : 180);
+    return () => window.clearTimeout(handle);
+  }, [OfficialAiPanelComponent, activeTab, officialAiPanelEnabled]);
 
   const isDeprecatedEmptyOpenAiSource = useCallback((source?: AiSourceConfig | null): boolean => {
     if (!source) return false;
@@ -1804,41 +1771,24 @@ export function Settings({
     if (!hasOfficialAiPanel) {
       setOfficialAiPanelEnabled(false);
       setOfficialAiPanelComponent(null);
-      setAiModelSubTab('custom');
       return;
     }
     setOfficialAiPanelEnabled(true);
   }, []);
 
   useEffect(() => {
-    if (!navigationTarget) return;
-    if (navigationTarget.tab) {
-      setActiveTab(navigationTarget.tab);
-    }
-    if (navigationTarget.tab === 'ai' && navigationTarget.aiModelSubTab === 'custom') {
-      setAiModelSubTab('custom');
-    }
-    if (navigationTarget.tab === 'ai' && navigationTarget.aiModelSubTab === 'login') {
-      setAiModelSubTab('login');
-    }
-  }, [navigationTarget]);
-
-  useEffect(() => {
     if (!hasOfficialAiPanel || !officialAiPanelEnabled) return;
-    if (activeTab !== 'ai' || aiModelSubTab !== 'login' || OfficialAiPanelComponent) return;
+    if (activeTab !== 'ai' || OfficialAiPanelComponent) return;
     let canceled = false;
     void loadOfficialAiPanelModule().then((module) => {
       if (canceled) return;
       const nextComponent = module?.default || null;
       setOfficialAiPanelComponent(() => nextComponent);
-      if (!nextComponent) {
-        setAiModelSubTab('custom');
-      }
     });
     return () => {
       canceled = true;
     };
-  }, [OfficialAiPanelComponent, activeTab, aiModelSubTab, officialAiPanelEnabled]);
+  }, [OfficialAiPanelComponent, activeTab, officialAiPanelEnabled]);
 
   const isDashscopeImageTemplate = useMemo(() => {
     const template = inferImageTemplateByProvider(formData.image_provider, formData.image_provider_template);
@@ -1869,7 +1819,11 @@ export function Settings({
     const sourceId = String(source.id || '').trim().toLowerCase();
     const sourceName = String(source.name || '').trim().toLowerCase();
     const presetId = String(source.presetId || '').trim().toLowerCase();
-    return sourceId === 'redbox_official_auto' || sourceName === 'redbox official' || presetId === 'redbox-official';
+    return isOfficialAutoSourceId(sourceId)
+      || sourceName === 'redbox official'
+      || sourceName === `${APP_BRAND.displayName} official`.toLowerCase()
+      || sourceName === OFFICIAL_AI_SOURCE_DISPLAY_NAME.toLowerCase()
+      || presetId === 'redbox-official';
   }, []);
 
   const hasOfficialManagedSource = useMemo(
@@ -1882,20 +1836,10 @@ export function Settings({
       return aiSources;
     }
     return [
-      {
-        id: 'redbox_official_auto',
-        name: 'RedBox Official',
-        presetId: 'redbox-official',
-        baseURL: REDBOX_OFFICIAL_VIDEO_BASE_URL,
-        apiKey: '',
-        models: [],
-        modelsMeta: [],
-        model: '',
-        protocol: 'openai',
-      },
+      officialAiSourcePlaceholder,
       ...aiSources,
     ];
-  }, [aiSources, hasOfficialManagedSource, officialAiPanelEnabled]);
+  }, [aiSources, hasOfficialManagedSource, officialAiPanelEnabled, officialAiSourcePlaceholder]);
 
   const officialAuthStatus = String((officialAuthState as { status?: string } | null)?.status || '').trim();
   const officialAuthKnown = officialAuthBootstrapped;
@@ -1908,18 +1852,32 @@ export function Settings({
     && officialAuthStatus !== 'restoring'
     && Boolean((officialAuthState as { loggedIn?: boolean } | null)?.loggedIn);
   const officialAuthNeedsLogin = officialAuthKnown && !officialAuthPending && !officialAuthLoggedIn;
+  const officialAiSource = useMemo(() => (
+    displayedAiSources.find((source) => isOfficialManagedSource(source)) || null
+  ), [displayedAiSources, isOfficialManagedSource]);
+  const customAiSources = useMemo(() => (
+    aiSources.filter((source) => !isOfficialManagedSource(source))
+  ), [aiSources, isOfficialManagedSource]);
+  const firstCustomAiSource = customAiSources[0] || null;
 
-  const defaultSourceModels = useMemo(() => {
-    if (!defaultAiSource) return [];
-    if (isOfficialManagedSource(defaultAiSource) && !officialAuthLoggedIn) {
-      return [];
+  useEffect(() => {
+    if (firstCustomAiSource && missingCustomSourceNoticeScope) {
+      setMissingCustomSourceNoticeScope(null);
     }
-    return filterAiModelsByCapability(getSourceModelList(defaultAiSource), 'chat');
-  }, [defaultAiSource, getSourceModelList, isOfficialManagedSource, officialAuthLoggedIn]);
+  }, [firstCustomAiSource, missingCustomSourceNoticeScope]);
 
-  const defaultOfficialSourceUnavailable = Boolean(
-    defaultAiSource && isOfficialManagedSource(defaultAiSource) && !officialAuthLoggedIn
-  );
+  const chatRouteSource = useMemo(() => (
+    aiModelRoutes.chat.mode === 'official'
+      ? officialAiSource
+      : aiModelRoutes.chat.mode === 'custom'
+        ? getAiSourceById(aiModelRoutes.chat.sourceId || '') || firstCustomAiSource
+        : null
+  ), [aiModelRoutes.chat.mode, aiModelRoutes.chat.sourceId, firstCustomAiSource, getAiSourceById, officialAiSource]);
+  const chatRouteSourceModels = useMemo(() => {
+    if (!chatRouteSource) return [];
+    if (isOfficialManagedSource(chatRouteSource) && !officialAuthLoggedIn) return [];
+    return filterAiModelsByCapability(getSourceModelList(chatRouteSource), 'chat');
+  }, [chatRouteSource, filterAiModelsByCapability, getSourceModelList, isOfficialManagedSource, officialAuthLoggedIn]);
 
   const getLocalGuideForSource = useCallback((source?: AiSourceConfig | null): LocalAiGuide | null => {
     if (!source) return null;
@@ -2004,11 +1962,11 @@ export function Settings({
         assistantDaemonLogFlushTimerRef.current = window.setTimeout(flushAssistantDaemonLogs, 300);
       }
     };
-    window.ipcRenderer.assistantDaemon.onStatus(handleDaemonStatus as (...args: unknown[]) => void);
-    window.ipcRenderer.assistantDaemon.onLog(handleDaemonLog as (...args: unknown[]) => void);
+    window.ipcRenderer.assistantDaemon.onStatus(handleDaemonStatus);
+    window.ipcRenderer.assistantDaemon.onLog(handleDaemonLog);
     return () => {
-      window.ipcRenderer.assistantDaemon.offStatus(handleDaemonStatus as (...args: unknown[]) => void);
-      window.ipcRenderer.assistantDaemon.offLog(handleDaemonLog as (...args: unknown[]) => void);
+      window.ipcRenderer.assistantDaemon.offStatus(handleDaemonStatus);
+      window.ipcRenderer.assistantDaemon.offLog(handleDaemonLog);
       if (assistantDaemonLogFlushTimerRef.current != null) {
         window.clearTimeout(assistantDaemonLogFlushTimerRef.current);
         assistantDaemonLogFlushTimerRef.current = null;
@@ -2035,9 +1993,9 @@ export function Settings({
       setSelectedBackgroundTaskId((prev) => prev || task.id);
       setSelectedBackgroundTaskDetail((prev) => (prev?.id === task.id ? { ...prev, ...task } : prev));
     };
-    window.ipcRenderer.backgroundTasks.onUpdated(onBackgroundTaskUpdated as (...args: unknown[]) => void);
+    window.ipcRenderer.backgroundTasks.onUpdated(onBackgroundTaskUpdated);
     return () => {
-      window.ipcRenderer.backgroundTasks.offUpdated(onBackgroundTaskUpdated as (...args: unknown[]) => void);
+      window.ipcRenderer.backgroundTasks.offUpdated(onBackgroundTaskUpdated);
     };
   }, [activeTab, formData.developer_mode_enabled, isActive]);
 
@@ -2089,7 +2047,7 @@ export function Settings({
   }, [cliRuntimeStatusMessage]);
 
   useEffect(() => {
-    if (activeTab !== 'tools' && activeTab !== 'mcp') return;
+    if (activeTab !== 'mcp') return;
     void loadMcpRuntimeData();
     for (const server of mcpServers) {
       void handleRefreshMcpOAuth(server);
@@ -2099,11 +2057,17 @@ export function Settings({
   const loadMcpRuntimeData = useCallback(async () => {
     try {
       const result = await window.ipcRenderer.mcp.list();
-      if (!result?.success) return;
+      if (!result?.success) return null;
+      const servers = Array.isArray(result.servers) ? (result.servers as McpServerConfig[]) : [];
+      setMcpServers((prev) => (
+        JSON.stringify(prev) === JSON.stringify(servers) ? prev : servers
+      ));
       setMcpLiveSessions(Array.isArray(result.sessions) ? (result.sessions as McpSessionState[]) : []);
       setMcpRuntimeItems(Array.isArray(result.items) ? (result.items as McpServerRuntimeItem[]) : []);
+      return servers;
     } catch (error) {
       console.error('Failed to load MCP runtime state:', error);
+      return null;
     }
   }, []);
 
@@ -2116,21 +2080,16 @@ export function Settings({
     return undefined;
   }, []);
 
-  const markAiSourceDraftDirty = useCallback(() => {
-    aiSourceDraftDirtyRef.current = true;
-  }, []);
-
-  const clearAiSourceDraftDirty = useCallback(() => {
-    aiSourceDraftDirtyRef.current = false;
-  }, []);
-
   const buildAiSourcePersistenceSnapshot = useCallback((
     sources: AiSourceConfig[] = aiSources,
-    resolvedDefaultSourceId: string = defaultAiSourceId,
+    legacyChatSourceId: string = aiModelRoutes.chat.sourceId || defaultAiSourceId,
   ) => {
-    const sanitizedSources: AiSourceConfig[] = sources
+    const normalizedChatSourceId = canonicalizeOfficialAutoSourceId(legacyChatSourceId)
+      || OFFICIAL_AUTO_SOURCE_ID;
+    let sanitizedSources: AiSourceConfig[] = sources
       .map((source) => ({
         ...source,
+        id: canonicalizeOfficialAutoSourceId(source.id),
         name: source.name.trim(),
         presetId: source.presetId.trim() || 'custom',
         baseURL: source.baseURL.trim(),
@@ -2156,31 +2115,40 @@ export function Settings({
       }))
       .filter((source) => !isDeprecatedEmptyOpenAiSource(source));
 
-    const defaultSource = sanitizedSources.find((source) => source.id === resolvedDefaultSourceId) || sanitizedSources[0];
+    if (
+      isOfficialAutoSourceId(normalizedChatSourceId)
+      && !sanitizedSources.some((source) => isOfficialManagedSource(source))
+    ) {
+      sanitizedSources = [officialAiSourcePlaceholder, ...sanitizedSources];
+    }
+
+    const legacyChatSource = sanitizedSources.find((source) => source.id === normalizedChatSourceId)
+      || (isOfficialAutoSourceId(normalizedChatSourceId) ? officialAiSourcePlaceholder : sanitizedSources[0]);
     return {
       sanitizedSources,
-      resolvedDefaultSourceId,
-      defaultSource,
-      resolvedApiEndpoint: String(defaultSource?.baseURL || '').trim(),
-      resolvedApiKey: String(defaultSource?.apiKey || '').trim(),
-      resolvedModelName: String(defaultSource?.model || '').trim(),
+      resolvedLegacyChatSourceId: normalizedChatSourceId,
+      legacyChatSource,
+      resolvedApiEndpoint: String(legacyChatSource?.baseURL || '').trim(),
+      resolvedApiKey: String(legacyChatSource?.apiKey || '').trim(),
+      resolvedModelName: String(aiModelRoutes.chat.model || legacyChatSource?.model || '').trim(),
     };
-  }, [aiSources, defaultAiSourceId, isDeprecatedEmptyOpenAiSource]);
+  }, [aiModelRoutes.chat.model, aiModelRoutes.chat.sourceId, aiSources, defaultAiSourceId, isDeprecatedEmptyOpenAiSource, isOfficialManagedSource, officialAiSourcePlaceholder]);
 
   const persistAiSourcesSnapshot = useCallback(async (
     sources: AiSourceConfig[] = aiSources,
-    resolvedDefaultSourceId: string = defaultAiSourceId,
+    legacyChatSourceId: string = aiModelRoutes.chat.sourceId || defaultAiSourceId,
   ) => {
-    const snapshot = buildAiSourcePersistenceSnapshot(sources, resolvedDefaultSourceId);
+    const saveGeneration = aiSourceEditGenerationRef.current;
+    const snapshot = buildAiSourcePersistenceSnapshot(sources, legacyChatSourceId);
     await window.ipcRenderer.saveSettings({
       ai_sources_json: JSON.stringify(snapshot.sanitizedSources),
-      default_ai_source_id: snapshot.resolvedDefaultSourceId || snapshot.defaultSource?.id || '',
+      default_ai_source_id: snapshot.resolvedLegacyChatSourceId || snapshot.legacyChatSource?.id || '',
       api_endpoint: snapshot.resolvedApiEndpoint,
       api_key: snapshot.resolvedApiKey,
       model_name: snapshot.resolvedModelName,
     });
-    clearAiSourceDraftDirty();
-  }, [aiSources, buildAiSourcePersistenceSnapshot, clearAiSourceDraftDirty, defaultAiSourceId]);
+    clearAiSourceDraftDirty(saveGeneration);
+  }, [aiModelRoutes.chat.sourceId, aiSources, buildAiSourcePersistenceSnapshot, clearAiSourceDraftDirty, defaultAiSourceId]);
 
   const updateAiSource = useCallback((sourceId: string, updater: (source: AiSourceConfig) => AiSourceConfig) => {
     markAiSourceDraftDirty();
@@ -2209,7 +2177,7 @@ export function Settings({
         aiSourceAutosaveTimerRef.current = null;
       }
     };
-  }, [aiSources, defaultAiSourceId, persistAiSourcesSnapshot]);
+  }, [aiSources, baseSettingsLoadedRevision, defaultAiSourceId, persistAiSourcesSnapshot]);
 
   const openCreateAiSourceModal = () => {
     setCreateAiSourceDraft(createAiSourceDraftFromPreset(DEFAULT_AI_PRESET_ID));
@@ -2238,10 +2206,6 @@ export function Settings({
     setAiSources((prev) => [...prev, nextSource]);
     setActiveAiSourceId(nextSource.id);
     setAiSourceExpandState((prev) => ({ ...prev, [nextSource.id]: true }));
-    setDefaultAiSourceId((prev) => {
-      if (!prev || createAiSourceDraft.setAsDefault) return nextSource.id;
-      return prev;
-    });
     setIsCreateAiSourceModalOpen(false);
   };
 
@@ -2269,40 +2233,27 @@ export function Settings({
       delete next[sourceId];
       return next;
     });
-    setFetchingModelsBySourceId((prev) => {
-      if (!prev[sourceId]) return prev;
-      const next = { ...prev };
-      delete next[sourceId];
-      return next;
-    });
-    fetchModelsRequestRef.current = Object.fromEntries(
-      Object.entries(fetchModelsRequestRef.current).filter(([id]) => id !== sourceId),
-    );
     setSourceModelDrafts((prev) => {
       const next = { ...prev };
       delete next[sourceId];
       return next;
     });
     setAddModelModalSourceId((prev) => (prev === sourceId ? '' : prev));
-    setModelsBySource((prev) => {
-      const next = { ...prev };
-      delete next[sourceId];
-      return next;
-    });
   };
 
   const handleToggleAiSourceExpand = (sourceId: string) => {
+    const normalizedSourceId = canonicalizeOfficialAutoSourceId(sourceId);
     setAiSourceExpandState((prev) => {
-      const currentExpanded = prev[sourceId] ?? false;
+      const currentExpanded = prev[normalizedSourceId] ?? false;
       if (currentExpanded) {
-        return { ...prev, [sourceId]: false };
+        return { ...prev, [normalizedSourceId]: false };
       }
-      return aiSources.reduce<Record<string, boolean>>((acc, source) => {
-        acc[source.id] = source.id === sourceId;
+      return displayedAiSources.reduce<Record<string, boolean>>((acc, source) => {
+        acc[source.id] = source.id === normalizedSourceId;
         return acc;
       }, {});
     });
-    setActiveAiSourceId(sourceId);
+    setActiveAiSourceId(normalizedSourceId);
   };
 
   const handleToggleAiSourceModelExpand = (sourceId: string) => {
@@ -2312,10 +2263,21 @@ export function Settings({
     }));
   };
 
+  const ensureDisplayedAiSourcePersisted = (sourceId: string) => {
+    const normalizedSourceId = canonicalizeOfficialAutoSourceId(sourceId);
+    if (!normalizedSourceId) return;
+    const displayedSource = displayedAiSources.find((source) => source.id === normalizedSourceId);
+    if (!displayedSource) return;
+    setAiSources((prev) => {
+      if (prev.some((source) => source.id === normalizedSourceId)) return prev;
+      return [displayedSource, ...prev];
+    });
+  };
+
   const handleSetSourceDefaultModel = (sourceId: string, modelId: string) => {
     const normalizedModel = String(modelId || '').trim();
     if (!normalizedModel) return;
-    updateAiSource(sourceId, (source) => ({
+    const applyModel = (source: AiSourceConfig): AiSourceConfig => ({
       ...source,
       model: normalizedModel,
       models: normalizeSourceModels([...(source.models || []), normalizedModel]),
@@ -2324,8 +2286,115 @@ export function Settings({
         ...((source.models || []).map((id) => ({ id }))),
         { id: normalizedModel, capabilities: (getSourceModelList(source).find((item) => item.id === normalizedModel)?.capabilities || ['chat']) },
       ]),
-    }));
+    });
+    markAiSourceDraftDirty();
+    setAiSources((prev) => {
+      let found = false;
+      const next = prev.map((source) => {
+        if (source.id !== sourceId) return source;
+        found = true;
+        return applyModel(source);
+      });
+      if (found) return next;
+      const displayedSource = displayedAiSources.find((source) => source.id === sourceId);
+      return displayedSource ? [applyModel(displayedSource), ...next] : next;
+    });
   };
+
+  const getRouteSource = useCallback((route: AiModelRouteConfig): AiSourceConfig | null => {
+    if (route.mode === 'official') return officialAiSource;
+    if (route.mode === 'custom') {
+      return getAiSourceById(route.sourceId || '') || firstCustomAiSource;
+    }
+    return null;
+  }, [firstCustomAiSource, getAiSourceById, officialAiSource]);
+
+  const updateAiModelRoute = useCallback((scope: AiModelRouteScope, patch: Partial<AiModelRouteConfig>) => {
+    setAiModelRoutes((prev) => {
+      const next = {
+        ...prev,
+        [scope]: {
+          ...prev[scope],
+          ...patch,
+        },
+      } as AiModelRoutes;
+      setFormData((data) => ({ ...data, ai_model_routes_json: JSON.stringify(next) }));
+      return next;
+    });
+  }, []);
+
+  const applyRouteSource = useCallback((scope: AiModelRouteScope, mode: AiModelRouteMode) => {
+    const nextMode = (
+      (scope === 'visualIndex' || scope === 'videoAnalysis') && mode === 'disabled'
+        ? 'official'
+        : mode
+    );
+    if (nextMode === 'custom' && !firstCustomAiSource) {
+      setMissingCustomSourceNoticeScope(scope);
+      return;
+    }
+    setMissingCustomSourceNoticeScope(null);
+    const source = nextMode === 'official' ? officialAiSource : nextMode === 'custom' ? firstCustomAiSource : null;
+    const nextSourceId = source?.id || (nextMode === 'official' ? OFFICIAL_AUTO_SOURCE_ID : '');
+    const nextModel = scope === 'chat' && source ? pickBestModelForSource(source, '', 'chat') : '';
+    updateAiModelRoute(scope, { mode: nextMode, sourceId: nextSourceId, model: nextModel });
+    if (!source) {
+      if (scope === 'videoAnalysis') {
+        setFormData((prev) => ({ ...prev, video_analysis_enabled: true }));
+      }
+      return;
+    }
+
+    if (scope === 'chat') {
+      ensureDisplayedAiSourcePersisted(source.id);
+      setActiveAiSourceId(source.id);
+      setFormData((prev) => ({ ...prev, model_name: nextModel }));
+      return;
+    }
+    if (scope === 'transcription') handleLinkedSourceChange('transcription', source.id);
+    if (scope === 'embedding') handleLinkedSourceChange('embedding', source.id);
+    if (scope === 'image') handleLinkedSourceChange('image', source.id);
+    if (scope === 'voiceTts') handleLinkedSourceChange('voice', source.id);
+    if (scope === 'visualIndex') {
+      handleLinkedSourceChange('visual', source.id);
+    }
+    if (scope === 'videoAnalysis') {
+      setFormData((prev) => ({ ...prev, video_analysis_enabled: true }));
+      handleLinkedSourceChange('videoAnalysis', source.id);
+    }
+  }, [firstCustomAiSource, handleLinkedSourceChange, officialAiSource, pickBestModelForSource, updateAiModelRoute]);
+
+  const applyRouteModel = useCallback((scope: AiModelRouteScope, modelId: string) => {
+    const normalizedModel = String(modelId || '').trim();
+    updateAiModelRoute(scope, { model: normalizedModel });
+    if (scope === 'chat') {
+      setFormData((prev) => ({ ...prev, model_name: normalizedModel }));
+    } else if (scope === 'wander') {
+      setFormData((prev) => ({ ...prev, model_name_wander: normalizedModel }));
+    } else if (scope === 'team') {
+      setFormData((prev) => ({ ...prev, model_name_chatroom: normalizedModel }));
+    } else if (scope === 'knowledge') {
+      setFormData((prev) => ({ ...prev, model_name_knowledge: normalizedModel }));
+    } else if (scope === 'redclaw') {
+      setFormData((prev) => ({ ...prev, model_name_redclaw: normalizedModel }));
+    } else if (scope === 'transcription') {
+      setFormData((prev) => ({ ...prev, transcription_model: normalizedModel }));
+    } else if (scope === 'embedding') {
+      setFormData((prev) => ({ ...prev, embedding_model: normalizedModel }));
+    } else if (scope === 'image') {
+      setFormData((prev) => ({ ...prev, image_model: normalizedModel }));
+    } else if (scope === 'visualIndex') {
+      setFormData((prev) => ({ ...prev, visual_index_model: normalizedModel }));
+    } else if (scope === 'videoAnalysis') {
+      setFormData((prev) => ({ ...prev, video_analysis_model: normalizedModel }));
+    } else if (scope === 'voiceTts') {
+      const nextCloneModel = cloneModelForVoiceTtsModel(normalizedModel, formData.voice_clone_model || DEFAULT_VOICE_CLONE_MODEL);
+      updateAiModelRoute('voiceClone', { model: nextCloneModel });
+      setFormData((prev) => ({ ...prev, voice_tts_model: normalizedModel, tts_model: normalizedModel, voice_clone_model: nextCloneModel }));
+    } else if (scope === 'voiceClone') {
+      setFormData((prev) => ({ ...prev, voice_clone_model: normalizedModel }));
+    }
+  }, [formData.voice_clone_model, updateAiModelRoute]);
 
   const handleRemoveSourceModel = (sourceId: string, modelId: string) => {
     const normalizedModel = String(modelId || '').trim();
@@ -2362,6 +2431,7 @@ export function Settings({
     });
     setSourceModelDrafts((prev) => ({ ...prev, [sourceId]: '' }));
     setSourceModelCapabilityDrafts((prev) => ({ ...prev, [sourceId]: 'chat' }));
+    setAiSourceModelExpandState((prev) => ({ ...prev, [sourceId]: true }));
     setAddModelModalSourceId('');
   };
 
@@ -2378,136 +2448,12 @@ export function Settings({
     }));
   };
 
-  const fetchModelsForSource = useCallback(async (
-    source: AiSourceConfig,
-    options?: { manual?: boolean }
-  ) => {
-    const sourceId = String(source.id || '').trim();
-    const baseURL = source.baseURL.trim();
-    const apiKey = source.apiKey.trim();
-    const allowEmptyKey = isLocalAiSource(source);
-    if (!baseURL || (!apiKey && !allowEmptyKey)) {
-      setModelsBySource((prev) => ({ ...prev, [source.id]: [] }));
-      setFetchingModelsBySourceId((prev) => {
-        if (!prev[source.id]) return prev;
-        const next = { ...prev };
-        delete next[source.id];
-        return next;
-      });
-      if (options?.manual) {
-        setTestStatus('error');
-        setTestMsg(allowEmptyKey ? '请先填写 Endpoint' : '请先填写 Endpoint 与 API Key');
-      } else {
-        setTestStatus('idle');
-        setTestMsg('');
-      }
-      return;
-    }
-
-    const requestId = (fetchModelsRequestRef.current[sourceId] || 0) + 1;
-    fetchModelsRequestRef.current = {
-      ...fetchModelsRequestRef.current,
-      [sourceId]: requestId,
-    };
-    setFetchingModelsBySourceId((prev) => ({ ...prev, [source.id]: true }));
-    if (options?.manual) {
-      setTestStatus('idle');
-      setTestMsg('');
-    }
-
-    try {
-      const detectResult = await window.ipcRenderer.detectAiProtocol({
-        baseURL: source.baseURL,
-        presetId: source.presetId,
-        protocol: source.protocol,
-      });
-
-      const protocol = detectResult?.protocol || source.protocol || 'openai';
-      if (requestId !== (fetchModelsRequestRef.current[sourceId] || 0)) return;
-
-      if (source.protocol !== protocol) {
-        updateAiSource(source.id, (prev) => ({ ...prev, protocol }));
-      }
-      if (source.id === activeAiSourceId) {
-        setDetectedAiProtocol(protocol);
-      }
-
-      const models = await window.ipcRenderer.fetchModels({
-        apiKey: source.apiKey,
-        baseURL: source.baseURL,
-        presetId: source.presetId,
-        protocol,
-      });
-      if (requestId !== (fetchModelsRequestRef.current[sourceId] || 0)) return;
-
-      const deduped = Array.from(new Map(
-        ((models || []) as unknown[])
-          .map((item) => toAiModelDescriptor(item as Record<string, unknown>))
-          .filter((item): item is AiModelDescriptor => Boolean(item))
-          .map((item) => [item.id, item]),
-      ).values());
-      setModelsBySource((prev) => ({ ...prev, [source.id]: deduped }));
-      if (isOfficialManagedSource(source)) {
-        updateAiSource(source.id, (prev) => {
-          const fetchedIds = deduped.map((item) => item.id);
-          const mergedModels = normalizeSourceModels([
-            ...(prev.models || []),
-            ...fetchedIds,
-            prev.model,
-          ]);
-          const mergedMeta = normalizeAiModelDescriptors([
-            ...(prev.modelsMeta || []),
-            ...deduped,
-            ...mergedModels.map((id) => ({ id })),
-          ]);
-          const nextModel = String(prev.model || '').trim() || mergedModels[0] || '';
-          if (
-            nextModel === String(prev.model || '').trim()
-            && mergedModels.join('\n') === normalizeSourceModels(prev.models || []).join('\n')
-            && JSON.stringify(mergedMeta) === JSON.stringify(normalizeAiModelDescriptors(prev.modelsMeta || []))
-          ) {
-            return prev;
-          }
-          return {
-            ...prev,
-            models: mergedModels,
-            modelsMeta: mergedMeta,
-            model: nextModel,
-          };
-        });
-      }
-
-      setTestStatus('success');
-      setTestMsg(
-        isOfficialManagedSource(source)
-          ? `模型列表已更新（${deduped.length} 个）`
-          : `候选模型已更新（${deduped.length} 个），请在“添加模型”中手动加入需要的模型`
-      );
-    } catch (e: unknown) {
-      if (requestId !== (fetchModelsRequestRef.current[sourceId] || 0)) return;
-      setModelsBySource((prev) => ({ ...prev, [source.id]: [] }));
-      setTestStatus('error');
-      const message = e instanceof Error ? e.message : '拉取模型列表失败';
-      setTestMsg(message);
-    } finally {
-      if (requestId === (fetchModelsRequestRef.current[sourceId] || 0)) {
-        setFetchingModelsBySourceId((prev) => {
-          if (!prev[source.id]) return prev;
-          const next = { ...prev };
-          delete next[source.id];
-          return next;
-        });
-      }
-    }
-  }, [activeAiSourceId, isLocalAiSource, isOfficialManagedSource, updateAiSource]);
-
   useEffect(() => {
     if (!activeAiSource) return;
     const baseURL = activeAiSource.baseURL.trim();
     const apiKey = activeAiSource.apiKey.trim();
     const allowEmptyKey = isLocalAiSource(activeAiSource);
     if (!baseURL || (!apiKey && !allowEmptyKey)) {
-      setModelsBySource((prev) => ({ ...prev, [activeAiSource.id]: [] }));
       setTestStatus('idle');
       setTestMsg('');
     }
@@ -2518,107 +2464,7 @@ export function Settings({
     activeAiSource?.apiKey,
     activeAiSource?.presetId,
     activeAiSource?.protocol,
-    fetchModelsForSource,
     isLocalAiSource,
-  ]);
-
-  const fetchImageModels = useCallback(async (options?: { manual?: boolean }) => {
-    const provider = String(formData.image_provider || '').trim();
-    const template = inferImageTemplateByProvider(provider, formData.image_provider_template);
-    const defaultEndpoint = resolveDefaultImageEndpoint(provider, template);
-    const endpointRaw = String(formData.image_endpoint || defaultEndpoint || formData.api_endpoint || '').trim();
-    const resolvedBaseURL = normalizeImageModelFetchBaseURL(endpointRaw, template);
-    const resolvedApiKey = String(formData.image_api_key || formData.api_key || '').trim();
-    const protocol = resolveImageModelFetchProtocol(template);
-    const presetId = resolveImageModelFetchPresetId(provider, template, resolvedBaseURL);
-    const allowEmptyKey = protocol === 'openai' && isLikelyLocalEndpoint(resolvedBaseURL);
-    const shouldFetchRemote = isImageTemplateRemoteModelFetchEnabled(template);
-    const forceDashscopeModel = template === 'dashscope-wan-native';
-
-    const applyModelOptions = (
-      remoteIds: string[],
-      statusMessage: string,
-    ) => {
-      const seen = new Set<string>();
-      const optionsList: Array<{ id: string; source: 'remote' | 'suggested' }> = [];
-      for (const id of remoteIds) {
-        const normalized = String(id || '').trim();
-        if (!normalized || seen.has(normalized)) continue;
-        seen.add(normalized);
-        optionsList.push({ id: normalized, source: 'remote' });
-      }
-      setImageAvailableModels(optionsList);
-      setImageModelStatus(statusMessage);
-      setFormData((prev) => {
-        const current = String(prev.image_model || '').trim();
-        if (forceDashscopeModel) {
-          if (current === DASHSCOPE_LOCKED_IMAGE_MODEL) return prev;
-          return { ...prev, image_model: DASHSCOPE_LOCKED_IMAGE_MODEL };
-        }
-        if (current && optionsList.some((item) => item.id === current)) {
-          return prev;
-        }
-        if (optionsList.length === 0) {
-          return prev;
-        }
-        const nextModel = optionsList[0].id;
-        return current === nextModel ? prev : { ...prev, image_model: nextModel };
-      });
-    };
-
-    if (!resolvedBaseURL) {
-      applyModelOptions([], '未配置生图 Endpoint，无法拉取模型列表');
-      return;
-    }
-
-    if (!resolvedApiKey && !allowEmptyKey) {
-      applyModelOptions([], '未配置生图 API Key，无法拉取模型列表');
-      return;
-    }
-
-    if (!shouldFetchRemote) {
-      applyModelOptions([], '当前模板不提供统一模型列表接口');
-      return;
-    }
-
-    const requestId = ++fetchImageModelsRequestRef.current;
-    setIsFetchingImageModels(true);
-    if (options?.manual) {
-      setImageModelStatus('正在拉取生图模型列表...');
-    }
-
-    try {
-      const models = await window.ipcRenderer.fetchModels({
-        apiKey: resolvedApiKey,
-        baseURL: resolvedBaseURL,
-        presetId,
-        protocol,
-        purpose: 'image',
-      });
-      if (requestId !== fetchImageModelsRequestRef.current) return;
-      const remoteIds = Array.from(new Set(
-        ((models || []) as Array<{ id?: string }>)
-          .map((item) => String(item.id || '').trim())
-          .filter(Boolean)
-      ));
-      const summary = remoteIds.length > 0 ? `已拉取远端模型 ${remoteIds.length} 个` : '远端未返回可用生图模型';
-      applyModelOptions(remoteIds, summary);
-    } catch (error) {
-      if (requestId !== fetchImageModelsRequestRef.current) return;
-      const message = error instanceof Error ? error.message : '拉取失败';
-      applyModelOptions([], `拉取失败：${message}`);
-    } finally {
-      if (requestId === fetchImageModelsRequestRef.current) {
-        setIsFetchingImageModels(false);
-      }
-    }
-  }, [
-    formData.api_endpoint,
-    formData.api_key,
-    formData.image_api_key,
-    formData.image_endpoint,
-    formData.image_provider,
-    formData.image_provider_template,
   ]);
 
   useEffect(() => {
@@ -2629,19 +2475,6 @@ export function Settings({
       return { ...prev, image_model: DASHSCOPE_LOCKED_IMAGE_MODEL };
     });
   }, [activeTab, isDashscopeImageTemplate]);
-
-  useEffect(() => {
-    return;
-  }, [
-    activeTab,
-    formData.api_endpoint,
-    formData.api_key,
-    formData.image_api_key,
-    formData.image_endpoint,
-    formData.image_provider,
-    formData.image_provider_template,
-    fetchImageModels,
-  ]);
 
   const persistMcpServers = useCallback(async (nextServers: McpServerConfig[], tip?: string) => {
     setIsSyncingMcp(true);
@@ -2664,9 +2497,9 @@ export function Settings({
     }
   }, [loadMcpRuntimeData]);
 
-  const handleAddMcpServer = async () => {
-    const next = [...mcpServers, createDefaultMcpServer()];
-    await persistMcpServers(next, '已新增 MCP Server，请完善配置后保存');
+  const handleAddMcpServer = () => {
+    setMcpDraft(mcpDraftFromServer());
+    setMcpDraftOriginalId('');
   };
 
   const handleDeleteMcpServer = async (serverId: string) => {
@@ -2697,6 +2530,29 @@ export function Settings({
       setMcpServers(mcpServers);
     }
   }, [mcpServers, persistMcpServers]);
+
+  const handleEditMcpServer = useCallback((server: McpServerConfig) => {
+    setMcpDraft(mcpDraftFromServer(server));
+    setMcpDraftOriginalId(server.id);
+  }, []);
+
+  const handleSaveMcpDraft = useCallback(async () => {
+    if (!mcpDraft) return;
+    const server = mcpServerFromDraft(mcpDraft);
+    const next = mcpDraftOriginalId
+      ? mcpServers.map((item) => (item.id === mcpDraftOriginalId ? server : item))
+      : [...mcpServers, server];
+    const saved = await persistMcpServers(next, mcpDraftOriginalId ? 'MCP Server 已保存' : '已新增 MCP Server');
+    if (saved) {
+      setMcpDraft(null);
+      setMcpDraftOriginalId('');
+    }
+  }, [mcpDraft, mcpDraftOriginalId, mcpServers, persistMcpServers]);
+
+  const handleCancelMcpDraft = useCallback(() => {
+    setMcpDraft(null);
+    setMcpDraftOriginalId('');
+  }, []);
 
   const handleSaveMcpServers = async () => {
     await persistMcpServers(mcpServers, 'MCP 配置已保存');
@@ -2798,6 +2654,22 @@ export function Settings({
     }
   }, []);
 
+  const loadRecentDebugLogs = useCallback(async () => {
+    const requestId = ++debugLogsLoadRequestRef.current;
+    setIsDebugLogsLoading(true);
+    try {
+      const result = await window.ipcRenderer.logs.getRecent(120);
+      if (requestId !== debugLogsLoadRequestRef.current) return;
+      setRecentDebugLogs(Array.isArray(result?.lines) ? result.lines : []);
+    } catch (e) {
+      console.error('Failed to load debug logs', e);
+    } finally {
+      if (requestId === debugLogsLoadRequestRef.current) {
+        setIsDebugLogsLoading(false);
+      }
+    }
+  }, []);
+
   const isEmptyFileIndexDashboardFallback = useCallback((dashboard: FileIndexDashboard | null | undefined): boolean => {
     if (!dashboard) return true;
     const overall = dashboard.overall;
@@ -2873,22 +2745,6 @@ export function Settings({
     fileIndexDashboardInFlightRef.current = request;
     return request;
   }, [isEmptyFileIndexDashboardFallback]);
-
-  const loadRecentDebugLogs = useCallback(async () => {
-    const requestId = ++debugLogsLoadRequestRef.current;
-    setIsDebugLogsLoading(true);
-    try {
-      const result = await window.ipcRenderer.logs.getRecent(120);
-      if (requestId !== debugLogsLoadRequestRef.current) return;
-      setRecentDebugLogs(Array.isArray(result?.lines) ? result.lines : []);
-    } catch (e) {
-      console.error('Failed to load debug logs', e);
-    } finally {
-      if (requestId === debugLogsLoadRequestRef.current) {
-        setIsDebugLogsLoading(false);
-      }
-    }
-  }, []);
 
   const loadLoggingStatus = useCallback(async () => {
     try {
@@ -3690,7 +3546,7 @@ export function Settings({
     await window.ipcRenderer.saveSettings({
       developer_mode_enabled: enabled,
       developer_mode_unlocked_at: unlockedAt,
-    } as any);
+    });
   }, []);
 
   const expireDeveloperMode = useCallback(async () => {
@@ -3705,6 +3561,29 @@ export function Settings({
       console.error('Failed to persist developer mode expiration', error);
     }
   }, [persistDeveloperModeState]);
+
+  const handleCliRuntimeExecutionModeChange = useCallback((mode: CliRuntimeExecutionMode) => {
+    const nextMode = normalizeCliRuntimeExecutionMode(mode);
+    setCliRuntimeExecutionMode(nextMode);
+    setFormData((prev) => ({
+      ...prev,
+      cli_runtime_execution_mode: nextMode,
+    }));
+    void window.ipcRenderer.saveSettings({
+      cli_runtime_execution_mode: nextMode,
+    }).then(() => {
+      setCliRuntimeStatusMessage(
+        nextMode === 'unrestricted'
+          ? 'CLI Runtime 已切换为完全访问；仅对你明确授权的命令使用。'
+          : nextMode === 'managed'
+            ? 'CLI Runtime 已切换为安全模式。'
+            : 'CLI Runtime 已切换为兼容模式。',
+      );
+    }).catch((error) => {
+      console.error('Failed to persist CLI runtime execution mode', error);
+      setCliRuntimeStatusMessage(`保存 CLI Runtime 模式失败：${String(error)}`);
+    });
+  }, []);
 
   const handleVersionTap = useCallback(() => {
     setDeveloperVersionTapCount((prev) => {
@@ -3729,18 +3608,40 @@ export function Settings({
     });
   }, [activeTab, persistDeveloperModeState]);
 
-  const handleOpenDownloadPage = useCallback(() => {
-    window.open('https://github.com/Jamailar/RedBox/releases', '_blank', 'noopener,noreferrer');
+  const handleShowCurrentReleaseNotes = useCallback(() => {
+    window.dispatchEvent(new CustomEvent(SHOW_CURRENT_RELEASE_NOTES_EVENT, {
+      detail: { version: appVersion || '2.0.0' },
+    }));
+  }, [appVersion]);
+
+  const handleOpenDownloadPage = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.openAppReleasePage(APP_BRAND.downloadUrl);
+      if (!result?.success) {
+        void appAlert(result?.error || '打开下载页面失败');
+      }
+    } catch (error) {
+      console.error('Failed to open download page:', error);
+      void appAlert('打开下载页面失败');
+    }
   }, []);
 
   const loadSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     const preserveViewState = Boolean(options?.preserveViewState);
-    const preserveRemoteModels = options?.preserveRemoteModels ?? preserveViewState;
     const requestId = ++settingsLoadRequestRef.current;
+    const hadLocalAiSourceDraft = aiSourceDraftDirtyRef.current;
+    const requestAiSourceEditGeneration = aiSourceEditGenerationRef.current;
     try {
       const settings = await window.ipcRenderer.getSettings();
       if (requestId !== settingsLoadRequestRef.current) return;
-      if (preserveViewState && aiSourceDraftDirtyRef.current) {
+      if (
+        preserveViewState
+        && (
+          hadLocalAiSourceDraft
+          || aiSourceDraftDirtyRef.current
+          || requestAiSourceEditGeneration !== aiSourceEditGenerationRef.current
+        )
+      ) {
         return;
       }
       if (settings) {
@@ -3780,8 +3681,8 @@ export function Settings({
           return normalizedDefaultId;
         };
 
-        const requestedDefaultSourceId = String(settings.default_ai_source_id || '').trim();
-        const prefersOfficialDefault = requestedDefaultSourceId.toLowerCase() === 'redbox_official_auto';
+        const requestedDefaultSourceId = canonicalizeOfficialAutoSourceId(String(settings.default_ai_source_id || '').trim());
+        const prefersOfficialDefault = isOfficialAutoSourceId(requestedDefaultSourceId);
         let sourceList = parseAiSources(settings.ai_sources_json).filter((source) => !isDeprecatedEmptyOpenAiSource(source));
         if (!sourceList.length && !prefersOfficialDefault && (settings.api_endpoint || settings.api_key || settings.model_name)) {
           const inferredPresetId = inferPresetIdByEndpoint(settings.api_endpoint || '');
@@ -3798,11 +3699,13 @@ export function Settings({
           }];
         }
 
-        const loadedDefaultId = requestedDefaultSourceId || sourceList[0]?.id || 'redbox_official_auto';
+        const loadedDefaultId = requestedDefaultSourceId || sourceList[0]?.id || OFFICIAL_AUTO_SOURCE_ID;
         const normalizedDefaultId = sourceList.some((source) => source.id === loadedDefaultId)
           ? loadedDefaultId
-          : (loadedDefaultId === 'redbox_official_auto' ? 'redbox_official_auto' : (sourceList[0]?.id || 'redbox_official_auto'));
-        const resolvedDefaultSource = sourceList.find((source) => source.id === normalizedDefaultId) || sourceList[0] || null;
+          : (loadedDefaultId === OFFICIAL_AUTO_SOURCE_ID ? OFFICIAL_AUTO_SOURCE_ID : (sourceList[0]?.id || OFFICIAL_AUTO_SOURCE_ID));
+        const resolvedDefaultSource = sourceList.find((source) => source.id === normalizedDefaultId)
+          || (isOfficialAutoSourceId(normalizedDefaultId) ? officialAiSourcePlaceholder : sourceList[0])
+          || null;
         const resolvedTranscriptionSourceId = resolveLinkedSourceIdFromList({
           endpoint: String(settings.transcription_endpoint || settings.api_endpoint || '').trim(),
           apiKey: String(settings.transcription_key || settings.api_key || '').trim(),
@@ -3815,10 +3718,28 @@ export function Settings({
           model: String(settings.embedding_model || '').trim(),
           fallbackId: normalizedDefaultId,
         });
+        const resolvedVisualIndexSourceId = resolveLinkedSourceIdFromList({
+          endpoint: String(settings.visual_index_endpoint || settings.api_endpoint || '').trim(),
+          apiKey: String(settings.visual_index_api_key || settings.api_key || '').trim(),
+          model: String(settings.visual_index_model || '').trim(),
+          fallbackId: normalizedDefaultId,
+        });
+        const resolvedVideoAnalysisSourceId = resolveLinkedSourceIdFromList({
+          endpoint: String(settings.video_analysis_endpoint || settings.api_endpoint || '').trim(),
+          apiKey: String(settings.video_analysis_api_key || settings.api_key || '').trim(),
+          model: String(settings.video_analysis_model || '').trim(),
+          fallbackId: normalizedDefaultId,
+        });
         const resolvedImageSourceId = resolveLinkedSourceIdFromList({
           endpoint: String(settings.image_endpoint || settings.api_endpoint || '').trim(),
           apiKey: String(settings.image_api_key || settings.api_key || '').trim(),
           model: String(settings.image_model || '').trim(),
+          fallbackId: normalizedDefaultId,
+        });
+        const resolvedVoiceSourceId = resolveLinkedSourceIdFromList({
+          endpoint: String(settings.voice_endpoint || settings.tts_endpoint || settings.api_endpoint || '').trim(),
+          apiKey: String(settings.voice_api_key || settings.tts_api_key || settings.api_key || '').trim(),
+          model: String(settings.voice_tts_model || settings.tts_model || '').trim(),
           fallbackId: normalizedDefaultId,
         });
         const unlockedAt = String(settings.developer_mode_unlocked_at || '').trim();
@@ -3826,6 +3747,120 @@ export function Settings({
         const developerModeEnabled = Boolean(settings.developer_mode_enabled)
           && Number.isFinite(unlockedAtMs)
           && (Date.now() - unlockedAtMs) < DEVELOPER_MODE_TTL_MS;
+        const loadedCliRuntimeExecutionMode = normalizeCliRuntimeExecutionMode(
+          settings.cli_runtime_execution_mode,
+        );
+        const loadedModelRoutes = normalizeAiModelRoutes(settings.ai_model_routes_json);
+        const routeSourceMode = (sourceId: string, fallback: AiModelRouteMode = 'custom'): AiModelRouteMode => {
+          const normalizedSourceId = canonicalizeOfficialAutoSourceId(sourceId);
+          if (isOfficialAutoSourceId(normalizedSourceId)) return 'official';
+          if (fallback === 'disabled') return 'disabled';
+          return normalizedSourceId ? 'custom' : fallback;
+        };
+        const firstCustomSourceIdFromList = sourceList.find((source) => !isOfficialManagedSource(source))?.id || '';
+        const loadedChatRouteSourceId = canonicalizeOfficialAutoSourceId(String(loadedModelRoutes.chat.sourceId || '').trim());
+        const resolvedChatSourceId = loadedModelRoutes.chat.mode === 'official'
+          ? OFFICIAL_AUTO_SOURCE_ID
+          : loadedChatRouteSourceId
+            || (loadedModelRoutes.chat.mode === 'custom' ? firstCustomSourceIdFromList : '')
+            || normalizedDefaultId
+            || OFFICIAL_AUTO_SOURCE_ID;
+        const resolvedChatSource = sourceList.find((source) => source.id === resolvedChatSourceId)
+          || (isOfficialAutoSourceId(resolvedChatSourceId) ? officialAiSourcePlaceholder : null)
+          || resolvedDefaultSource
+          || null;
+        const loadedVoiceTtsModel = String(loadedModelRoutes.voiceTts.model || settings.voice_tts_model || settings.tts_model || DEFAULT_VOICE_TTS_MODEL).trim();
+        const loadedVoiceCloneModel = cloneModelForVoiceTtsModel(
+          loadedVoiceTtsModel,
+          String(loadedModelRoutes.voiceClone.model || settings.voice_clone_model || DEFAULT_VOICE_CLONE_MODEL).trim(),
+        );
+        const routeModelFirst = (routeModel: string, legacyModel: unknown) => (
+          String(routeModel || legacyModel || '').trim()
+        );
+        const resolvedImageSource = sourceList.find((source) => source.id === resolvedImageSourceId) || null;
+        const loadedImageRouting = resolvedImageSource
+          ? inferImageRoutingFromSource(resolvedImageSource)
+          : {
+            provider: settings.image_provider || 'openai-compatible',
+            template: settings.image_provider_template || '',
+          };
+        const loadedImageProvider = loadedImageRouting.provider || settings.image_provider || 'openai-compatible';
+        const loadedImageTemplate = inferImageTemplateByProvider(
+          loadedImageProvider,
+          loadedImageRouting.template || settings.image_provider_template || '',
+        );
+        const loadedImageModel = pickCapabilityModelForSource(
+          resolvedImageSource,
+          routeModelFirst(loadedModelRoutes.image.model, settings.image_model),
+          'image',
+        );
+        const nextModelRoutes: AiModelRoutes = {
+          ...loadedModelRoutes,
+          chat: {
+            ...loadedModelRoutes.chat,
+            mode: routeSourceMode(resolvedChatSourceId, loadedModelRoutes.chat.mode),
+            sourceId: resolvedChatSourceId,
+            model: routeModelFirst(loadedModelRoutes.chat.model, resolvedChatSource?.model || settings.model_name),
+          },
+          wander: {
+            ...loadedModelRoutes.wander,
+            model: routeModelFirst(loadedModelRoutes.wander.model, settings.model_name_wander),
+          },
+          team: {
+            ...loadedModelRoutes.team,
+            model: routeModelFirst(loadedModelRoutes.team.model, settings.model_name_chatroom),
+          },
+          knowledge: {
+            ...loadedModelRoutes.knowledge,
+            model: routeModelFirst(loadedModelRoutes.knowledge.model, settings.model_name_knowledge),
+          },
+          redclaw: {
+            ...loadedModelRoutes.redclaw,
+            model: routeModelFirst(loadedModelRoutes.redclaw.model, settings.model_name_redclaw),
+          },
+          transcription: {
+            ...loadedModelRoutes.transcription,
+            mode: routeSourceMode(resolvedTranscriptionSourceId, loadedModelRoutes.transcription.mode),
+            sourceId: resolvedTranscriptionSourceId,
+            model: routeModelFirst(loadedModelRoutes.transcription.model, settings.transcription_model),
+          },
+          embedding: {
+            ...loadedModelRoutes.embedding,
+            mode: routeSourceMode(resolvedEmbeddingSourceId, loadedModelRoutes.embedding.mode),
+            sourceId: resolvedEmbeddingSourceId,
+            model: routeModelFirst(loadedModelRoutes.embedding.model, settings.embedding_model),
+          },
+          image: {
+            ...loadedModelRoutes.image,
+            mode: routeSourceMode(resolvedImageSourceId, loadedModelRoutes.image.mode),
+            sourceId: resolvedImageSourceId,
+            model: loadedImageModel,
+          },
+          visualIndex: {
+            ...loadedModelRoutes.visualIndex,
+            mode: routeSourceMode(resolvedVisualIndexSourceId, loadedModelRoutes.visualIndex.mode === 'disabled' ? 'official' : loadedModelRoutes.visualIndex.mode),
+            sourceId: resolvedVisualIndexSourceId,
+            model: routeModelFirst(loadedModelRoutes.visualIndex.model, settings.visual_index_model),
+          },
+          videoAnalysis: {
+            ...loadedModelRoutes.videoAnalysis,
+            mode: routeSourceMode(resolvedVideoAnalysisSourceId, loadedModelRoutes.videoAnalysis.mode === 'disabled' ? 'official' : loadedModelRoutes.videoAnalysis.mode),
+            sourceId: resolvedVideoAnalysisSourceId,
+            model: routeModelFirst(loadedModelRoutes.videoAnalysis.model, settings.video_analysis_model),
+          },
+          voiceTts: {
+            ...loadedModelRoutes.voiceTts,
+            mode: routeSourceMode(resolvedVoiceSourceId, loadedModelRoutes.voiceTts.mode),
+            sourceId: resolvedVoiceSourceId,
+            model: loadedVoiceTtsModel,
+          },
+          voiceClone: {
+            ...loadedModelRoutes.voiceClone,
+            mode: 'official',
+            sourceId: OFFICIAL_AUTO_SOURCE_ID,
+            model: loadedVoiceCloneModel,
+          },
+        };
 
         setCurrentSpaceState(
           (settings as { active_space_id?: string; activeSpaceId?: string }).active_space_id
@@ -3835,96 +3870,109 @@ export function Settings({
         setAiSources(sourceList);
         setDefaultAiSourceId(normalizedDefaultId);
         setActiveAiSourceId((prevActiveId) => {
-          if (!preserveViewState) {
-            return normalizedDefaultId;
-          }
-          const currentActiveId = String(prevActiveId || '').trim();
-          if (currentActiveId === 'redbox_official_auto') {
+          if (!preserveViewState) return resolvedChatSourceId;
+          const currentActiveId = canonicalizeOfficialAutoSourceId(prevActiveId);
+          if (isOfficialAutoSourceId(currentActiveId)) {
             return currentActiveId;
           }
           if (currentActiveId && sourceList.some((source) => source.id === currentActiveId)) {
             return currentActiveId;
           }
-          return normalizedDefaultId;
+          return resolvedChatSourceId;
         });
-        setModelsBySource((prev) => {
-          if (!preserveRemoteModels) {
-            return {};
-          }
-          const validSourceIds = new Set(sourceList.map((source) => source.id));
-          return Object.fromEntries(
-            Object.entries(prev).filter(([sourceId]) => sourceId === 'redbox_official_auto' || validSourceIds.has(sourceId))
-          );
-        });
-        setFetchingModelsBySourceId((prev) => {
-          if (!preserveRemoteModels) {
-            return {};
-          }
-          const validSourceIds = new Set(sourceList.map((source) => source.id));
-          return Object.fromEntries(
-            Object.entries(prev).filter(([sourceId]) => sourceId === 'redbox_official_auto' || validSourceIds.has(sourceId))
-          );
-        });
-        setDetectedAiProtocol((resolvedDefaultSource?.protocol || findAiPresetById(resolvedDefaultSource?.presetId || '')?.protocol || 'openai') as AiProtocol);
-        setMcpServers(parseMcpServers(settings.mcp_servers_json));
+        setDetectedAiProtocol((resolvedChatSource?.protocol || findAiPresetById(resolvedChatSource?.presetId || '')?.protocol || 'openai') as AiProtocol);
+        const registryMcpServers = await loadMcpRuntimeData();
+        if (!registryMcpServers) {
+          setMcpServers(parseMcpServers(settings.mcp_servers_json));
+        }
+        setCliRuntimeExecutionMode(loadedCliRuntimeExecutionMode);
         setTranscriptionSourceId(resolvedTranscriptionSourceId);
         setEmbeddingSourceId(resolvedEmbeddingSourceId);
+        setVisualIndexSourceId(resolvedVisualIndexSourceId);
+        setVideoAnalysisSourceId(resolvedVideoAnalysisSourceId);
         setImageSourceId(resolvedImageSourceId);
+        setVoiceSourceId(resolvedVoiceSourceId);
+        setAiModelRoutes(nextModelRoutes);
         setNotificationSettings(parseNotificationSettings(settings.notifications_json));
         clearAiSourceDraftDirty();
-        console.log('[settings][ai] loadSettings-applied', {
+          console.log('[settings][ai] loadSettings-applied', {
           sourceCount: sourceList.length,
           defaultAiSourceId: normalizedDefaultId,
+          chatSourceId: resolvedChatSourceId,
           transcriptionSourceId: resolvedTranscriptionSourceId,
           embeddingSourceId: resolvedEmbeddingSourceId,
+          visualIndexSourceId: resolvedVisualIndexSourceId,
+          videoAnalysisSourceId: resolvedVideoAnalysisSourceId,
           imageSourceId: resolvedImageSourceId,
+          voiceSourceId: resolvedVoiceSourceId,
         });
 
         setFormData({
-          api_endpoint: resolvedDefaultSource?.baseURL || '',
-          api_key: resolvedDefaultSource?.apiKey || '',
-          model_name: resolvedDefaultSource?.model || '',
+          api_endpoint: resolvedChatSource?.baseURL || '',
+          api_key: resolvedChatSource?.apiKey || '',
+          model_name: nextModelRoutes.chat.model || resolvedChatSource?.model || '',
           workspace_dir: settings.workspace_dir || '',
-          transcription_model: settings.transcription_model || '',
+          transcription_model: nextModelRoutes.transcription.model || '',
           transcription_endpoint: settings.transcription_endpoint || '',
           transcription_key: settings.transcription_key || '',
           embedding_endpoint: settings.embedding_endpoint || '',
           embedding_key: settings.embedding_key || '',
-          embedding_model: settings.embedding_model || '',
-          image_provider: settings.image_provider || 'openai-compatible',
+          embedding_model: nextModelRoutes.embedding.model || '',
+          visual_index_enabled: Boolean(settings.visual_index_enabled),
+          visual_index_provider: settings.visual_index_provider || 'openai-compatible',
+          visual_index_endpoint: settings.visual_index_endpoint || '',
+          visual_index_api_key: settings.visual_index_api_key || '',
+          visual_index_model: nextModelRoutes.visualIndex.model || '',
+          visual_index_prompt_version: normalizeVisualIndexPromptVersion(settings.visual_index_prompt_version),
+          visual_index_timeout_seconds: String(settings.visual_index_timeout_seconds || 90),
+          visual_index_max_image_edge: String(settings.visual_index_max_image_edge || 1536),
+          visual_index_skip_small_images: settings.visual_index_skip_small_images !== false,
+          visual_index_pdf_max_pages: String(settings.visual_index_pdf_max_pages || 12),
+          visual_index_pdf_render_dpi: String(settings.visual_index_pdf_render_dpi || 144),
+          visual_index_concurrency: String(settings.visual_index_concurrency || 1),
+          video_analysis_enabled: DEFAULT_VIDEO_ANALYSIS_ENABLED,
+          video_analysis_endpoint: settings.video_analysis_endpoint || '',
+          video_analysis_api_key: settings.video_analysis_api_key || '',
+          video_analysis_model: nextModelRoutes.videoAnalysis.model || '',
+          video_analysis_protocol: settings.video_analysis_protocol || 'gemini',
+          video_analysis_max_direct_video_bytes: String(settings.video_analysis_max_direct_video_bytes || 64 * 1024 * 1024),
+          docling_endpoint: settings.docling_endpoint || settings.parser_docling_endpoint || '',
+          tika_endpoint: settings.tika_endpoint || settings.parser_tika_endpoint || '',
+          unstructured_endpoint: settings.unstructured_endpoint || settings.parser_unstructured_endpoint || '',
+          parser_api_key: settings.parser_api_key || '',
+          parser_timeout_seconds: String(settings.parser_timeout_seconds || 90),
+          rerank_endpoint: settings.rerank_endpoint || settings.cross_encoder_rerank_endpoint || '',
+          rerank_api_key: settings.rerank_api_key || '',
+          rerank_model: settings.rerank_model || '',
+          rerank_timeout_seconds: String(settings.rerank_timeout_seconds || 30),
+          image_provider: loadedImageProvider,
           image_endpoint: settings.image_endpoint || resolveDefaultImageEndpoint(
-            settings.image_provider || 'openai-compatible',
-            settings.image_provider_template || 'openai-images'
+            loadedImageProvider,
+            loadedImageTemplate || 'openai-images'
           ),
           image_api_key: settings.image_api_key || '',
-          image_provider_template: inferImageTemplateByProvider(
-            settings.image_provider || 'openai-compatible',
-            settings.image_provider_template || ''
-          ),
+          image_provider_template: loadedImageTemplate,
           image_model: (() => {
-            const loadedProvider = settings.image_provider || 'openai-compatible';
-            const loadedTemplate = inferImageTemplateByProvider(
-              loadedProvider,
-              settings.image_provider_template || ''
-            );
-            if (loadedTemplate === 'dashscope-wan-native') {
+            if (loadedImageTemplate === 'dashscope-wan-native') {
               return DASHSCOPE_LOCKED_IMAGE_MODEL;
             }
-            return settings.image_model || 'gpt-image-1';
+            return loadedImageModel;
           })(),
+          voice_endpoint: settings.voice_endpoint || settings.tts_endpoint || '',
+          voice_api_key: settings.voice_api_key || settings.tts_api_key || '',
+          voice_tts_model: loadedVoiceTtsModel,
+          tts_model: loadedVoiceTtsModel,
+          voice_clone_model: loadedVoiceCloneModel,
           video_endpoint: REDBOX_OFFICIAL_VIDEO_BASE_URL,
           video_api_key: settings.video_api_key || '',
           video_model: settings.video_model || REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video'],
           image_aspect_ratio: settings.image_aspect_ratio || '3:4',
           image_size: '',
-          image_quality: settings.image_quality || 'auto',
-          ecommerce_platforms_json: serializeEcommercePlatformsSettings(
-            normalizeEcommercePlatformsSettings(settings.ecommerce_platforms_json),
-          ),
-          model_name_wander: settings.model_name_wander || '',
-          model_name_chatroom: settings.model_name_chatroom || '',
-          model_name_knowledge: settings.model_name_knowledge || '',
-          model_name_redclaw: settings.model_name_redclaw || '',
+          image_quality: settings.image_quality === 'low' || settings.image_quality === 'medium' || settings.image_quality === 'high' ? settings.image_quality : 'medium',
+          model_name_wander: nextModelRoutes.wander.model || '',
+          model_name_chatroom: nextModelRoutes.team.model || '',
+          model_name_knowledge: nextModelRoutes.knowledge.model || '',
+          model_name_redclaw: nextModelRoutes.redclaw.model || '',
           proxy_enabled: Boolean(settings.proxy_enabled),
           proxy_url: settings.proxy_url || '',
           proxy_bypass: settings.proxy_bypass || 'localhost,127.0.0.1,::1',
@@ -3933,39 +3981,20 @@ export function Settings({
           chat_max_tokens_deepseek: sanitizeChatMaxTokensInput(String(settings.chat_max_tokens_deepseek || DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK), DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK),
           wander_deep_think_enabled: Boolean(settings.wander_deep_think_enabled),
           debug_log_enabled: Boolean(settings.debug_log_enabled),
-          diagnostics_upload_consent: settings.diagnostics_upload_consent === 'approved'
-            ? 'approved'
-            : settings.diagnostics_upload_consent === 'none'
-              ? 'none'
-              : 'prompt',
+          diagnostics_upload_consent: settings.diagnostics_upload_consent === 'none' ? 'none' : 'approved',
           diagnostics_include_advanced_context: Boolean(settings.diagnostics_include_advanced_context),
           diagnostics_auto_send_same_crash: Boolean(settings.diagnostics_auto_send_same_crash),
           diagnostics_last_prompted_at: String(settings.diagnostics_last_prompted_at || ''),
+          analytics_consent: settings.analytics_consent === 'none' ? 'none' : 'approved',
           release_log_retention_days: String(settings.release_log_retention_days || 7),
           release_log_max_file_mb: String(settings.release_log_max_file_mb || 10),
-          visual_index_enabled: Boolean(settings.visual_index_enabled),
-          visual_index_provider: settings.visual_index_provider || 'openai-compatible',
-          visual_index_endpoint: settings.visual_index_endpoint || '',
-          visual_index_api_key: settings.visual_index_api_key || '',
-          visual_index_model: settings.visual_index_model || '',
-          visual_index_prompt_version: normalizeVisualIndexPromptVersion(settings.visual_index_prompt_version),
-          visual_index_timeout_seconds: String(settings.visual_index_timeout_seconds || 90),
-          visual_index_max_image_edge: String(settings.visual_index_max_image_edge || 1536),
-          visual_index_skip_small_images: settings.visual_index_skip_small_images !== false,
-          visual_index_pdf_max_pages: String(settings.visual_index_pdf_max_pages || 12),
-          visual_index_pdf_render_dpi: String(settings.visual_index_pdf_render_dpi || 144),
-          visual_index_concurrency: String(settings.visual_index_concurrency || 1),
-          docling_endpoint: settings.docling_endpoint || '',
-          tika_endpoint: settings.tika_endpoint || '',
-          unstructured_endpoint: settings.unstructured_endpoint || '',
-          parser_api_key: settings.parser_api_key || '',
-          parser_timeout_seconds: String(settings.parser_timeout_seconds || 60),
-          rerank_endpoint: settings.rerank_endpoint || '',
-          rerank_api_key: settings.rerank_api_key || '',
-          rerank_model: settings.rerank_model || '',
-          rerank_timeout_seconds: String(settings.rerank_timeout_seconds || 30),
+          cli_runtime_execution_mode: loadedCliRuntimeExecutionMode,
           developer_mode_enabled: developerModeEnabled,
           developer_mode_unlocked_at: developerModeEnabled ? unlockedAt : '',
+          ai_model_routes_json: JSON.stringify(nextModelRoutes),
+          ecommerce_platforms_json: serializeEcommercePlatformsSettings(
+            normalizeEcommercePlatformsSettings(settings.ecommerce_platforms_json)
+          ),
         });
 
         if (Boolean(settings.developer_mode_enabled) && !developerModeEnabled) {
@@ -3975,17 +4004,18 @@ export function Settings({
         if (requestId !== settingsLoadRequestRef.current) return;
         setCurrentSpaceState(DEFAULT_SPACE_ID);
         setAiSources([]);
-        setDefaultAiSourceId('redbox_official_auto');
+        setDefaultAiSourceId(OFFICIAL_AUTO_SOURCE_ID);
         setActiveAiSourceId((prevActiveId) => {
-          if (preserveViewState && String(prevActiveId || '').trim() === 'redbox_official_auto') {
-            return prevActiveId;
+          const currentActiveId = canonicalizeOfficialAutoSourceId(prevActiveId);
+          if (preserveViewState && isOfficialAutoSourceId(currentActiveId)) {
+            return currentActiveId;
           }
-          return 'redbox_official_auto';
+          return OFFICIAL_AUTO_SOURCE_ID;
         });
-        setModelsBySource((prev) => (preserveRemoteModels ? prev : {}));
-        setFetchingModelsBySourceId((prev) => (preserveRemoteModels ? prev : {}));
         setDetectedAiProtocol('openai');
         setMcpServers([]);
+        setCliRuntimeExecutionMode('host_compatible');
+        setAiModelRoutes(DEFAULT_AI_MODEL_ROUTES);
         setNotificationSettings(DEFAULT_NOTIFICATION_SETTINGS);
         clearAiSourceDraftDirty();
       }
@@ -3993,7 +4023,7 @@ export function Settings({
       if (requestId !== settingsLoadRequestRef.current) return;
       console.error("Failed to load settings", e);
     }
-  }, [clearAiSourceDraftDirty, isDeprecatedEmptyOpenAiSource, persistDeveloperModeState, setCurrentSpaceState]);
+  }, [clearAiSourceDraftDirty, inferImageRoutingFromSource, isDeprecatedEmptyOpenAiSource, loadMcpRuntimeData, officialAiSourcePlaceholder, persistDeveloperModeState, pickCapabilityModelForSource, setCurrentSpaceState]);
 
   const reloadCustomAiSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     await loadSettings({
@@ -4002,17 +4032,6 @@ export function Settings({
       ...options,
     });
   }, [loadSettings]);
-
-  const loadNotificationPermissionState = useCallback(async () => {
-    try {
-      const result = await window.ipcRenderer.notifications.getPermissionState();
-      setNotificationPermissionState(normalizeNotificationPermissionState(result?.state));
-    } catch (error) {
-      console.warn('Failed to load notification permission state:', error);
-      setNotificationPermissionState('unknown');
-    }
-  }, []);
-
 
   useEffect(() => {
     if (!formData.developer_mode_enabled || !formData.developer_mode_unlocked_at) {
@@ -4033,19 +4052,6 @@ export function Settings({
     }, remaining);
     return () => window.clearTimeout(timer);
   }, [expireDeveloperMode, formData.developer_mode_enabled, formData.developer_mode_unlocked_at]);
-
-  useEffect(() => {
-    void loadNotificationPermissionState();
-  }, [loadNotificationPermissionState]);
-
-  const checkTools = useCallback(async () => {
-    try {
-      const status = await window.ipcRenderer.checkYtdlp();
-      setYtdlpStatus(status);
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
 
   const upsertCliRuntimeInstallQueueItem = useCallback((item: CliRuntimeInstallQueueItem) => {
     setCliRuntimeInstallQueue((prev) => {
@@ -4144,18 +4150,23 @@ export function Settings({
     }
     setCliRuntimeInspectingToolId(command);
     try {
-      const result = await window.ipcRenderer.cliRuntime.inspect({ command, executable: command });
-      const normalized = normalizeCliRuntimeToolRecord(result);
+      const result = await window.ipcRenderer.cliRuntime.diagnose({
+        command,
+        executionMode: cliRuntimeExecutionMode,
+      });
+      const normalized = normalizeCliRuntimeToolRecord((result as { tool?: unknown } | null)?.tool);
       if (normalized) {
         setCliRuntimeTools((prev) => {
           const next = prev.filter((item) => item.id !== normalized.id);
           next.unshift(normalized);
           return next.sort((left, right) => left.name.localeCompare(right.name));
         });
+        const sandbox = (result as { sandbox?: { mode?: string; backend?: string; allowNetwork?: boolean } } | null)?.sandbox;
+        const summary = String((result as { summary?: string } | null)?.summary || '').trim();
         setCliRuntimeStatusMessage(
           normalized.resolvedPath
-            ? `已解析 ${command}：${normalized.resolvedPath}`
-            : `未在当前 PATH 中解析到 ${command}`,
+            ? `${summary || `已解析 ${command}`} · ${sandbox?.backend || 'runtime'} · ${normalized.resolvedPath}`
+            : summary || `未在当前 PATH 中解析到 ${command}`,
         );
       } else {
         setCliRuntimeStatusMessage(`未返回 ${command} 的诊断数据`);
@@ -4166,7 +4177,7 @@ export function Settings({
     } finally {
       setCliRuntimeInspectingToolId('');
     }
-  }, [cliRuntimeDiagnosticCommand]);
+  }, [cliRuntimeDiagnosticCommand, cliRuntimeExecutionMode]);
 
   const handleDiscoverCliRuntimeTools = useCallback(async () => {
     setCliRuntimeDiscovering(true);
@@ -4248,6 +4259,7 @@ export function Settings({
         installMethod: cliRuntimeInstallDraft.installMethod,
         spec,
         toolName: toolName || undefined,
+        executionMode: cliRuntimeExecutionMode,
       });
       const installId = String((result as { installId?: string } | null)?.installId || '').trim();
       if (installId) {
@@ -4300,6 +4312,10 @@ export function Settings({
   }, []);
 
   useEffect(() => subscribeRuntimeEventStream({
+    eventTypes: [
+      'runtime:cli-install-started',
+      'runtime:cli-install-finished',
+    ],
     onCliInstallStarted: ({
       installId,
       toolName,
@@ -4344,21 +4360,199 @@ export function Settings({
     },
   }), [loadCliRuntimeDashboard, upsertCliRuntimeInstallQueueItem]);
 
-  const loadBrowserPluginStatus = useCallback(async () => {
+  const loadThrivePlugins = useCallback(async () => {
+    setThrivePluginsLoading(true);
     try {
-      const status = await window.ipcRenderer.browserPlugin.getStatus();
-      setBrowserPluginStatus(status);
+      const result = await window.ipcRenderer.plugins.list();
+      setThrivePlugins(Array.isArray(result.plugins) ? result.plugins : []);
+      setThrivePluginStatusMessage(result.success === false && result.error ? result.error : '');
     } catch (error) {
-      console.error('Failed to load browser plugin status', error);
-      setBrowserPluginStatus({
-        success: false,
-        bundled: false,
-        exportPath: '',
-        pluginPath: '',
-        exported: false,
-        bundledPath: '',
-        error: String(error),
+      console.error('Failed to load Thrive plugins', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginsLoading(false);
+    }
+  }, []);
+
+  const loadThrivePluginMarketplace = useCallback(async () => {
+    setThrivePluginMarketplaceLoading(true);
+    try {
+      const result = await window.ipcRenderer.plugins.marketplace();
+      if (result.success === false) {
+        throw new Error(result.error || '插件市场加载失败');
+      }
+      setThrivePluginMarketplace(Array.isArray(result.plugins) ? result.plugins : []);
+      setThrivePluginStatusMessage('');
+    } catch (error) {
+      console.error('Failed to load Thrive plugin marketplace', error);
+      setThrivePluginMarketplace([]);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginMarketplaceLoading(false);
+    }
+  }, []);
+
+  const loadCodexPluginMarketplace = useCallback(async () => {
+    setCodexPluginMarketplaceLoading(true);
+    try {
+      const result = await window.ipcRenderer.plugins.codexMarketplace();
+      if (result.success === false) {
+        throw new Error(result.error || 'Codex 插件市场加载失败');
+      }
+      setCodexPluginMarketplace(Array.isArray(result.plugins) ? result.plugins : []);
+      setThrivePluginStatusMessage('');
+    } catch (error) {
+      console.error('Failed to load Codex plugin marketplace', error);
+      setCodexPluginMarketplace([]);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCodexPluginMarketplaceLoading(false);
+    }
+  }, []);
+
+  const handleInstallThriveMarketplacePlugin = useCallback(async (plugin: ThrivePluginMarketplaceItem) => {
+    setThrivePluginBusyId(plugin.installedPluginId || plugin.id);
+    setThrivePluginStatusMessage(`正在安装 ${plugin.displayName || plugin.name}`);
+    try {
+      const result = await window.ipcRenderer.plugins.installMarketplace({
+        id: plugin.id,
+        repo: plugin.repo,
+        version: plugin.version || undefined,
+        packageUrl: plugin.packageUrl || undefined,
       });
+      if (result.success === false) {
+        throw new Error(result.error || '插件安装失败');
+      }
+      setThrivePluginStatusMessage(result.plugin ? `已安装 ${result.plugin.displayName}` : '插件已安装');
+      await Promise.all([
+        loadThrivePlugins(),
+        loadThrivePluginMarketplace(),
+      ]);
+    } catch (error) {
+      console.error('Failed to install Thrive marketplace plugin', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginBusyId('');
+    }
+  }, [loadThrivePluginMarketplace, loadThrivePlugins]);
+
+  const handleInstallCodexMarketplacePlugin = useCallback(async (plugin: CodexPluginMarketplaceItem) => {
+    if (!plugin.sourceRoot && !plugin.remotePluginId) {
+      setThrivePluginStatusMessage('Codex 插件缺少可安装来源');
+      return;
+    }
+    setThrivePluginBusyId(plugin.installedPluginId || plugin.id);
+    setThrivePluginStatusMessage(`正在安装 ${plugin.displayName || plugin.name}`);
+    try {
+      const result = plugin.sourceRoot
+        ? await window.ipcRenderer.plugins.installCodex({
+          path: plugin.sourceRoot,
+          pluginName: plugin.name,
+        })
+        : await window.ipcRenderer.plugins.installCodex({
+          remotePluginId: plugin.remotePluginId || undefined,
+          remoteMarketplaceName: plugin.sourceLabel,
+          pluginName: plugin.name,
+        });
+      if (result.success === false) {
+        throw new Error(result.error || 'Codex 插件安装失败');
+      }
+      setThrivePluginStatusMessage(result.plugin ? `已安装 ${result.plugin.displayName}` : 'Codex 插件已安装');
+      await Promise.all([
+        loadThrivePlugins(),
+        loadCodexPluginMarketplace(),
+      ]);
+    } catch (error) {
+      console.error('Failed to install Codex marketplace plugin', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginBusyId('');
+    }
+  }, [loadCodexPluginMarketplace, loadThrivePlugins]);
+
+  const handleInstallThrivePluginFromRepo = useCallback(async () => {
+    const repo = thrivePluginRepoInput
+      .trim()
+      .replace(/^https:\/\/github\.com\//, '')
+      .replace(/\/$/, '')
+      .replace(/\.git$/, '');
+    if (!repo) {
+      setThrivePluginStatusMessage('请输入 GitHub 仓库，例如 owner/codex-plugin');
+      return;
+    }
+    const id = repo.split('/').pop() || repo;
+    setThrivePluginBusyId(`repo:${repo}`);
+    setThrivePluginStatusMessage(`正在安装 ${repo}`);
+    try {
+      const result = await window.ipcRenderer.plugins.installMarketplace({ id, repo });
+      if (result.success === false) {
+        throw new Error(result.error || '插件安装失败');
+      }
+      setThrivePluginRepoInput('');
+      setThrivePluginStatusMessage(result.plugin ? `已安装 ${result.plugin.displayName}` : '插件已安装');
+      await Promise.all([
+        loadThrivePlugins(),
+        loadThrivePluginMarketplace(),
+      ]);
+    } catch (error) {
+      console.error('Failed to install Thrive plugin from repo', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginBusyId('');
+    }
+  }, [loadThrivePluginMarketplace, loadThrivePlugins, thrivePluginRepoInput]);
+
+  const handleToggleThrivePlugin = useCallback(async (plugin: ThrivePluginSummary) => {
+    setThrivePluginBusyId(plugin.id);
+    setThrivePluginStatusMessage(plugin.enabled ? `正在停用 ${plugin.displayName}` : `正在启用 ${plugin.displayName}`);
+    try {
+      const result = await window.ipcRenderer.plugins.setEnabled({
+        pluginId: plugin.id,
+        enabled: !plugin.enabled,
+      });
+      if (result.success === false) {
+        throw new Error(result.error || '插件状态更新失败');
+      }
+      setThrivePluginStatusMessage(result.plugin ? `${result.plugin.displayName} 已${result.plugin.enabled ? '启用' : '停用'}` : '插件状态已更新');
+      await loadThrivePlugins();
+    } catch (error) {
+      console.error('Failed to toggle Thrive plugin', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginBusyId('');
+    }
+  }, [loadThrivePlugins]);
+
+  const handleUninstallThrivePlugin = useCallback(async (plugin: ThrivePluginSummary) => {
+    const confirmed = await appConfirm(`卸载 ${APP_BRAND.displayName} 插件”${plugin.displayName}”？\n\n插件缓存会被删除，插件数据目录会保留。`);
+    if (!confirmed) return;
+    setThrivePluginBusyId(plugin.id);
+    setThrivePluginStatusMessage(`正在卸载 ${plugin.displayName}`);
+    try {
+      const result = await window.ipcRenderer.plugins.uninstall({ pluginId: plugin.id });
+      if (result.success === false) {
+        throw new Error(result.error || '插件卸载失败');
+      }
+      setThrivePluginStatusMessage(`${plugin.displayName} 已卸载`);
+      await loadThrivePlugins();
+    } catch (error) {
+      console.error('Failed to uninstall Thrive plugin', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginBusyId('');
+    }
+  }, [loadThrivePlugins]);
+
+  const handleOpenThrivePluginDataDir = useCallback(async (pluginId?: string) => {
+    try {
+      const result = await window.ipcRenderer.plugins.openDataDir(pluginId ? { pluginId } : {});
+      if (result.success === false) {
+        throw new Error(result.error || '打开插件数据目录失败');
+      }
+      setThrivePluginStatusMessage(result.path ? `已打开 ${result.path}` : '已打开插件数据目录');
+    } catch (error) {
+      console.error('Failed to open Thrive plugin data dir', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
     }
   }, []);
 
@@ -4458,6 +4652,16 @@ export function Settings({
       endpointPath: String(assistantDaemonDraft.relay.endpointPath || '').trim(),
       authToken: String(assistantDaemonDraft.relay.authToken || '').trim() || undefined,
     },
+    acpGateway: {
+      enabled: assistantDaemonDraft.acpGateway.enabled,
+      requireToken: assistantDaemonDraft.acpGateway.requireToken,
+      localOnly: assistantDaemonDraft.acpGateway.localOnly,
+      endpointPath: String(assistantDaemonDraft.acpGateway.endpointPath || '').trim() || '/acp/v1',
+      manifestPath: String(assistantDaemonDraft.acpGateway.manifestPath || '').trim() || '/acp/v1/manifest',
+      guidePath: String(assistantDaemonDraft.acpGateway.guidePath || '').trim() || '/acp/v1/guide',
+      defaultRuntimeMode: String(assistantDaemonDraft.acpGateway.defaultRuntimeMode || '').trim() || 'default',
+      defaultClientLabel: String(assistantDaemonDraft.acpGateway.defaultClientLabel || '').trim() || 'External Agent',
+    },
     weixin: {
       enabled: assistantDaemonDraft.weixin.enabled,
       endpointPath: String(assistantDaemonDraft.weixin.endpointPath || '').trim(),
@@ -4487,6 +4691,50 @@ export function Settings({
       setAssistantDaemonBusy(false);
     }
   }, [buildAssistantDaemonPayload, replaceAssistantDaemonDraft]);
+
+  const handleCreateAssistantDaemonAcpClient = useCallback(async (name: string, kind: string) => {
+    setAssistantDaemonBusy(true);
+    try {
+      const result = await window.ipcRenderer.assistantDaemon.createAcpClient({
+        name: String(name || '').trim() || 'External Agent',
+        kind: String(kind || '').trim() || 'generic_agent',
+      });
+      const status = result?.status as AssistantDaemonStatus | undefined;
+      if (status) {
+        setAssistantDaemonStatus(status);
+        replaceAssistantDaemonDraft(assistantDaemonStatusToDraft(status));
+      } else {
+        await loadAssistantDaemonStatus({ suppressAlert: true });
+      }
+      setAssistantDaemonAcpToken(String(result?.token || ''));
+    } catch (error) {
+      console.error('Failed to create ACP client', error);
+      void appAlert(`创建 ACP 客户端失败：${String(error)}`);
+    } finally {
+      setAssistantDaemonBusy(false);
+    }
+  }, [loadAssistantDaemonStatus, replaceAssistantDaemonDraft]);
+
+  const handleRevokeAssistantDaemonAcpClient = useCallback(async (clientId: string) => {
+    const safeClientId = String(clientId || '').trim();
+    if (!safeClientId) return;
+    setAssistantDaemonBusy(true);
+    try {
+      const result = await window.ipcRenderer.assistantDaemon.revokeAcpClient({ clientId: safeClientId });
+      const status = result?.status as AssistantDaemonStatus | undefined;
+      if (status) {
+        setAssistantDaemonStatus(status);
+        replaceAssistantDaemonDraft(assistantDaemonStatusToDraft(status));
+      } else {
+        await loadAssistantDaemonStatus({ suppressAlert: true });
+      }
+    } catch (error) {
+      console.error('Failed to revoke ACP client', error);
+      void appAlert(`撤销 ACP 客户端失败：${String(error)}`);
+    } finally {
+      setAssistantDaemonBusy(false);
+    }
+  }, [loadAssistantDaemonStatus, replaceAssistantDaemonDraft]);
 
   const handleStartAssistantDaemon = useCallback(async () => {
     setAssistantDaemonBusy(true);
@@ -4603,16 +4851,426 @@ export function Settings({
     if (!force && baseSettingsLoadedRef.current) return;
     baseSettingsInFlightRef.current = true;
     try {
-      await loadSettings({
-        preserveViewState: true,
-        preserveRemoteModels: true,
-      });
+      await Promise.all([
+        loadSettings({
+          preserveViewState: true,
+          preserveRemoteModels: true,
+        }),
+        loadSpaceContext(),
+      ]);
       baseSettingsLoadedRef.current = true;
+      setBaseSettingsLoadedRevision((prev) => prev + 1);
       tabWarmRef.current.ai = true;
     } finally {
       baseSettingsInFlightRef.current = false;
     }
-  }, [loadSettings]);
+  }, [loadSettings, loadSpaceContext]);
+
+  const loadTeamAdvisors = useCallback(async () => {
+    setIsTeamAdvisorsLoading(true);
+    try {
+      const list = await window.ipcRenderer.advisors.list<Advisor>();
+      const sorted = sortTeamAdvisors(Array.isArray(list) ? list : []);
+      setTeamAdvisors(sorted);
+      teamAdvisorOrderRef.current = sorted;
+      return sorted;
+    } catch (error) {
+      console.error('Failed to load team advisors:', error);
+      setTestMsg('成员列表读取失败');
+      setStatus('error');
+      return [];
+    } finally {
+      setIsTeamAdvisorsLoading(false);
+    }
+  }, []);
+
+  const loadSettingsSkills = useCallback(async () => {
+    setIsSettingsSkillsLoading(true);
+    try {
+      const list = await window.ipcRenderer.listSkills();
+      const normalized = (Array.isArray(list) ? list : [])
+        .map((skill) => ({
+          name: String(skill.name || '').trim(),
+          description: String(skill.description || '').trim(),
+          location: String(skill.location || '').trim(),
+          sourceScope: skill.sourceScope,
+          isBuiltin: Boolean(skill.isBuiltin || skill.sourceScope === 'builtin'),
+          disabled: Boolean(skill.disabled),
+        }))
+        .filter((skill) => skill.name);
+      normalized.sort((left, right) => {
+        const leftBuiltIn = left.isBuiltin ? 0 : 1;
+        const rightBuiltIn = right.isBuiltin ? 0 : 1;
+        return leftBuiltIn - rightBuiltIn || left.name.localeCompare(right.name);
+      });
+      setSettingsSkills(normalized);
+      return normalized;
+    } catch (error) {
+      console.error('Failed to load skills:', error);
+      setSettingsSkillStatusMessage('技能列表读取失败');
+      return [];
+    } finally {
+      setIsSettingsSkillsLoading(false);
+    }
+  }, []);
+
+  const handleToggleSettingsSkill = useCallback(async (skill: SettingsSkill) => {
+    if (skill.isBuiltin) return;
+    const nextDisabled = !skill.disabled;
+    setSettingsSkillBusyName(skill.name);
+    setSettingsSkillStatusMessage('');
+    setSettingsSkills((prev) => prev.map((item) => (
+      item.name === skill.name ? { ...item, disabled: nextDisabled } : item
+    )));
+    try {
+      const action = nextDisabled ? window.ipcRenderer.skills.disable : window.ipcRenderer.skills.enable;
+      const result = await action({ name: skill.name }) as { success?: boolean; error?: string };
+      if (result && result.success === false) {
+        throw new Error(result.error || '技能状态保存失败');
+      }
+      setSettingsSkillStatusMessage(nextDisabled ? `已关闭 ${skill.name}` : `已打开 ${skill.name}`);
+      await loadSettingsSkills();
+      tabWarmRef.current.skills = true;
+    } catch (error) {
+      console.error('Failed to update skill state:', error);
+      setSettingsSkills((prev) => prev.map((item) => (
+        item.name === skill.name ? { ...item, disabled: skill.disabled } : item
+      )));
+      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '技能状态保存失败');
+    } finally {
+      setSettingsSkillBusyName('');
+    }
+  }, [loadSettingsSkills]);
+
+  const loadSkillMarketplace = useCallback(async () => {
+    setIsSkillMarketplaceLoading(true);
+    try {
+      const result = await window.ipcRenderer.skills.marketplace();
+      if (result.success === false) {
+        throw new Error(result.error || '技能市场加载失败');
+      }
+      setSkillMarketplaceItems(Array.isArray(result.skills) ? result.skills : []);
+      setSettingsSkillStatusMessage('');
+    } catch (error) {
+      console.error('Failed to load skill marketplace:', error);
+      setSkillMarketplaceItems([]);
+      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '技能市场加载失败');
+    } finally {
+      setIsSkillMarketplaceLoading(false);
+    }
+  }, []);
+
+  const openSkillMarketplace = useCallback(() => {
+    setIsSkillMarketplaceOpen(true);
+    void loadSkillMarketplace();
+  }, [loadSkillMarketplace]);
+
+  const handleUninstallSettingsSkill = useCallback(async (skill: SettingsSkill) => {
+    if (skill.isBuiltin) return;
+    const confirmed = await appConfirm(`删除技能“${skill.name}”？`, {
+      title: '删除技能',
+      confirmLabel: '删除',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    setSettingsSkillBusyName(skill.name);
+    setSettingsSkillStatusMessage('');
+    try {
+      const result = await window.ipcRenderer.skills.uninstall({ name: skill.name }) as { success?: boolean; error?: string };
+      if (result && result.success === false) {
+        throw new Error(result.error || '技能删除失败');
+      }
+      setSettingsSkillStatusMessage(`已删除 ${skill.name}`);
+      await loadSettingsSkills();
+      if (isSkillMarketplaceOpen) {
+        await loadSkillMarketplace();
+      }
+      tabWarmRef.current.skills = true;
+    } catch (error) {
+      console.error('Failed to uninstall skill:', error);
+      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '技能删除失败');
+    } finally {
+      setSettingsSkillBusyName('');
+    }
+  }, [isSkillMarketplaceOpen, loadSettingsSkills, loadSkillMarketplace]);
+
+  const handleInstallMarketplaceSkill = useCallback(async (skill: ThriveSkillMarketplaceItem) => {
+    setSkillMarketplaceBusyId(skill.id);
+    setSettingsSkillStatusMessage(`正在安装 ${skill.name}`);
+    try {
+      const result = await window.ipcRenderer.skills.marketInstall({
+        id: skill.id,
+        repo: skill.repo,
+      }) as {
+        success?: boolean;
+        error?: string;
+        installed?: Array<{ name?: string }>;
+      };
+      if (result.success === false) {
+        throw new Error(result.error || '技能安装失败');
+      }
+      const installedName = result.installed?.[0]?.name || skill.name;
+      setSettingsSkillStatusMessage(`已安装 ${installedName}`);
+      await Promise.all([
+        loadSettingsSkills(),
+        loadSkillMarketplace(),
+      ]);
+      tabWarmRef.current.skills = true;
+    } catch (error) {
+      console.error('Failed to install marketplace skill:', error);
+      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '技能安装失败');
+    } finally {
+      setSkillMarketplaceBusyId('');
+    }
+  }, [loadSettingsSkills, loadSkillMarketplace]);
+
+  const persistTeamAdvisorOrder = useCallback(async (items: Advisor[]) => {
+    await Promise.all(items.map((advisor, index) => (
+      window.ipcRenderer.advisors.update({
+        id: advisor.id,
+        redclawOrder: index,
+        redclawVisible: advisor.redclawVisible !== false,
+      })
+    )));
+    teamAdvisorOrderRef.current = items;
+    window.dispatchEvent(new Event('redclaw:team-settings-changed'));
+  }, []);
+
+  const handleToggleTeamAdvisorVisible = useCallback((advisor: Advisor) => {
+    const nextVisible = advisor.redclawVisible === false;
+    setTeamAdvisorBusyId(advisor.id);
+    setTeamAdvisors((prev) => prev.map((item) => (
+      item.id === advisor.id ? { ...item, redclawVisible: nextVisible } : item
+    )));
+    void window.ipcRenderer.advisors.update({
+      id: advisor.id,
+      redclawVisible: nextVisible,
+    }).then(() => {
+      window.dispatchEvent(new Event('redclaw:team-settings-changed'));
+    }).catch((error) => {
+      console.error('Failed to update advisor visibility:', error);
+      setTeamAdvisors((prev) => prev.map((item) => (
+        item.id === advisor.id ? { ...item, redclawVisible: advisor.redclawVisible } : item
+      )));
+      setTestMsg('成员展示设置保存失败');
+      setStatus('error');
+    }).finally(() => {
+      setTeamAdvisorBusyId(null);
+    });
+  }, []);
+
+  const handleTeamAdvisorDragStart = useCallback((advisorId: string) => {
+    teamAdvisorDragIdRef.current = advisorId;
+    setDraggingTeamAdvisorId(advisorId);
+  }, []);
+
+  const handleTeamAdvisorDragOver = useCallback((targetAdvisorId: string) => {
+    setTeamAdvisors((prev) => {
+      const draggingId = teamAdvisorDragIdRef.current;
+      if (!draggingId || draggingId === targetAdvisorId) return prev;
+      const fromIndex = prev.findIndex((item) => item.id === draggingId);
+      const toIndex = prev.findIndex((item) => item.id === targetAdvisorId);
+      if (fromIndex < 0 || toIndex < 0) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      const ordered = next.map((item, index) => ({ ...item, redclawOrder: index }));
+      teamAdvisorOrderRef.current = ordered;
+      return ordered;
+    });
+  }, []);
+
+  const handleTeamAdvisorDragEnd = useCallback(() => {
+    if (!teamAdvisorDragIdRef.current) return;
+    teamAdvisorDragIdRef.current = null;
+    setDraggingTeamAdvisorId(null);
+    void persistTeamAdvisorOrder(teamAdvisorOrderRef.current).catch((error) => {
+      console.error('Failed to persist advisor order:', error);
+      setTestMsg('成员排序保存失败');
+      setStatus('error');
+      void loadTeamAdvisors();
+    });
+  }, [loadTeamAdvisors, persistTeamAdvisorOrder]);
+
+  const refreshTeamAdvisor = useCallback(async (advisorId: string) => {
+    const list = await loadTeamAdvisors();
+    const updated = list.find((item) => item.id === advisorId) || null;
+    if (updated) {
+      setSettingsTeamAdvisor(updated);
+      setEditingTeamAdvisor((prev) => prev?.id === advisorId ? updated : prev);
+    }
+    return updated;
+  }, [loadTeamAdvisors]);
+
+  const handleOpenTeamAdvisorSettings = useCallback((advisor: Advisor) => {
+    setSettingsTeamAdvisor(advisor);
+    setIsTeamSystemPromptExpanded(false);
+  }, []);
+
+  const handleCreateTeamAdvisor = useCallback(() => {
+    setEditingTeamAdvisor(null);
+    setIsCreatingTeamAdvisor(true);
+  }, []);
+
+  const handleDeleteTeamAdvisor = useCallback(async (advisor: Advisor) => {
+    if (!(await appConfirm('确定要删除这个智囊团成员吗？', { title: '删除成员', confirmLabel: '删除', tone: 'danger' }))) return;
+    try {
+      await window.ipcRenderer.advisors.delete(advisor.id);
+      setSettingsTeamAdvisor(null);
+      setEditingTeamAdvisor(null);
+      await loadTeamAdvisors();
+      window.dispatchEvent(new Event('redclaw:team-settings-changed'));
+    } catch (error) {
+      console.error('Failed to delete advisor:', error);
+      setTestMsg('成员删除失败');
+      setStatus('error');
+    }
+  }, [loadTeamAdvisors]);
+
+  const handleUploadTeamAdvisorKnowledge = useCallback(async (advisor: Advisor) => {
+    try {
+      await window.ipcRenderer.advisors.uploadKnowledge(advisor.id);
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to upload advisor knowledge:', error);
+      setTestMsg('知识库上传失败');
+      setStatus('error');
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handleDeleteTeamAdvisorKnowledge = useCallback(async (advisor: Advisor, fileName: string) => {
+    if (!(await appConfirm(`确定要删除知识库文件 "${fileName}" 吗？`, { title: '删除知识文件', confirmLabel: '删除', tone: 'danger' }))) return;
+    try {
+      await window.ipcRenderer.advisors.deleteKnowledge({ advisorId: advisor.id, fileName });
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to delete advisor knowledge:', error);
+      setTestMsg('知识文件删除失败');
+      setStatus('error');
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handleOptimizeTeamAdvisorPrompt = useCallback(async (advisor: Advisor) => {
+    setIsTeamOptimizingPrompt(true);
+    try {
+      const result = await window.ipcRenderer.advisors.optimizePromptDeep({
+        advisorId: advisor.id,
+        name: advisor.name,
+        personality: advisor.personality,
+        currentPrompt: advisor.systemPrompt,
+      }) as { success: boolean; prompt?: string; error?: string };
+      if (!result.success || !result.prompt) {
+        throw new Error(result.error || '优化失败');
+      }
+      await window.ipcRenderer.advisors.update({
+        ...advisor,
+        systemPrompt: result.prompt,
+      });
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to optimize advisor prompt:', error);
+      void appAlert(`优化失败：${error instanceof Error ? error.message : '未知错误'}`);
+    } finally {
+      setIsTeamOptimizingPrompt(false);
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handlePromoteTeamMemberSkillCandidate = useCallback(async (advisor: Advisor) => {
+    try {
+      await window.ipcRenderer.advisors.promoteMemberSkillCandidate({
+        advisorId: advisor.id,
+        candidateVersion: advisor.memberSkillCandidateVersion,
+      });
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to promote member skill candidate:', error);
+      setTestMsg('成员技能候选发布失败');
+      setStatus('error');
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handleDiscardTeamMemberSkillCandidate = useCallback(async (advisor: Advisor) => {
+    try {
+      await window.ipcRenderer.advisors.discardMemberSkillCandidate({ advisorId: advisor.id });
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to discard member skill candidate:', error);
+      setTestMsg('成员技能候选丢弃失败');
+      setStatus('error');
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handleRefreshTeamMemberSkill = useCallback(async (advisor: Advisor) => {
+    try {
+      const result = await window.ipcRenderer.advisors.distillMemberSkill({ advisorId: advisor.id }) as { success?: boolean; error?: string };
+      if (result && result.success === false) {
+        throw new Error(result.error || '成员技能蒸馏失败');
+      }
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to refresh member skill:', error);
+      void appAlert(`成员技能蒸馏失败：${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handleRollbackTeamMemberSkillVersion = useCallback(async (advisor: Advisor, version: string) => {
+    if (!version) return;
+    if (!(await appConfirm(`确定要把 ${advisor.name} 回滚到成员技能版本 "${version}" 吗？`, {
+      title: '回滚成员技能',
+      confirmLabel: '回滚',
+      tone: 'danger',
+    }))) return;
+    try {
+      await window.ipcRenderer.advisors.rollbackMemberSkillVersion({ advisorId: advisor.id, version });
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to rollback member skill version:', error);
+      setTestMsg('成员技能回滚失败');
+      setStatus('error');
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handleSaveTeamAdvisor = useCallback(async (
+    data: Omit<Advisor, 'id' | 'createdAt' | 'knowledgeFiles'>,
+    youtubeParams?: { url: string; count: number; channelId?: string },
+    knowledgeFilePaths?: string[],
+  ) => {
+    let advisorId = editingTeamAdvisor?.id;
+    if (editingTeamAdvisor) {
+      await window.ipcRenderer.advisors.update({
+        ...data,
+        id: editingTeamAdvisor.id,
+        redclawVisible: editingTeamAdvisor.redclawVisible !== false,
+        redclawOrder: editingTeamAdvisor.redclawOrder,
+      });
+    } else {
+      const createData: Record<string, unknown> = { ...data };
+      if (youtubeParams?.url) {
+        createData.youtubeChannel = {
+          url: youtubeParams.url,
+          channelId: youtubeParams.channelId || '',
+        };
+      }
+      const result = await window.ipcRenderer.advisors.create(createData) as { success?: boolean; id?: string; error?: string };
+      if (result?.success === false) {
+        throw new Error(result.error || '创建成员失败');
+      }
+      advisorId = result?.id;
+      if (advisorId && Array.isArray(knowledgeFilePaths) && knowledgeFilePaths.length > 0) {
+        await window.ipcRenderer.advisors.uploadKnowledge({
+          advisorId,
+          filePaths: knowledgeFilePaths,
+        });
+      }
+    }
+    setEditingTeamAdvisor(null);
+    setIsCreatingTeamAdvisor(false);
+    await loadTeamAdvisors();
+    if (advisorId) {
+      await refreshTeamAdvisor(advisorId);
+    }
+    window.dispatchEvent(new Event('redclaw:team-settings-changed'));
+  }, [editingTeamAdvisor, loadTeamAdvisors, refreshTeamAdvisor]);
 
   const ensureTabResourcesLoaded = useCallback(async (tab: SettingsTab, force = false) => {
     if (!isActive) return;
@@ -4624,24 +5282,24 @@ export function Settings({
         await Promise.all([
           loadAppVersion(),
           loadRecentDebugLogs(),
+          loadFileIndexDashboard({ force }),
           loadLoggingStatus(),
           loadPendingDiagnosticReports(),
         ]);
-      } else if (tab === 'skills') {
-        await loadSettingsSkillsSummary();
-      } else if (tab === 'team') {
-        await loadTeamAdvisors();
       } else if (tab === 'profile') {
         await loadRedclawProfileBundle({
           preserveDraft: true,
         });
-      } else if (tab === 'memory') {
-        await loadMemoryDashboard();
+      } else if (tab === 'team') {
+        await loadTeamAdvisors();
+      } else if (tab === 'skills') {
+        await loadSettingsSkills();
+      } else if (tab === 'mcp') {
+        await loadMcpRuntimeData();
       } else if (tab === 'tools') {
         await Promise.all([
-          checkTools(),
           loadCliRuntimeDashboard({ silent: true }),
-          loadBrowserPluginStatus(),
+          loadThrivePlugins(),
         ]);
         if (formData.developer_mode_enabled) {
           await Promise.all([
@@ -4649,17 +5307,10 @@ export function Settings({
             loadRuntimeRoles(),
           ]);
         }
-      } else if (tab === 'mcp') {
-        await loadMcpRuntimeData();
-      } else if (tab === 'ai' && aiModelSubTab === 'login' && officialAiPanelEnabled && !OfficialAiPanelComponent) {
+      } else if (tab === 'ai' && officialAiPanelEnabled && !OfficialAiPanelComponent) {
         const module = await loadOfficialAiPanelModule();
         const nextComponent = module?.default || null;
         setOfficialAiPanelComponent(() => nextComponent);
-        if (!nextComponent) {
-          setAiModelSubTab('custom');
-        }
-      } else if (tab === 'experimental') {
-        // Experimental tab has no async resources to preload
       }
       tabWarmRef.current[tab] = true;
     } finally {
@@ -4667,10 +5318,6 @@ export function Settings({
     }
   }, [
     OfficialAiPanelComponent,
-    aiModelSubTab,
-    checkTools,
-    loadSettingsSkillsSummary,
-    loadTeamAdvisors,
     formData.developer_mode_enabled,
     isActive,
     loadRedclawProfileBundle,
@@ -4678,12 +5325,14 @@ export function Settings({
     loadAppVersion,
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
-    loadBrowserPluginStatus,
+    loadThrivePlugins,
+    loadFileIndexDashboard,
     loadLoggingStatus,
-    loadMemoryDashboard,
     loadMcpRuntimeData,
     loadPendingDiagnosticReports,
     loadRecentDebugLogs,
+    loadSettingsSkills,
+    loadTeamAdvisors,
     loadRuntimeHooks,
     loadRuntimeRoles,
     loadRuntimeSessions,
@@ -4691,13 +5340,6 @@ export function Settings({
     loadToolDiagnostics,
     officialAiPanelEnabled,
   ]);
-
-  useEffect(() => {
-    const handleProgress = (_: unknown, progress: number) => {
-      setInstallProgress(progress);
-    };
-    return subscribeYoutubeInstallProgress(handleProgress);
-  }, []);
 
   useEffect(() => {
     if (settingsActivationTimerRef.current != null) {
@@ -4733,7 +5375,7 @@ export function Settings({
       if (activeTab === 'profile' && !redclawProfileDirtyRef.current) {
         void ensureTabResourcesLoaded('profile', true);
       }
-      if (activeTab === 'general' || activeTab === 'tools' || activeTab === 'mcp') {
+      if (activeTab === 'general' || activeTab === 'tools' || activeTab === 'skills' || activeTab === 'mcp') {
         tabWarmRef.current[activeTab] = false;
         void ensureTabResourcesLoaded(activeTab, true);
       }
@@ -4743,24 +5385,60 @@ export function Settings({
 
   useEffect(() => {
     if (!isActive) return;
-    const handleSpaceChanged = (payload?: { spaceId?: string; activeSpaceId?: string }) => {
+    const handleSpaceChanged = (payload?: { spaceId?: string; activeSpaceId?: string; changeType?: string }) => {
+      const previousSpaceId = currentSpaceIdRef.current;
       const nextSpaceId = setCurrentSpaceState(payload?.activeSpaceId || payload?.spaceId);
+      void loadSpaceContext();
+      if (payload?.changeType === 'rename' && nextSpaceId === previousSpaceId) {
+        return;
+      }
       tabWarmRef.current.profile = false;
       resetRedclawProfileState();
+      clearCachedFileIndexDashboard();
+      fileIndexDashboardCurrentRef.current = null;
+      fileIndexDashboardLoadedAtRef.current = 0;
+      setFileIndexDashboard(null);
+      tabWarmRef.current.general = false;
       if (activeTab === 'profile') {
         void loadRedclawProfileBundle({ expectedSpaceId: nextSpaceId });
       }
+      if (activeTab === 'general') {
+        void loadFileIndexDashboard({ force: true });
+      }
     };
-    window.ipcRenderer.spaces.onChanged(handleSpaceChanged as (...args: unknown[]) => void);
+    window.ipcRenderer.spaces.onChanged(handleSpaceChanged);
     return () => {
-      window.ipcRenderer.spaces.offChanged(handleSpaceChanged as (...args: unknown[]) => void);
+      window.ipcRenderer.spaces.offChanged(handleSpaceChanged);
     };
-  }, [activeTab, isActive, loadRedclawProfileBundle, resetRedclawProfileState, setCurrentSpaceState]);
+  }, [activeTab, isActive, loadFileIndexDashboard, loadRedclawProfileBundle, loadSpaceContext, resetRedclawProfileState, setCurrentSpaceState]);
 
   useEffect(() => {
     if (!redclawOnboardingVersion) return;
     void loadRedclawProfileBundle({ expectedSpaceId: currentSpaceIdRef.current });
   }, [loadRedclawProfileBundle, redclawOnboardingVersion]);
+
+  useEffect(() => {
+    if (!isActive || activeTab !== 'general') return;
+    const scheduleFileIndexRefresh = () => {
+      if (fileIndexDashboardRefreshTimerRef.current != null) {
+        window.clearTimeout(fileIndexDashboardRefreshTimerRef.current);
+      }
+      fileIndexDashboardRefreshTimerRef.current = window.setTimeout(() => {
+        fileIndexDashboardRefreshTimerRef.current = null;
+        void loadFileIndexDashboard({ force: true, background: true });
+      }, 750);
+    };
+    window.ipcRenderer.knowledge.onFileIndexUpdated(scheduleFileIndexRefresh);
+    window.ipcRenderer.knowledge.onCatalogUpdated(scheduleFileIndexRefresh);
+    return () => {
+      window.ipcRenderer.knowledge.offFileIndexUpdated(scheduleFileIndexRefresh);
+      window.ipcRenderer.knowledge.offCatalogUpdated(scheduleFileIndexRefresh);
+      if (fileIndexDashboardRefreshTimerRef.current != null) {
+        window.clearTimeout(fileIndexDashboardRefreshTimerRef.current);
+        fileIndexDashboardRefreshTimerRef.current = null;
+      }
+    };
+  }, [activeTab, isActive, loadFileIndexDashboard]);
 
   useEffect(() => {
     const handleDiagnosticsReportPending = () => {
@@ -4792,23 +5470,24 @@ export function Settings({
     }
     let runtimePollTimer: number | null = null;
     let backgroundTaskPollTimer: number | null = null;
+    let fileIndexPollTimer: number | null = null;
     if (activeTab === 'remote') {
       scheduleRemoteTabWarmup();
     }
     if (activeTab === 'general') {
       void ensureTabResourcesLoaded('general');
+      fileIndexPollTimer = window.setInterval(() => {
+        void loadFileIndexDashboard({ force: true, background: true });
+      }, FILE_INDEX_DASHBOARD_POLL_MS);
     }
     if (activeTab === 'profile') {
       void ensureTabResourcesLoaded('profile');
     }
-    if (activeTab === 'memory') {
-      void ensureTabResourcesLoaded('memory');
+    if (activeTab === 'team') {
+      void ensureTabResourcesLoaded('team');
     }
     if (activeTab === 'skills') {
       void ensureTabResourcesLoaded('skills');
-    }
-    if (activeTab === 'team') {
-      void ensureTabResourcesLoaded('team');
     }
     if (activeTab === 'mcp') {
       void ensureTabResourcesLoaded('mcp');
@@ -4846,6 +5525,9 @@ export function Settings({
       if (backgroundTaskPollTimer) {
         window.clearInterval(backgroundTaskPollTimer);
       }
+      if (fileIndexPollTimer) {
+        window.clearInterval(fileIndexPollTimer);
+      }
       if (remoteTabWarmTimerRef.current != null) {
         window.clearTimeout(remoteTabWarmTimerRef.current);
         remoteTabWarmTimerRef.current = null;
@@ -4854,125 +5536,19 @@ export function Settings({
   }, [
     activeTab,
     backgroundTasks.length,
+    baseSettingsLoadedRevision,
     ensureTabResourcesLoaded,
     formData.developer_mode_enabled,
     isActive,
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
+    loadFileIndexDashboard,
     loadRuntimeSessions,
     loadRuntimeTasks,
     runtimeSessions.length,
     runtimeTasks.length,
     scheduleRemoteTabWarmup,
   ]);
-
-  useEffect(() => {
-    if (initialFileIndexDashboardCache) {
-      fileIndexDashboardCurrentRef.current = initialFileIndexDashboardCache.dashboard;
-      fileIndexDashboardLoadedAtRef.current = initialFileIndexDashboardCache.savedAt;
-      setFileIndexDashboard(initialFileIndexDashboardCache.dashboard);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!isActive || activeTab !== 'general') return;
-    const scheduleFileIndexRefresh = () => {
-      if (fileIndexDashboardRefreshTimerRef.current != null) {
-        window.clearTimeout(fileIndexDashboardRefreshTimerRef.current);
-      }
-      fileIndexDashboardRefreshTimerRef.current = window.setTimeout(() => {
-        fileIndexDashboardRefreshTimerRef.current = null;
-        void loadFileIndexDashboard({ force: true, background: true });
-      }, 750);
-    };
-    window.ipcRenderer.knowledge.onFileIndexUpdated(scheduleFileIndexRefresh);
-    window.ipcRenderer.knowledge.onCatalogUpdated(scheduleFileIndexRefresh);
-    void loadFileIndexDashboard({ force: false, background: true });
-    return () => {
-      window.ipcRenderer.knowledge.offFileIndexUpdated(scheduleFileIndexRefresh);
-      window.ipcRenderer.knowledge.offCatalogUpdated(scheduleFileIndexRefresh);
-    };
-  }, [activeTab, isActive, loadFileIndexDashboard]);
-
-  const handleInstallYtdlp = async () => {
-    setIsInstallingTool(true);
-    setInstallProgress(0);
-    try {
-      const res = await window.ipcRenderer.installYtdlp();
-      if (res.success) {
-        await checkTools();
-        void appAlert('安装成功！');
-      } else {
-        void appAlert('安装失败: ' + res.error);
-      }
-    } catch (e) {
-      void appAlert('安装出错');
-    } finally {
-      setIsInstallingTool(false);
-    }
-  };
-
-  const handleUpdateYtdlp = async () => {
-    setIsInstallingTool(true);
-    try {
-      const res = await window.ipcRenderer.updateYtdlp();
-      if (res.success) {
-        await checkTools();
-        void appAlert('更新成功！');
-      } else {
-        void appAlert('更新失败: ' + res.error);
-      }
-    } catch (e) {
-      void appAlert('更新出错');
-    } finally {
-      setIsInstallingTool(false);
-    }
-  };
-
-  const handlePrepareBrowserPlugin = async () => {
-    setIsPreparingBrowserPlugin(true);
-    try {
-      const result = await window.ipcRenderer.browserPlugin.prepare();
-      if (!result.success) {
-        void appAlert(`插件准备失败：${result.error || '未知错误'}`);
-        return;
-      }
-      await loadBrowserPluginStatus();
-      void appAlert(`插件已同步到最新内置版本。\n\n外层目录：${result.path}\n插件目录：${result.pluginPath || '未返回'}\n\n下一步请打开 Chrome / Edge 扩展管理页，开启开发者模式后，将里面的“RedBox Browser Extension”文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该插件文件夹。`);
-    } catch (error) {
-      console.error('Failed to prepare browser plugin', error);
-      void appAlert(`插件准备失败：${String(error)}`);
-    } finally {
-      setIsPreparingBrowserPlugin(false);
-    }
-  };
-
-  const handleOpenBrowserPluginDir = async () => {
-    try {
-      const result = await window.ipcRenderer.browserPlugin.openDir();
-      if (!result.success) {
-        void appAlert(`打开插件目录失败：${result.error || '未知错误'}`);
-        return;
-      }
-      await loadBrowserPluginStatus();
-    } catch (error) {
-      console.error('Failed to open browser plugin dir', error);
-      void appAlert(`打开插件目录失败：${String(error)}`);
-    }
-  };
-
-  const handleOpenKnowledgeApiGuide = async () => {
-    try {
-      const result = await window.ipcRenderer.openKnowledgeApiGuide();
-      if (!result.success) {
-        void appAlert(`打开知识导入 API 文档失败：${result.error || '未知错误'}`);
-      }
-    } catch (error) {
-      console.error('Failed to open knowledge api guide', error);
-      void appAlert(`打开知识导入 API 文档失败：${String(error)}`);
-    }
-  };
 
   const handlePickWorkspaceDir = useCallback(async () => {
     try {
@@ -5040,7 +5616,7 @@ export function Settings({
         setRedclawProfileMessage({
           tone: 'success',
           text: savedDocCount === 2
-            ? '用户档案已保存，RedClaw 后续会直接读取这两份长期档案。'
+            ? `用户档案已保存，${APP_BRAND.aiDisplayName} 后续会直接读取这两份长期档案。`
             : '用户档案已保存。',
         });
         tabWarmRef.current.profile = true;
@@ -5051,24 +5627,52 @@ export function Settings({
 
       const {
         sanitizedSources,
-        resolvedDefaultSourceId,
-        defaultSource,
+        resolvedLegacyChatSourceId,
+        legacyChatSource,
         resolvedApiEndpoint,
         resolvedApiKey,
         resolvedModelName,
       } = buildAiSourcePersistenceSnapshot();
-      if (defaultSource?.baseURL && (defaultSource?.apiKey || isLocalAiSource(defaultSource))) {
-        const normalizedModel = (defaultSource.model || '').trim();
-        if (!normalizedModel) {
-          throw new Error('请为默认供应商填写模型名称（可手动填写，或从模型列表选择）');
-        }
-      }
-      const resolvedTranscriptionSource = getAiSourceById(transcriptionSourceId) || defaultSource || null;
-      const resolvedEmbeddingSource = getAiSourceById(embeddingSourceId) || defaultSource || null;
-      const resolvedImageSource = getAiSourceById(imageSourceId) || defaultSource || null;
+      const aiSourceSaveGeneration = aiSourceEditGenerationRef.current;
+      const fallbackRouteSource = officialAiSource || null;
+      const resolvedTranscriptionSource = getAiSourceById(transcriptionSourceId) || fallbackRouteSource;
+      const resolvedEmbeddingSource = getAiSourceById(embeddingSourceId) || fallbackRouteSource;
+      const resolvedVisualIndexSource = getAiSourceById(visualIndexSourceId) || fallbackRouteSource;
+      const resolvedVideoAnalysisSource = getAiSourceById(videoAnalysisSourceId) || fallbackRouteSource;
+      const resolvedImageSource = getAiSourceById(imageSourceId) || fallbackRouteSource;
+      const resolvedVoiceSource = getAiSourceById(voiceSourceId) || fallbackRouteSource;
+      const resolvedImageRouting = resolvedImageSource
+        ? inferImageRoutingFromSource(resolvedImageSource)
+        : {
+          provider: formData.image_provider || 'openai-compatible',
+          template: formData.image_provider_template || '',
+        };
+      const resolvedImageProvider = resolvedImageRouting.provider || formData.image_provider || 'openai-compatible';
+      const resolvedImageProviderTemplate = inferImageTemplateByProvider(
+        resolvedImageProvider,
+        resolvedImageRouting.template || formData.image_provider_template || '',
+      );
       const resolvedTranscriptionModel = String(formData.transcription_model || pickBestModelForSource(resolvedTranscriptionSource) || '').trim();
       const resolvedEmbeddingModel = String(formData.embedding_model || pickBestModelForSource(resolvedEmbeddingSource) || '').trim();
-      const resolvedImageModel = String(formData.image_model || pickBestModelForSource(resolvedImageSource) || '').trim();
+      const resolvedVisualIndexModel = String(formData.visual_index_model || pickBestVisualIndexModelForSource(resolvedVisualIndexSource) || '').trim();
+      const resolvedVideoAnalysisModels = resolvedVideoAnalysisSource ? filterVideoAnalysisModels(getSourceModelList(resolvedVideoAnalysisSource)) : [];
+      const requestedVideoAnalysisModel = String(formData.video_analysis_model || '').trim();
+      const resolvedVideoAnalysisModel = String(
+        requestedVideoAnalysisModel && resolvedVideoAnalysisModels.some((model) => model.id === requestedVideoAnalysisModel)
+          ? requestedVideoAnalysisModel
+          : pickBestVideoAnalysisModelForSource(resolvedVideoAnalysisSource),
+      ).trim();
+      const requestedImageModel = String(formData.image_model || aiModelRoutes.image.model || '').trim();
+      const resolvedImageModel = String(
+        resolvedImageProviderTemplate === 'dashscope-wan-native'
+          ? DASHSCOPE_LOCKED_IMAGE_MODEL
+          : pickCapabilityModelForSource(resolvedImageSource, requestedImageModel, 'image'),
+      ).trim();
+      const resolvedVoiceTtsModel = String(formData.voice_tts_model || aiModelRoutes.voiceTts.model || formData.tts_model || DEFAULT_VOICE_TTS_MODEL).trim();
+      const resolvedVoiceCloneModel = cloneModelForVoiceTtsModel(
+        resolvedVoiceTtsModel,
+        String(formData.voice_clone_model || aiModelRoutes.voiceClone.model || DEFAULT_VOICE_CLONE_MODEL).trim(),
+      );
       const resolvedVideoModel = REDBOX_OFFICIAL_VIDEO_MODEL_LIST.includes(String(formData.video_model || '').trim() as typeof REDBOX_OFFICIAL_VIDEO_MODEL_LIST[number])
         ? String(formData.video_model || '').trim()
         : REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video'];
@@ -5090,78 +5694,270 @@ export function Settings({
       ));
       const releaseLogRetentionDays = Math.max(1, Number(formData.release_log_retention_days || 7) || 7);
       const releaseLogMaxFileMb = Math.max(1, Number(formData.release_log_max_file_mb || 10) || 10);
+      const normalizedVisualIndexProvider = 'openai-compatible';
+      const parsedVisualIndexTimeoutSeconds = Number(formData.visual_index_timeout_seconds);
+      const visualIndexTimeoutSeconds = Number.isFinite(parsedVisualIndexTimeoutSeconds)
+        ? Math.min(300, Math.max(10, Math.floor(parsedVisualIndexTimeoutSeconds)))
+        : 90;
+      const parsedVisualIndexMaxImageEdge = Number(formData.visual_index_max_image_edge);
+      const visualIndexMaxImageEdge = Number.isFinite(parsedVisualIndexMaxImageEdge)
+        ? Math.min(4096, Math.max(512, Math.floor(parsedVisualIndexMaxImageEdge)))
+        : 1536;
+      const parsedVisualIndexPdfMaxPages = Number(formData.visual_index_pdf_max_pages);
+      const visualIndexPdfMaxPages = Number.isFinite(parsedVisualIndexPdfMaxPages)
+        ? Math.min(200, Math.max(1, Math.floor(parsedVisualIndexPdfMaxPages)))
+        : 12;
+      const parsedVisualIndexPdfRenderDpi = Number(formData.visual_index_pdf_render_dpi);
+      const visualIndexPdfRenderDpi = Number.isFinite(parsedVisualIndexPdfRenderDpi)
+        ? Math.min(300, Math.max(72, Math.floor(parsedVisualIndexPdfRenderDpi)))
+        : 144;
+      const parsedVisualIndexConcurrency = Number(formData.visual_index_concurrency);
+      const visualIndexConcurrency = Number.isFinite(parsedVisualIndexConcurrency)
+        ? Math.min(4, Math.max(1, Math.floor(parsedVisualIndexConcurrency)))
+        : 1;
+      const normalizedVisualIndexEndpoint = String(resolvedVisualIndexSource?.baseURL || formData.visual_index_endpoint || resolvedApiEndpoint).trim();
+      const normalizedVisualIndexApiKey = String(resolvedVisualIndexSource?.apiKey || formData.visual_index_api_key || '').trim();
+      const normalizedVisualIndexModel = resolvedVisualIndexModel;
+      if (!normalizedVisualIndexEndpoint || !normalizedVisualIndexModel) {
+        throw new Error('启用知识库视觉索引时必须填写多模态 Endpoint 和模型名');
+      }
+      const normalizedVideoAnalysisEndpoint = String(resolvedVideoAnalysisSource?.baseURL || formData.video_analysis_endpoint || resolvedApiEndpoint).trim();
+      const normalizedVideoAnalysisApiKey = String(resolvedVideoAnalysisSource?.apiKey || formData.video_analysis_api_key || '').trim();
+      const normalizedVideoAnalysisProtocol = String(resolvedVideoAnalysisSource?.protocol || formData.video_analysis_protocol || 'gemini').trim();
+      if (!normalizedVideoAnalysisEndpoint || !resolvedVideoAnalysisModel) {
+        throw new Error('启用视频分析专用模型时必须填写 Endpoint 和模型名');
+      }
+      const routeScopedSource = (scope: AiModelRouteScope) => getRouteSource(aiModelRoutes[scope]) || fallbackRouteSource;
+      const routeModel = (
+        scope: AiModelRouteScope,
+        value: string,
+        fallbackSource: AiSourceConfig | null,
+        fallbackPicker: (source: AiSourceConfig | null, preferred?: string) => string,
+      ) => {
+        const mode = aiModelRoutes[scope].mode;
+        if (mode === 'disabled') return '';
+        const explicitModel = String(value || aiModelRoutes[scope].model || '').trim();
+        if (explicitModel) {
+          if (mode === 'official') {
+            return String(fallbackPicker(fallbackSource, explicitModel) || '').trim();
+          }
+          return explicitModel;
+        }
+        return String(fallbackPicker(fallbackSource) || '').trim();
+      };
+      const routeChatModel = (scope: AiModelRouteScope, value: string) => routeModel(
+        scope,
+        value,
+        routeScopedSource(scope),
+        (source) => pickBestModelForSource(source, '', 'chat'),
+      );
+      const normalizeRouteForSource = (
+        route: AiModelRouteConfig,
+        sourceId: string,
+      ): AiModelRouteConfig => {
+        const normalizedSourceId = canonicalizeOfficialAutoSourceId(sourceId);
+        if (route.mode === 'disabled') {
+          return { ...route, sourceId: normalizedSourceId };
+        }
+        if (isOfficialAutoSourceId(normalizedSourceId) || route.mode === 'official') {
+          return { ...route, mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID };
+        }
+        if (normalizedSourceId) {
+          return { ...route, mode: 'custom', sourceId: normalizedSourceId };
+        }
+        return { ...route, sourceId: normalizedSourceId };
+      };
+      const routeTranscriptionModel = routeModel(
+        'transcription',
+        resolvedTranscriptionModel,
+        resolvedTranscriptionSource,
+        (source) => pickBestModelForSource(source, '', 'transcription'),
+      );
+      const routeEmbeddingModel = routeModel(
+        'embedding',
+        resolvedEmbeddingModel,
+        resolvedEmbeddingSource,
+        (source) => pickBestModelForSource(source, '', 'embedding'),
+      );
+      const routeImageModel = resolvedImageModel;
+      const routeVisualIndexModel = resolvedVisualIndexModel;
+      const routeVideoAnalysisModel = resolvedVideoAnalysisModel;
+      const routeVoiceTtsModel = routeModel(
+        'voiceTts',
+        resolvedVoiceTtsModel,
+        resolvedVoiceSource,
+        (source) => pickBestModelForSource(source, '', 'tts') || pickBestModelForSource(source, '', 'audio') || DEFAULT_VOICE_TTS_MODEL,
+      ) || DEFAULT_VOICE_TTS_MODEL;
+      const routeVoiceCloneModel = resolvedVoiceCloneModel;
+      const resolvedChatSource = routeScopedSource('chat') || legacyChatSource || null;
+      const resolvedChatSourceId = canonicalizeOfficialAutoSourceId(
+        resolvedChatSource?.id || (aiModelRoutes.chat.mode === 'official' ? OFFICIAL_AUTO_SOURCE_ID : resolvedLegacyChatSourceId)
+      );
+      const routeChatModelValue = routeModel(
+        'chat',
+        formData.model_name || resolvedModelName,
+        resolvedChatSource,
+        (source) => pickBestModelForSource(source, '', 'chat'),
+      );
+      const normalizedModelRoutes: AiModelRoutes = {
+        ...aiModelRoutes,
+        chat: normalizeRouteForSource({
+          ...aiModelRoutes.chat,
+          sourceId: resolvedChatSourceId,
+          model: routeChatModelValue,
+        }, resolvedChatSourceId),
+        wander: normalizeRouteForSource(
+          { ...aiModelRoutes.wander, model: routeChatModel('wander', formData.model_name_wander) },
+          aiModelRoutes.wander.sourceId || OFFICIAL_AUTO_SOURCE_ID,
+        ),
+        team: normalizeRouteForSource(
+          { ...aiModelRoutes.team, model: routeChatModel('team', formData.model_name_chatroom) },
+          aiModelRoutes.team.sourceId || OFFICIAL_AUTO_SOURCE_ID,
+        ),
+        knowledge: normalizeRouteForSource(
+          { ...aiModelRoutes.knowledge, model: routeChatModel('knowledge', formData.model_name_knowledge) },
+          aiModelRoutes.knowledge.sourceId || OFFICIAL_AUTO_SOURCE_ID,
+        ),
+        redclaw: normalizeRouteForSource(
+          { ...aiModelRoutes.redclaw, model: routeChatModel('redclaw', formData.model_name_redclaw) },
+          aiModelRoutes.redclaw.sourceId || OFFICIAL_AUTO_SOURCE_ID,
+        ),
+        transcription: normalizeRouteForSource(
+          { ...aiModelRoutes.transcription, sourceId: resolvedTranscriptionSource?.id || '', model: routeTranscriptionModel },
+          resolvedTranscriptionSource?.id || '',
+        ),
+        embedding: normalizeRouteForSource(
+          { ...aiModelRoutes.embedding, sourceId: resolvedEmbeddingSource?.id || '', model: routeEmbeddingModel },
+          resolvedEmbeddingSource?.id || '',
+        ),
+        image: normalizeRouteForSource(
+          { ...aiModelRoutes.image, sourceId: resolvedImageSource?.id || '', model: routeImageModel },
+          resolvedImageSource?.id || '',
+        ),
+        visualIndex: normalizeRouteForSource({
+          ...aiModelRoutes.visualIndex,
+          mode: aiModelRoutes.visualIndex.mode === 'disabled' ? 'official' : aiModelRoutes.visualIndex.mode,
+          sourceId: resolvedVisualIndexSource?.id || '',
+          model: routeVisualIndexModel,
+        }, resolvedVisualIndexSource?.id || ''),
+        videoAnalysis: normalizeRouteForSource({
+          ...aiModelRoutes.videoAnalysis,
+          mode: aiModelRoutes.videoAnalysis.mode === 'disabled' ? 'official' : aiModelRoutes.videoAnalysis.mode,
+          sourceId: resolvedVideoAnalysisSource?.id || '',
+          model: routeVideoAnalysisModel,
+        }, resolvedVideoAnalysisSource?.id || ''),
+        voiceTts: normalizeRouteForSource(
+          { ...aiModelRoutes.voiceTts, sourceId: resolvedVoiceSource?.id || '', model: routeVoiceTtsModel },
+          resolvedVoiceSource?.id || '',
+        ),
+        voiceClone: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: routeVoiceCloneModel },
+      };
+      const parsedParserTimeoutSeconds = Number(formData.parser_timeout_seconds);
+      const parserTimeoutSeconds = Number.isFinite(parsedParserTimeoutSeconds)
+        ? Math.min(300, Math.max(10, Math.floor(parsedParserTimeoutSeconds)))
+        : 90;
+      const parsedRerankTimeoutSeconds = Number(formData.rerank_timeout_seconds);
+      const rerankTimeoutSeconds = Number.isFinite(parsedRerankTimeoutSeconds)
+        ? Math.min(120, Math.max(5, Math.floor(parsedRerankTimeoutSeconds)))
+        : 30;
       if (formData.proxy_enabled && !String(formData.proxy_url || '').trim()) {
         throw new Error('启用代理时必须填写代理地址，例如 http://127.0.0.1:7890');
       }
 
       await window.ipcRenderer.saveSettings({
         ...formData,
-        api_endpoint: resolvedApiEndpoint,
-        api_key: resolvedApiKey,
-        model_name: resolvedModelName,
-        model_name_wander: String(formData.model_name_wander || '').trim(),
-        model_name_chatroom: String(formData.model_name_chatroom || '').trim(),
-        model_name_knowledge: String(formData.model_name_knowledge || '').trim(),
-        model_name_redclaw: String(formData.model_name_redclaw || '').trim(),
+        api_endpoint: String(resolvedChatSource?.baseURL || resolvedApiEndpoint).trim(),
+        api_key: String(resolvedChatSource?.apiKey || resolvedApiKey).trim(),
+        model_name: routeChatModelValue || resolvedModelName,
+        model_name_wander: routeChatModel('wander', formData.model_name_wander),
+        model_name_chatroom: routeChatModel('team', formData.model_name_chatroom),
+        model_name_knowledge: routeChatModel('knowledge', formData.model_name_knowledge),
+        model_name_redclaw: routeChatModel('redclaw', formData.model_name_redclaw),
         proxy_enabled: Boolean(formData.proxy_enabled),
         proxy_url: String(formData.proxy_url || '').trim(),
         proxy_bypass: String(formData.proxy_bypass || '').trim(),
-        transcription_model: resolvedTranscriptionModel,
+        transcription_model: routeTranscriptionModel,
         transcription_endpoint: String(resolvedTranscriptionSource?.baseURL || formData.transcription_endpoint || resolvedApiEndpoint).trim(),
         transcription_key: String(resolvedTranscriptionSource?.apiKey || formData.transcription_key || '').trim(),
-        embedding_model: resolvedEmbeddingModel,
+        embedding_model: routeEmbeddingModel,
         embedding_endpoint: String(resolvedEmbeddingSource?.baseURL || formData.embedding_endpoint || resolvedApiEndpoint).trim(),
         embedding_key: String(resolvedEmbeddingSource?.apiKey || formData.embedding_key || '').trim(),
-        image_provider: formData.image_provider,
-        image_provider_template: formData.image_provider_template,
+        visual_index_enabled: Boolean(formData.visual_index_enabled),
+        visual_index_provider: normalizedVisualIndexProvider,
+        visual_index_endpoint: normalizedVisualIndexEndpoint,
+        visual_index_api_key: normalizedVisualIndexApiKey,
+        visual_index_model: routeVisualIndexModel,
+        visual_index_prompt_version: normalizeVisualIndexPromptVersion(formData.visual_index_prompt_version),
+        visual_index_timeout_seconds: visualIndexTimeoutSeconds,
+        visual_index_max_image_edge: visualIndexMaxImageEdge,
+        visual_index_skip_small_images: Boolean(formData.visual_index_skip_small_images),
+        visual_index_pdf_max_pages: visualIndexPdfMaxPages,
+        visual_index_pdf_render_dpi: visualIndexPdfRenderDpi,
+        visual_index_concurrency: visualIndexConcurrency,
+        video_analysis_enabled: true,
+        video_analysis_endpoint: normalizedVideoAnalysisEndpoint,
+        video_analysis_api_key: normalizedVideoAnalysisApiKey,
+        video_analysis_model: routeVideoAnalysisModel,
+        video_analysis_protocol: normalizedVideoAnalysisProtocol,
+        video_analysis_max_direct_video_bytes: Number(formData.video_analysis_max_direct_video_bytes || 64 * 1024 * 1024),
+        docling_endpoint: String(formData.docling_endpoint || '').trim(),
+        tika_endpoint: String(formData.tika_endpoint || '').trim(),
+        unstructured_endpoint: String(formData.unstructured_endpoint || '').trim(),
+        parser_api_key: String(formData.parser_api_key || '').trim(),
+        parser_timeout_seconds: parserTimeoutSeconds,
+        rerank_endpoint: String(formData.rerank_endpoint || '').trim(),
+        rerank_api_key: String(formData.rerank_api_key || '').trim(),
+        rerank_model: String(formData.rerank_model || '').trim(),
+        rerank_timeout_seconds: rerankTimeoutSeconds,
+        image_provider: resolvedImageProvider,
+        image_provider_template: resolvedImageProviderTemplate,
         image_endpoint: String(resolvedImageSource?.baseURL || formData.image_endpoint || '').trim(),
         image_api_key: String(resolvedImageSource?.apiKey || formData.image_api_key || '').trim(),
-        image_model: resolvedImageModel,
+        image_model: routeImageModel,
+        voice_provider: 'voice',
+        voice_endpoint: String(resolvedVoiceSource?.baseURL || formData.voice_endpoint || formData.api_endpoint || '').trim(),
+        voice_api_key: String(resolvedVoiceSource?.apiKey || formData.voice_api_key || formData.api_key || '').trim(),
+        voice_tts_model: routeVoiceTtsModel,
+        tts_model: routeVoiceTtsModel,
+        voice_clone_model: routeVoiceCloneModel,
         video_endpoint: REDBOX_OFFICIAL_VIDEO_BASE_URL,
         video_api_key: String(formData.video_api_key || formData.api_key || '').trim(),
         video_model: resolvedVideoModel,
+        ai_model_routes_json: JSON.stringify(normalizedModelRoutes),
         ai_sources_json: JSON.stringify(sanitizedSources),
-        default_ai_source_id: resolvedDefaultSourceId || defaultSource?.id || '',
+        default_ai_source_id: normalizedModelRoutes.chat.sourceId || resolvedLegacyChatSourceId || '',
         mcp_servers_json: JSON.stringify(mcpServers),
-        ecommerce_platforms_json: serializeEcommercePlatformsSettings(ecommercePlatformsSettings),
         redclaw_compact_target_tokens: compactTargetTokens,
         debug_log_enabled: Boolean(formData.debug_log_enabled),
         diagnostics_upload_consent: formData.diagnostics_upload_consent,
         diagnostics_include_advanced_context: Boolean(formData.diagnostics_include_advanced_context),
         diagnostics_auto_send_same_crash: Boolean(formData.diagnostics_auto_send_same_crash),
         diagnostics_last_prompted_at: formData.diagnostics_last_prompted_at || null,
+        analytics_consent: formData.analytics_consent,
+        analytics_last_prompted_at: new Date().toISOString(),
         release_log_retention_days: releaseLogRetentionDays,
         release_log_max_file_mb: releaseLogMaxFileMb,
         notifications_json: JSON.stringify(notificationSettings),
+        cli_runtime_execution_mode: normalizeCliRuntimeExecutionMode(formData.cli_runtime_execution_mode),
         developer_mode_enabled: Boolean(formData.developer_mode_enabled),
         developer_mode_unlocked_at: formData.developer_mode_enabled
           ? (formData.developer_mode_unlocked_at || new Date().toISOString())
           : null,
+        ecommerce_platforms_json: serializeEcommercePlatformsSettings(
+          normalizeEcommercePlatformsSettings(formData.ecommerce_platforms_json)
+        ),
         chat_max_tokens_default: chatMaxTokensDefault,
         chat_max_tokens_deepseek: chatMaxTokensDeepseek,
-        visual_index_enabled: Boolean(formData.visual_index_enabled),
-        visual_index_provider: String(formData.visual_index_provider || '').trim(),
-        visual_index_endpoint: String(formData.visual_index_endpoint || '').trim(),
-        visual_index_api_key: String(formData.visual_index_api_key || '').trim(),
-        visual_index_model: String(formData.visual_index_model || '').trim(),
-        visual_index_prompt_version: normalizeVisualIndexPromptVersion(formData.visual_index_prompt_version),
-        visual_index_timeout_seconds: Number(formData.visual_index_timeout_seconds) || 90,
-        visual_index_max_image_edge: Math.max(256, Number(formData.visual_index_max_image_edge) || 1536),
-        visual_index_skip_small_images: Boolean(formData.visual_index_skip_small_images),
-        visual_index_pdf_max_pages: Math.max(1, Number(formData.visual_index_pdf_max_pages) || 12),
-        visual_index_pdf_render_dpi: Math.max(72, Number(formData.visual_index_pdf_render_dpi) || 144),
-        visual_index_concurrency: Math.max(1, Number(formData.visual_index_concurrency) || 1),
-        docling_endpoint: String(formData.docling_endpoint || '').trim(),
-        tika_endpoint: String(formData.tika_endpoint || '').trim(),
-        unstructured_endpoint: String(formData.unstructured_endpoint || '').trim(),
-        parser_api_key: String(formData.parser_api_key || '').trim(),
-        parser_timeout_seconds: Number(formData.parser_timeout_seconds) || 60,
-        rerank_endpoint: String(formData.rerank_endpoint || '').trim(),
-        rerank_api_key: String(formData.rerank_api_key || '').trim(),
-        rerank_model: String(formData.rerank_model || '').trim(),
-        rerank_timeout_seconds: Number(formData.rerank_timeout_seconds) || 30,
       });
-      clearAiSourceDraftDirty();
+      void window.ipcRenderer.analytics.track('settings_changed', {
+        surface: 'settings',
+        origin: 'renderer',
+        properties: {
+          settingKey: 'analytics_consent',
+          valueKind: formData.analytics_consent,
+        },
+      });
+      clearAiSourceDraftDirty(aiSourceSaveGeneration);
       if (formData.debug_log_enabled) {
         await loadRecentDebugLogs();
       }
@@ -5190,111 +5986,532 @@ export function Settings({
   const handleTestNotificationSound = useCallback(async () => {
     try {
       await playTestNotificationSound('attention', notificationSettings.sound.volume);
-      setNotificationStatusMessage('已播放测试提醒音。');
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotificationStatusMessage(`播放测试提醒音失败：${message}`);
+      console.warn('Failed to play notification test sound:', error);
     }
   }, [notificationSettings.sound.volume]);
 
-  const handleRequestNotificationPermission = useCallback(async () => {
-    try {
-      const result = await window.ipcRenderer.notifications.requestPermission();
-      const state = normalizeNotificationPermissionState(result?.state);
-      setNotificationPermissionState(state);
-      setNotificationStatusMessage(`系统通知权限状态：${state}`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotificationStatusMessage(`请求系统通知权限失败：${message}`);
+  const routeModelOptions = useCallback((scope: AiModelRouteScope, source: AiSourceConfig | null): AiModelDescriptor[] => {
+    if (!source) return [];
+    const models = getSourceModelList(source);
+    if (scope === 'transcription') return filterAiModelsByCapability(models, 'transcription');
+    if (scope === 'embedding') return filterAiModelsByCapability(models, 'embedding');
+    if (scope === 'image') return filterAiModelsByCapability(models, 'image');
+    if (scope === 'visualIndex') return filterVisualIndexModels(models);
+    if (scope === 'videoAnalysis') return filterVideoAnalysisModels(models);
+    if (scope === 'voiceTts') {
+      const ttsModels = filterAiModelsByCapability(models, 'tts');
+      return ttsModels.length > 0 ? ttsModels : filterAiModelsByCapability(models, 'audio');
     }
-  }, []);
+    if (scope === 'voiceClone') {
+      const cloneModels = filterAiModelsByCapability(models, 'voice_clone');
+      return cloneModels.length > 0 ? cloneModels : filterAiModelsByCapability(models, 'audio');
+    }
+    return filterAiModelsByCapability(models, 'chat');
+  }, [filterVideoAnalysisModels, filterVisualIndexModels, getSourceModelList]);
 
-  const handleSendTestSystemNotification = useCallback(async () => {
-    try {
-      const result = await window.ipcRenderer.notifications.showSystem({
-        title: 'RedBox 通知测试',
-        body: '这是一条系统通知测试消息。',
-      });
-      if (!result?.success) {
-        throw new Error(result?.error || '系统通知发送失败');
+  const currentRouteModelValue = useCallback((scope: AiModelRouteScope): string => {
+    if (scope === 'chat') return String(aiModelRoutes.chat.model || formData.model_name || '').trim();
+    if (scope === 'wander') return String(aiModelRoutes.wander.model || formData.model_name_wander || '').trim();
+    if (scope === 'team') return String(aiModelRoutes.team.model || formData.model_name_chatroom || '').trim();
+    if (scope === 'knowledge') return String(aiModelRoutes.knowledge.model || formData.model_name_knowledge || '').trim();
+    if (scope === 'redclaw') return String(aiModelRoutes.redclaw.model || formData.model_name_redclaw || '').trim();
+    if (scope === 'transcription') return String(aiModelRoutes.transcription.model || formData.transcription_model || '').trim();
+    if (scope === 'embedding') return String(aiModelRoutes.embedding.model || formData.embedding_model || '').trim();
+    if (scope === 'image') return String(aiModelRoutes.image.model || formData.image_model || '').trim();
+    if (scope === 'visualIndex') return String(aiModelRoutes.visualIndex.model || formData.visual_index_model || '').trim();
+    if (scope === 'videoAnalysis') return String(aiModelRoutes.videoAnalysis.model || formData.video_analysis_model || '').trim();
+    if (scope === 'voiceTts') return String(aiModelRoutes.voiceTts.model || formData.voice_tts_model || formData.tts_model || DEFAULT_VOICE_TTS_MODEL).trim();
+    if (scope === 'voiceClone') return String(aiModelRoutes.voiceClone.model || formData.voice_clone_model || DEFAULT_VOICE_CLONE_MODEL).trim();
+    return '';
+  }, [
+    aiModelRoutes,
+    formData.embedding_model,
+    formData.image_model,
+    formData.model_name,
+    formData.model_name_chatroom,
+    formData.model_name_knowledge,
+    formData.model_name_redclaw,
+    formData.model_name_wander,
+    formData.transcription_model,
+    formData.tts_model,
+    formData.video_analysis_model,
+    formData.visual_index_model,
+    formData.voice_clone_model,
+    formData.voice_tts_model,
+  ]);
+
+  const fallbackOfficialRouteModel = useCallback((scope: AiModelRouteScope, preferredModel = ''): string => {
+    const pickFirstOfficialModel = (capability: ModelCapability = 'chat') => {
+      const sourceModels = getSourceModelList(officialAiSource);
+      const matchingModels = filterAiModelsByCapability(sourceModels, capability);
+      return String(matchingModels[0]?.id || sourceModels[0]?.id || '').trim();
+    };
+    const pickFirstOfficialVisualModel = () => {
+      const sourceModels = getSourceModelList(officialAiSource);
+      const visualModels = filterVisualIndexModels(sourceModels);
+      return String(visualModels[0]?.id || sourceModels[0]?.id || '').trim();
+    };
+    const pickFirstOfficialVideoModel = () => {
+      const sourceModels = getSourceModelList(officialAiSource);
+      const videoModels = filterVideoAnalysisModels(sourceModels);
+      if (preferredModel && videoModels.some((item) => item.id === preferredModel)) {
+        return preferredModel;
       }
-      setNotificationStatusMessage('系统通知已发送。');
+      return String(videoModels[0]?.id || '').trim();
+    };
+    if (scope === 'voiceTts') return pickBestModelForSource(officialAiSource, preferredModel, 'tts') || pickBestModelForSource(officialAiSource, preferredModel, 'audio') || pickFirstOfficialModel('tts') || DEFAULT_VOICE_TTS_MODEL;
+    if (scope === 'voiceClone') return pickBestModelForSource(officialAiSource, preferredModel, 'voice_clone') || pickBestModelForSource(officialAiSource, preferredModel, 'audio') || pickFirstOfficialModel('voice_clone') || DEFAULT_VOICE_CLONE_MODEL;
+    if (scope === 'transcription') return pickBestModelForSource(officialAiSource, preferredModel, 'transcription') || pickFirstOfficialModel('transcription');
+    if (scope === 'embedding') return pickBestModelForSource(officialAiSource, preferredModel, 'embedding') || pickFirstOfficialModel('embedding') || 'text-embedding-3-small';
+    if (scope === 'image') return pickBestModelForSource(officialAiSource, preferredModel, 'image') || pickFirstOfficialModel('image');
+    if (scope === 'visualIndex') return pickBestVisualIndexModelForSource(officialAiSource, preferredModel) || pickFirstOfficialVisualModel();
+    if (scope === 'videoAnalysis') return pickFirstOfficialVideoModel();
+    if (scope === 'chat') return pickBestModelForSource(officialAiSource, preferredModel, 'chat') || pickFirstOfficialModel('chat');
+    return pickBestModelForSource(officialAiSource, preferredModel, 'chat') || pickFirstOfficialModel('chat');
+  }, [
+    filterVideoAnalysisModels,
+    filterVisualIndexModels,
+    getSourceModelList,
+    officialAiSource,
+    pickBestModelForSource,
+    pickBestVisualIndexModelForSource,
+  ]);
+
+  const effectiveRouteModelValue = useCallback((scope: AiModelRouteScope): string => {
+    if (aiModelRoutes[scope].mode === 'official') {
+      const officialModel = String(aiModelRoutes[scope].model || '').trim();
+      const legacyModel = currentRouteModelValue(scope);
+      const preferredModel = officialModel || legacyModel;
+      if (scope === 'image') {
+        return pickCapabilityModelForSource(officialAiSource, preferredModel, 'image') || fallbackOfficialRouteModel(scope);
+      }
+      return fallbackOfficialRouteModel(scope, preferredModel);
+    }
+    return currentRouteModelValue(scope);
+  }, [aiModelRoutes, currentRouteModelValue, fallbackOfficialRouteModel, officialAiSource, pickCapabilityModelForSource]);
+
+  const routeModelSelectOptions = useCallback((models: AiModelDescriptor[], value: string) => {
+    const normalizedValue = String(value || '').trim();
+    const options = models.map((model) => ({
+      id: model.id,
+      label: model.id,
+    }));
+    if (normalizedValue && !options.some((item) => item.id === normalizedValue)) {
+      options.unshift({ id: normalizedValue, label: normalizedValue });
+    }
+    return options;
+  }, []);
+
+  const renderRouteModeButton = (
+    scope: AiModelRouteScope,
+    mode: AiModelRouteMode,
+    label: string,
+    disabled = false,
+  ) => {
+    const route = aiModelRoutes[scope];
+    const active = route.mode === mode;
+    return (
+      <button
+        key={mode}
+        type="button"
+        disabled={disabled}
+        onClick={() => applyRouteSource(scope, mode)}
+        className={clsx(
+          'h-8 rounded-md px-2 text-xs font-medium transition-colors',
+          active
+            ? 'bg-surface-primary text-text-primary shadow-sm'
+            : 'text-text-tertiary hover:bg-surface-primary/70 hover:text-text-primary',
+          disabled && 'cursor-not-allowed opacity-45 hover:bg-transparent hover:text-text-tertiary'
+        )}
+      >
+        {label}
+      </button>
+    );
+  };
+
+  const renderMissingCustomSourceNotice = (scope: AiModelRouteScope) => (
+    missingCustomSourceNoticeScope === scope && (
+      <div className="flex items-center gap-1.5 text-xs text-amber-600">
+        <AlertCircle className="h-3.5 w-3.5" />
+        请先在上方创建一个自定义供应商。
+      </div>
+    )
+  );
+
+  const renderCompactModelRouteRow = (
+    label: string,
+    controls: ReactNode,
+    children?: ReactNode,
+  ) => (
+    <div className="py-2.5">
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-[112px_180px_minmax(0,1fr)] md:items-start">
+        <div className="pt-1 text-sm font-medium text-text-primary">{label}</div>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">{controls}</div>
+        {children ? <div className="min-w-0 space-y-2">{children}</div> : <div />}
+      </div>
+    </div>
+  );
+
+  const renderCompactRouteControls = (
+    scope: AiModelRouteScope,
+    options: Array<{ mode: AiModelRouteMode; label: string; disabled?: boolean }>,
+  ) => (
+    <>
+      <div className="inline-grid grid-flow-col gap-1 rounded-lg border border-border bg-surface-secondary/50 p-1">
+        {options.map((option) => renderRouteModeButton(scope, option.mode, option.label, option.disabled))}
+      </div>
+      {renderMissingCustomSourceNotice(scope)}
+    </>
+  );
+
+  const renderOfficialRouteModelField = (scope: AiModelRouteScope, placeholder = '默认模型') => {
+    const value = effectiveRouteModelValue(scope);
+    const models = routeModelOptions(scope, officialAiSource);
+    const options = routeModelSelectOptions(models, value);
+    const disabled = !officialAuthLoggedIn || (!options.length && !value);
+    return (
+      <AiModelSelect
+        value={value}
+        onChange={(modelId) => applyRouteModel(scope, modelId)}
+        disabled={disabled}
+        className="w-full min-w-0"
+        placeholder={!officialAuthLoggedIn ? '请先登录官方账号' : placeholder}
+        options={options}
+      />
+    );
+  };
+
+  const renderCustomRouteFields = (
+    sourceValue: string,
+    sources: AiSourceConfig[],
+    onSourceChange: (sourceId: string) => void,
+    modelValue: string,
+    models: AiModelDescriptor[],
+    onModelChange: (modelId: string) => void,
+    modelPlaceholder = '请选择模型',
+    modelDisabled = false,
+  ) => (
+    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+      <AiSourceSelect
+        value={sourceValue}
+        sources={sources}
+        onChange={onSourceChange}
+        className="w-full"
+      />
+      <AiModelSelect
+        value={modelValue}
+        onChange={onModelChange}
+        className="w-full"
+        disabled={modelDisabled || !models.length}
+        placeholder={modelPlaceholder}
+        options={models.map((model) => ({
+          id: model.id,
+          label: model.id,
+          badges: buildModelCapabilityBadges(model.capabilities),
+          inputIcons: buildModelInputIcons(model.inputCapabilities),
+        }))}
+      />
+    </div>
+  );
+
+  const loadAiPricingCatalog = useCallback(async (options?: { refreshRemote?: boolean }) => {
+    setAiPricingLoading(true);
+    setAiPricingError('');
+    try {
+      const result = options?.refreshRemote
+        ? await window.ipcRenderer.officialAuth.refreshPricing()
+        : await window.ipcRenderer.officialAuth.getPricing();
+      const catalog = parseAiPricingCatalog(result?.pricing);
+      setAiPricingCatalog(catalog);
+      setAiPricingActiveGroup((prev) => {
+        if (prev && catalog?.groups.some((group) => group.type === prev)) return prev;
+        return catalog?.groups[0]?.type || '';
+      });
+      if (!catalog) {
+        setAiPricingError('价格表尚未同步，请重启应用后再查看。');
+      }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotificationStatusMessage(`系统通知测试失败：${message}`);
+      setAiPricingError(error instanceof Error ? error.message : '价格表读取失败');
+    } finally {
+      setAiPricingLoading(false);
     }
   }, []);
 
-  const tabs: Array<{ id: SettingsTab; label: string; icon: ComponentType<{ className?: string }> }> = [
-    { id: 'ai', label: 'AI 模型', icon: Cpu },
-    { id: 'general', label: '常规设置', icon: LayoutGrid },
-    { id: 'team', label: '团队', icon: Users },
-    { id: 'platforms', label: '电商平台', icon: Store },
-    { id: 'skills', label: '技能', icon: Lightbulb },
-    { id: 'mcp', label: 'MCP', icon: Server },
-    { id: 'remote', label: '远程 API', icon: Database },
-    { id: 'profile', label: '创作档案', icon: FileText },
-    { id: 'memory', label: '记忆', icon: Brain },
-    { id: 'tools', label: '工具管理', icon: Wrench },
-    { id: 'experimental', label: '实验功能', icon: FlaskConical },
-  ] as const;
+  const handleOpenAiPricing = useCallback(() => {
+    setSettingsSubView('ai-pricing');
+    setActiveTab('ai');
+    void loadAiPricingCatalog();
+  }, [loadAiPricingCatalog]);
 
-  const renderSettingsSkillRow = (skill: SkillDefinition) => {
-    const builtin = skill.isBuiltin || skill.sourceScope === 'builtin';
-    const disabled = Boolean(skill.disabled);
-    const busy = settingsSkillBusyName === skill.name;
-    const sourceLabel = formatSettingsSkillSourceScope(skill.sourceScope);
+  const handleCloseAiPricing = useCallback(() => {
+    setSettingsSubView('main');
+  }, []);
+
+  useEffect(() => {
+    if (settingsSubView !== 'ai-pricing') return;
+    const handleSettingsUpdated = () => {
+      void loadAiPricingCatalog();
+    };
+    return subscribeSettingsUpdated(handleSettingsUpdated);
+  }, [loadAiPricingCatalog, settingsSubView]);
+
+  const activePricingGroup = useMemo(() => (
+    aiPricingCatalog?.groups.find((group) => group.type === aiPricingActiveGroup)
+    || aiPricingCatalog?.groups[0]
+    || null
+  ), [aiPricingActiveGroup, aiPricingCatalog]);
+
+  const filteredPricingModels = useMemo(() => {
+    const query = aiPricingSearch.trim().toLowerCase();
+    const models = activePricingGroup?.models || [];
+    if (!query) return models;
+    return models.filter((model) => [
+      model.model,
+      model.display_name,
+      model.provider,
+      model.capability,
+    ].some((value) => String(value || '').toLowerCase().includes(query)));
+  }, [activePricingGroup, aiPricingSearch]);
+
+  const renderPricingRateTable = (model: AiPricingModel) => {
+    const rows = Array.isArray(model.price_table) && model.price_table.length
+      ? model.price_table
+      : Array.isArray(model.image_quality_resolution_rates) && model.image_quality_resolution_rates.length
+        ? model.image_quality_resolution_rates
+        : Array.isArray(model.video_resolution_rates) && model.video_resolution_rates.length
+          ? model.video_resolution_rates
+          : [];
+    if (!rows.length) return null;
+    const keys = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).filter((key) => (
+      rows.some((row) => hasMeaningfulPricingValue(row[key]))
+    ));
+    if (!keys.length) return null;
     return (
-      <div key={`${skill.location || skill.name}:${skill.name}`} className="flex items-center gap-3 px-4 py-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary">
-          <Lightbulb className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sm font-medium text-text-primary">{skill.name}</span>
-            {sourceLabel && (
-              <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">
-                {sourceLabel}
-              </span>
-            )}
-            {disabled && (
-              <span className="shrink-0 rounded bg-yellow-500/10 px-1.5 py-0.5 text-[10px] text-yellow-600">
-                已禁用
-              </span>
-            )}
-          </div>
-          <div className="mt-0.5 truncate text-xs text-text-tertiary">
-            {skill.description || skill.location || '无描述'}
-          </div>
-        </div>
-        {builtin ? (
-          <span className="shrink-0 text-xs text-text-tertiary">始终启用</span>
-        ) : (
-          <button
-            type="button"
-            onClick={() => void handleToggleSettingsSkill(skill)}
-            disabled={busy}
-            className={clsx(
-              'relative h-7 w-[3.25rem] shrink-0 rounded-full transition-colors duration-200 disabled:opacity-50',
-              !disabled ? 'bg-[#34c759]' : 'bg-[#d1d1d6]'
-            )}
-            title={disabled ? '已禁用' : '已启用'}
-            aria-label={disabled ? `启用 ${skill.name}` : `禁用 ${skill.name}`}
-          >
-            <span
-              className={clsx(
-                'absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.22)] transition-transform duration-200',
-                !disabled ? 'translate-x-6' : 'translate-x-0'
-              )}
-            />
-          </button>
-        )}
+      <div className="mt-3 overflow-hidden rounded-lg border border-border/70">
+        <table className="w-full min-w-[560px] text-xs">
+          <thead className="bg-surface-secondary/50 text-text-tertiary">
+            <tr>
+              {keys.map((key) => (
+                <th key={key} className="px-3 py-2 text-left font-medium">{pricingRateLabel(key)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={index} className="border-t border-border/50">
+                {keys.map((key) => (
+                  <td key={key} className="px-3 py-2 text-text-secondary">{pricingRateCellValue(key, row[key])}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     );
   };
 
+  const renderAiPricingPage = () => (
+    <div className="flex h-full min-w-0 flex-1 flex-col bg-surface-primary text-text-primary">
+      <div className="flex items-center justify-between gap-4 border-b border-border px-6 py-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={handleCloseAiPricing}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+            title="返回 AI 设置"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-text-primary">AI 价格表</h2>
+            <p className="mt-0.5 text-xs text-text-tertiary">
+              更新时间：{formatPricingUpdatedAt(aiPricingCatalog?.updated_at)}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void loadAiPricingCatalog({ refreshRemote: true })}
+            disabled={aiPricingLoading}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-surface-secondary/30 text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+            title="刷新价格表"
+            aria-label="刷新价格表"
+          >
+            <RefreshCw className={clsx('h-4 w-4', aiPricingLoading && 'animate-spin')} />
+          </button>
+          <input
+            type="search"
+            value={aiPricingSearch}
+            onChange={(event) => setAiPricingSearch(event.target.value)}
+            placeholder="搜索模型或供应商"
+            className="w-64 rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-sm outline-none transition-colors focus:border-accent-primary"
+          />
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1">
+        <div className="w-56 shrink-0 border-r border-border bg-surface-secondary/20 p-4">
+          <div className="space-y-1">
+            {(aiPricingCatalog?.groups || []).map((group) => (
+              <button
+                key={group.type}
+                type="button"
+                onClick={() => setAiPricingActiveGroup(group.type)}
+                className={clsx(
+                  'flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors',
+                  activePricingGroup?.type === group.type
+                    ? 'bg-surface-secondary text-text-primary'
+                    : 'text-text-secondary hover:bg-surface-secondary/60 hover:text-text-primary',
+                )}
+              >
+                <span>{group.label}</span>
+                <span className="text-xs text-text-tertiary">{group.models.length}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="min-w-0 flex-1 overflow-auto p-6">
+          {aiPricingLoading && !aiPricingCatalog ? (
+            <div className="rounded-lg border border-border bg-surface-secondary/20 p-4 text-sm text-text-tertiary">正在读取本地价格表...</div>
+          ) : aiPricingError && !aiPricingCatalog ? (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-600">{aiPricingError}</div>
+          ) : activePricingGroup ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium text-text-primary">{activePricingGroup.label}</h3>
+                  <p className="mt-1 text-xs text-text-tertiary">{filteredPricingModels.length} / {activePricingGroup.models.length} 个模型</p>
+                </div>
+              </div>
+
+              {filteredPricingModels.map((model) => (
+                <div key={`${activePricingGroup.type}:${model.model}`} className="rounded-xl border border-border bg-surface-primary p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="text-sm font-semibold text-text-primary">{model.display_name || model.model}</h4>
+                        {model.is_default ? (
+                          <span className="rounded bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">默认</span>
+                        ) : null}
+                      </div>
+                      <p className="mt-1 text-xs text-text-tertiary">{model.provider || '-'} · {pricingModeLabel(model.pricing_mode)}</p>
+                    </div>
+                    {pricingModelFields(model, activePricingGroup.type).length ? (
+                      <div className="flex max-w-full flex-wrap justify-end gap-2 text-right text-xs">
+                        {pricingModelFields(model, activePricingGroup.type).map((field) => (
+                          <div key={field.label} className="rounded-lg border border-border/70 bg-surface-secondary/20 px-2.5 py-1.5">
+                            <div className="text-text-tertiary">{field.label}</div>
+                            <div className="mt-0.5 font-medium text-text-primary">{field.value}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  {renderPricingRateTable(model)}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-border bg-surface-secondary/20 p-4 text-sm text-text-tertiary">暂无价格表数据。</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderSettingsSkillRow = useCallback((skill: SettingsSkill) => {
+    const isBusy = settingsSkillBusyName === skill.name;
+    const enabled = skill.isBuiltin || !skill.disabled;
+    return (
+      <div key={skill.location || skill.name} className="flex items-center justify-between gap-4 px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-medium text-text-primary">{skill.name}</span>
+            <span className={clsx(
+              'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
+              skill.isBuiltin
+                ? 'bg-accent-primary/10 text-accent-primary'
+                : 'bg-surface-secondary text-text-tertiary'
+            )}>
+              {formatSettingsSkillSource(skill.sourceScope)}
+            </span>
+          </div>
+          {skill.description && (
+            <div className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
+              {skill.description}
+            </div>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleToggleSettingsSkill(skill)}
+            disabled={skill.isBuiltin || isBusy}
+            role="switch"
+            aria-checked={enabled}
+            aria-label={`${enabled ? '关闭' : '打开'}技能 ${skill.name}`}
+            title={skill.isBuiltin ? '内置技能不可关闭' : (enabled ? '关闭技能' : '打开技能')}
+            className={clsx(
+              'ui-switch-track disabled:cursor-not-allowed',
+              skill.isBuiltin && 'opacity-70',
+              isBusy && 'opacity-60'
+            )}
+            data-size="sm"
+            data-state={enabled ? 'on' : 'off'}
+          >
+            <span className="ui-switch-thumb" />
+          </button>
+          {!skill.isBuiltin && (
+            <button
+              type="button"
+              onClick={() => void handleUninstallSettingsSkill(skill)}
+              disabled={isBusy}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-text-tertiary transition-colors hover:border-brand-red/30 hover:bg-brand-red/10 hover:text-brand-red disabled:opacity-50"
+              aria-label={`删除技能 ${skill.name}`}
+              title="删除技能"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }, [handleToggleSettingsSkill, handleUninstallSettingsSkill, settingsSkillBusyName]);
+
+  const allTabs = useMemo<Array<{ id: SettingsTab; labelKey: I18nKey; icon: ComponentType<{ className?: string }> }>>(() => [
+    { id: 'ai', labelKey: 'settings.tabs.ai', icon: Cpu },
+    { id: 'general', labelKey: 'settings.tabs.general', icon: LayoutGrid },
+    { id: 'team', labelKey: 'settings.tabs.team', icon: Users },
+    { id: 'platforms', labelKey: 'settings.tabs.platforms', icon: Store },
+    { id: 'skills', labelKey: 'settings.tabs.skills', icon: Star },
+    { id: 'mcp', labelKey: 'settings.tabs.mcp', icon: Server },
+    { id: 'remote', labelKey: 'settings.tabs.remote', icon: MessageSquareText },
+    { id: 'profile', labelKey: 'settings.tabs.profile', icon: FileText },
+    { id: 'tools', labelKey: 'settings.tabs.tools', icon: Wrench },
+    { id: 'experimental', labelKey: 'settings.tabs.experimental', icon: FlaskConical },
+  ], []);
+
+  const tabs = useMemo(() => {
+    const visibleTabs = new Set(APP_BRAND.visibleSettingsTabs);
+    if (visibleTabs.size === 0) return allTabs;
+    const filteredTabs = allTabs.filter((tab) => visibleTabs.has(tab.id));
+    return filteredTabs.length > 0 ? filteredTabs : allTabs;
+  }, [allTabs]);
+
+  useEffect(() => {
+    if (tabs.some((tab) => tab.id === activeTab)) return;
+    setActiveTab(tabs[0]?.id || 'general');
+  }, [activeTab, tabs]);
+
   return (
-    <div className="flex h-full bg-background text-text-primary">
+    <div className="flex h-full min-w-0 text-text-primary">
+      {settingsSubView === 'ai-pricing' ? (
+        renderAiPricingPage()
+      ) : (
+        <>
       {/* Sidebar */}
       <div className="w-48 border-r border-border pt-6 pb-4 flex flex-col gap-1 px-3 bg-surface-secondary/20">
         {onReturn && (
@@ -5307,27 +6524,34 @@ export function Settings({
             返回应用
           </button>
         )}
-        <h1 className="px-3 mb-4 text-xs font-bold text-text-tertiary uppercase tracking-wider">设置</h1>
-        {tabs.map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => {
-              setActiveTab(tab.id);
-            }}
-            className={clsx(
-              "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-              activeTab === tab.id ? "bg-surface-secondary text-text-primary" : "text-text-secondary hover:bg-surface-secondary/50 hover:text-text-primary"
-            )}
-          >
-            <tab.icon className="w-4 h-4" />
-            {tab.label}
-          </button>
-        ))}
+        <h1 className="px-3 mb-4 text-xs font-bold text-text-tertiary uppercase tracking-wider">{t('settings.title')}</h1>
+        <div className="flex flex-1 flex-col gap-1 min-h-0">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => {
+                setActiveTab(tab.id);
+              }}
+              className={clsx(
+                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+                activeTab === tab.id ? "bg-surface-secondary text-text-primary" : "text-text-secondary hover:bg-surface-secondary/50 hover:text-text-primary"
+              )}
+            >
+              <tab.icon className="w-4 h-4" />
+              {t(tab.labelKey)}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto">
-        <div className="max-w-2xl mx-auto px-8 py-8 pb-32">
+      <div className="min-w-0 flex-1 overflow-auto">
+        <div
+          className={clsx(
+            'mx-auto px-8 py-8 pb-32',
+            activeTab === 'ai' ? 'max-w-5xl' : activeTab === 'platforms' ? 'max-w-3xl' : 'max-w-2xl'
+          )}
+        >
           <form onSubmit={handleSave} className="space-y-10">
 
             {/* General Tab */}
@@ -5338,14 +6562,14 @@ export function Settings({
                 setFormData={setFormData}
                 notificationSettings={notificationSettings}
                 setNotificationSettings={setNotificationSettings}
-                notificationPermissionState={notificationPermissionState}
-                notificationStatusMessage={notificationStatusMessage}
                 handleTestNotificationSound={handleTestNotificationSound}
-                handleRequestNotificationPermission={handleRequestNotificationPermission}
-                handleSendTestSystemNotification={handleSendTestSystemNotification}
                 handlePickWorkspaceDir={handlePickWorkspaceDir}
                 handleResetWorkspaceDir={handleResetWorkspaceDir}
-                handleOpenKnowledgeApiGuide={handleOpenKnowledgeApiGuide}
+                fileIndexDashboard={fileIndexDashboard}
+                fileIndexLoading={isFileIndexDashboardLoading}
+                handleRefreshFileIndexDashboard={async () => {
+                  await loadFileIndexDashboard({ force: true });
+                }}
                 recentDebugLogs={recentDebugLogs}
                 isDebugLogsLoading={isDebugLogsLoading}
                 handleRefreshDebugLogs={loadRecentDebugLogs}
@@ -5353,17 +6577,51 @@ export function Settings({
                 logStatus={logStatus}
                 pendingReports={pendingDiagnosticReports}
                 diagnosticsActionBusy={diagnosticsActionBusy}
-                handleExportDiagnosticBundle={handleExportDiagnosticBundle}
                 handleOpenFeedbackReport={handleOpenFeedbackReport}
+                handleExportDiagnosticBundle={handleExportDiagnosticBundle}
                 handleUploadPendingReport={handleUploadPendingReport}
                 handleDismissPendingReport={handleDismissPendingReport}
                 handleVersionTap={handleVersionTap}
+                handleShowCurrentReleaseNotes={handleShowCurrentReleaseNotes}
                 handleOpenDownloadPage={handleOpenDownloadPage}
-                fileIndexDashboard={fileIndexDashboard}
-                fileIndexLoading={isFileIndexDashboardLoading}
-                handleRefreshFileIndexDashboard={async () => {
-                  await loadFileIndexDashboard({ force: true });
-                }}
+                handleOpenAppOnboarding={onOpenAppOnboarding}
+              />
+            )}
+
+            {/* Experimental Tab */}
+            {activeTab === 'experimental' && (
+              <ExperimentalSettingsSection
+                formData={formData}
+                setFormData={setFormData}
+              />
+            )}
+
+            {activeTab === 'remote' && (
+              <RemoteConnectionSettingsSection
+                assistantDaemonStatus={assistantDaemonStatus}
+                assistantDaemonDraft={assistantDaemonDraft}
+                setAssistantDaemonDraft={setAssistantDaemonDraft}
+                assistantDaemonLogs={assistantDaemonLogs}
+                assistantDaemonBusy={assistantDaemonBusy}
+                assistantDaemonAcpToken={assistantDaemonAcpToken}
+                assistantDaemonWeixinLogin={assistantDaemonWeixinLogin}
+                assistantDaemonWeixinLoginBusy={assistantDaemonWeixinLoginBusy}
+                handleReloadAssistantDaemonStatus={loadAssistantDaemonStatus}
+                handleSaveAssistantDaemonConfig={handleSaveAssistantDaemonConfig}
+                handleCreateAssistantDaemonAcpClient={handleCreateAssistantDaemonAcpClient}
+                handleRevokeAssistantDaemonAcpClient={handleRevokeAssistantDaemonAcpClient}
+                handleStartAssistantDaemon={handleStartAssistantDaemon}
+                handleStopAssistantDaemon={handleStopAssistantDaemon}
+                handleStartAssistantDaemonWeixinLogin={handleStartAssistantDaemonWeixinLogin}
+                handleCheckAssistantDaemonWeixinLogin={handleCheckAssistantDaemonWeixinLogin}
+                handleClearAssistantDaemonWeixinLogin={handleClearAssistantDaemonWeixinLogin}
+              />
+            )}
+
+            {activeTab === 'platforms' && (
+              <EcommercePlatformsSettingsSection
+                settings={ecommercePlatformsSettings}
+                onTogglePlatform={handleToggleEcommercePlatform}
               />
             )}
 
@@ -5372,55 +6630,47 @@ export function Settings({
               <div className="space-y-10">
                 {/* LLM Connection Config */}
                 <section className="space-y-6">
-                  <h2 className="text-lg font-medium text-text-primary mb-6">AI 模型设置</h2>
-
-                  <div className="flex justify-center">
-                    <div className="inline-flex items-center rounded-full border border-border bg-surface-secondary/40 p-1 shadow-sm">
-                      <button
-                        type="button"
-                        onClick={() => setAiModelSubTab('custom')}
-                        className={clsx(
-                          'px-6 py-2 text-xs rounded-full transition-colors',
-                          aiModelSubTab === 'custom'
-                            ? 'bg-surface-primary text-text-primary border border-border shadow-sm'
-                            : 'text-text-secondary hover:text-text-primary'
-                        )}
-                      >
-                        自定义
-                      </button>
-                      {officialAiPanelEnabled && (
-                        <button
-                          type="button"
-                          onClick={() => setAiModelSubTab('login')}
-                          className={clsx(
-                            'px-6 py-2 text-xs rounded-full transition-colors',
-                            aiModelSubTab === 'login'
-                              ? 'bg-surface-primary text-text-primary border border-border shadow-sm'
-                              : 'text-text-secondary hover:text-text-primary'
-                          )}
-                        >
-                          官方账号
-                        </button>
+                  {officialAiPanelEnabled && (
+                    <div ref={officialAiPanelRef} className="space-y-4 scroll-mt-6">
+                      {OfficialAiPanelComponent ? (
+                        <OfficialAiPanelComponent
+                          onReloadSettings={reloadCustomAiSettings}
+                          onOpenPricing={handleOpenAiPricing}
+                        />
+                      ) : (
+                        <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 text-sm text-text-tertiary">
+                          正在加载账号信息...
+                        </div>
                       )}
                     </div>
-                  </div>
+                  )}
 
-                  <>
-                  {aiModelSubTab === 'custom' && (
-                  <>
+                  <div className="rounded-xl border border-border bg-surface-secondary/20 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setShowAiModelSettings((prev) => !prev)}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-secondary/40"
+                      aria-expanded={showAiModelSettings}
+                      aria-controls="ai-model-settings-panel"
+                    >
+                      <span className="text-sm font-medium text-text-primary">高级：自定义供应商</span>
+                      <ChevronDown className={clsx('h-4 w-4 text-text-tertiary transition-transform', showAiModelSettings && 'rotate-180')} />
+                    </button>
+
+                    {showAiModelSettings && (
+                      <div id="ai-model-settings-panel" className="space-y-4 border-t border-border/70 p-4">
                   <div className="space-y-4">
                     <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <h3 className="text-sm font-medium text-text-primary">聊天供应商</h3>
-                        <p className="text-[11px] text-text-tertiary mt-1">
-                          支持多供应商、多模型，并可指定默认聊天供应商与默认模型。
-                        </p>
-                      </div>
+	                      <div>
+	                        <h3 className="text-sm font-medium text-text-primary">聊天供应商</h3>
+	                        <p className="text-[11px] text-text-tertiary mt-1">
+	                          支持多供应商、多模型；聊天能力在下方单独选择官方或自定义路由。
+	                        </p>
+	                      </div>
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
                           onClick={() => {
-                            setModelsBySource({});
                             setTestStatus('idle');
                             setTestMsg('');
                           }}
@@ -5439,131 +6689,10 @@ export function Settings({
                       </div>
                     </div>
 
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-[11px] font-medium text-text-secondary mb-1">默认聊天源</label>
-                          <AiSourceSelect
-                            value={defaultAiSourceId}
-                            sources={aiSources}
-                            onChange={(nextSourceId) => {
-                              markAiSourceDraftDirty();
-                              setDefaultAiSourceId(nextSourceId);
-                              setActiveAiSourceId(nextSourceId);
-                              setAiSourceExpandState((prev) => ({ ...prev, [nextSourceId]: true }));
-                            }}
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[11px] font-medium text-text-secondary mb-1">默认聊天模型</label>
-                          <AiModelSelect
-                            value={defaultAiSource?.model || ''}
-                            disabled={!defaultAiSource || defaultSourceModels.length === 0}
-                            onChange={(modelId) => {
-                              if (!defaultAiSource) return;
-                              handleSetSourceDefaultModel(defaultAiSource.id, modelId);
-                              setActiveAiSourceId(defaultAiSource.id);
-                            }}
-                            className="w-full"
-                            placeholder="请先为默认供应商添加模型"
-                            options={defaultSourceModels.map((model) => ({
-                              id: model.id,
-                              label: model.id,
-                              badges: buildModelCapabilityBadges(model.capabilities),
-                              inputIcons: buildModelInputIcons(model.inputCapabilities),
-                            }))}
-                          />
-                        </div>
-                      </div>
-
-                      <p className={clsx(
-                        'text-[11px]',
-                        defaultOfficialSourceUnavailable ? 'text-amber-600' : 'text-text-tertiary'
-                      )}>
-                        {defaultOfficialSourceUnavailable
-                          ? '当前官方供应商未登录，请重新登录或切换到其他默认聊天供应商。'
-                          : `当前生效：${defaultAiSource?.name || '未设置'} / ${defaultAiSource?.model || '未设置'}`}
-                      </p>
-                    </div>
-
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 overflow-hidden">
-                      <button
-                        type="button"
-                        onClick={() => setShowScopedModelOverrides((prev) => !prev)}
-                        className="w-full px-3 py-2.5 flex items-center justify-between hover:bg-surface-secondary/40 transition-colors"
-                      >
-                        <span className="text-sm font-medium text-text-primary">高级：页面模型覆盖（可选）</span>
-                        <span className="flex items-center gap-2 text-[11px] text-text-tertiary">
-                          已设置 {scopedModelOverridesCount} 项
-                          <ChevronDown className={clsx('w-4 h-4 transition-transform', showScopedModelOverrides && 'rotate-180')} />
-                        </span>
-                      </button>
-
-                      {showScopedModelOverrides && (
-                        <div className="px-3 pb-3 space-y-3 border-t border-border/70">
-                          <p className="text-[11px] text-text-tertiary pt-3">
-                            留空表示跟随“默认聊天模型”。此配置面向高级用户，分别作用于漫步、团队、知识库、RedClaw。
-                          </p>
-                          <datalist id="scoped-model-candidates">
-                            {allConfiguredModels.map((modelId) => (
-                              <option key={modelId} value={modelId} />
-                            ))}
-                          </datalist>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            <div className="space-y-1">
-                              <label className="text-[11px] text-text-secondary">漫步默认模型</label>
-                              <input
-                                type="text"
-                                list="scoped-model-candidates"
-                                value={formData.model_name_wander}
-                                onChange={(e) => setFormData((d) => ({ ...d, model_name_wander: e.target.value }))}
-                                placeholder="留空跟随默认模型"
-                                className="w-full bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[11px] text-text-secondary">团队默认模型</label>
-                              <input
-                                type="text"
-                                list="scoped-model-candidates"
-                                value={formData.model_name_chatroom}
-                                onChange={(e) => setFormData((d) => ({ ...d, model_name_chatroom: e.target.value }))}
-                                placeholder="留空跟随默认模型"
-                                className="w-full bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[11px] text-text-secondary">知识库默认模型</label>
-                              <input
-                                type="text"
-                                list="scoped-model-candidates"
-                                value={formData.model_name_knowledge}
-                                onChange={(e) => setFormData((d) => ({ ...d, model_name_knowledge: e.target.value }))}
-                                placeholder="留空跟随默认模型"
-                                className="w-full bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[11px] text-text-secondary">RedClaw 默认模型</label>
-                              <input
-                                type="text"
-                                list="scoped-model-candidates"
-                                value={formData.model_name_redclaw}
-                                onChange={(e) => setFormData((d) => ({ ...d, model_name_redclaw: e.target.value }))}
-                                placeholder="留空跟随默认模型"
-                                className="w-full bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-2 space-y-2">
-                      {displayedAiSources.map((source) => {
-                        const preset = findAiPresetById(source.presetId);
-                        const isDefaultSource = source.id === defaultAiSourceId;
-                        const isExpanded = aiSourceExpandState[source.id] ?? false;
+	                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-2 space-y-2">
+	                      {displayedAiSources.length ? displayedAiSources.map((source) => {
+	                        const preset = findAiPresetById(source.presetId);
+	                        const isExpanded = aiSourceExpandState[source.id] ?? false;
                         const isOfficialSource = isOfficialManagedSource(source);
                         const isOfficialPlaceholder = isOfficialSource && !hasOfficialManagedSource;
                         const isModelListExpanded = aiSourceModelExpandState[source.id] ?? false;
@@ -5590,15 +6719,9 @@ export function Settings({
                               </button>
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2 min-w-0">
-                                  <AiSourceLogo source={source} />
-                                  <span className="text-sm font-medium text-text-primary truncate">{source.name || '未命名供应商'}</span>
-                                  {isDefaultSource && !isOfficialPlaceholder && !isOfficialSourceUnavailable && (
-                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-600">
-                                      <Star className="w-2.5 h-2.5" />
-                                      默认
-                                    </span>
-                                  )}
-                                </div>
+	                                  <AiSourceLogo source={source} />
+	                                  <span className="text-sm font-medium text-text-primary truncate">{source.name || '未命名供应商'}</span>
+	                                </div>
                                 <p className="text-[11px] text-text-tertiary mt-0.5 truncate">
                                   {isOfficialSource
                                     ? isOfficialSourcePending
@@ -5612,32 +6735,16 @@ export function Settings({
                               {isOfficialSourceUnavailable ? (
                                 <button
                                   type="button"
-                                  onClick={() => setAiModelSubTab('login')}
+                                  onClick={() => setShowAiModelSettings(false)}
                                   className="px-2 py-1 text-[11px] border rounded transition-colors border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary"
                                   disabled={isOfficialSourcePending}
                                 >
-                                  {isOfficialSourcePending ? '检查中' : '去登录'}
+                                  {isOfficialSourcePending ? '检查中' : '查看账号'}
                                 </button>
-                              ) : (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      markAiSourceDraftDirty();
-                                      setDefaultAiSourceId(source.id);
-                                      setActiveAiSourceId(source.id);
-                                    }}
-                                    className={clsx(
-                                      'px-2 py-1 text-[11px] border rounded transition-colors',
-                                      isDefaultSource
-                                        ? 'border-amber-500/40 text-amber-600 bg-amber-500/10'
-                                        : 'border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
-                                    )}
-                                  >
-                                    设为默认
-                                  </button>
-                                  {!isOfficialSource && (
-                                    <button
+	                              ) : (
+	                                <>
+	                                  {!isOfficialSource && (
+	                                    <button
                                       type="button"
                                       onClick={() => handleDeleteAiSource(source.id)}
                                       className="p-1.5 text-text-tertiary hover:text-red-500 hover:bg-red-500/10 rounded transition-colors"
@@ -5677,10 +6784,10 @@ export function Settings({
                                     {!isOfficialSourcePending && (
                                       <button
                                         type="button"
-                                        onClick={() => setAiModelSubTab('login')}
+                                        onClick={() => setShowAiModelSettings(false)}
                                         className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
                                       >
-                                        前往登录
+                                        查看账号
                                       </button>
                                     )}
                                   </div>
@@ -5770,7 +6877,7 @@ export function Settings({
                                   <div className="rounded border border-dashed border-border px-2.5 py-2 text-[11px] text-text-tertiary">
                                     {isOfficialSourcePending
                                       ? '正在等待官方账号状态检查完成。'
-                                      : '请先重新登录，登录后会自动同步官方模型列表。'}
+                                      : '请先重新登录，登录后会同步官方模型配置。'}
                                   </div>
                                 ) : (
                                   <div className="rounded border border-border bg-surface-secondary/20 p-2.5 space-y-2">
@@ -5790,18 +6897,6 @@ export function Settings({
                                           className="px-2 py-1 text-[11px] border border-border rounded hover:bg-surface-secondary transition-colors"
                                         >
                                           添加模型
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setActiveAiSourceId(source.id);
-                                            void fetchModelsForSource(source, { manual: true });
-                                          }}
-                                          disabled={Boolean(fetchingModelsBySourceId[source.id])}
-                                          className="flex items-center gap-1 px-2 py-1 text-[11px] border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
-                                        >
-                                          <RefreshCw className={clsx('w-3 h-3', fetchingModelsBySourceId[source.id] && 'animate-spin')} />
-                                          拉取候选
                                         </button>
                                       </div>
                                     </div>
@@ -5895,19 +6990,58 @@ export function Settings({
                             )}
                           </div>
                         );
-                      })}
+                      }) : (
+                        <div className="rounded-lg border border-dashed border-border px-3 py-3 text-xs text-text-tertiary">
+                          暂无供应商，请先点击“添加供应商”。
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="text-sm font-medium text-text-primary">转录模型设置</h3>
-                      <span className="text-[11px] text-text-tertiary">选择已保存的供应商与模型</span>
-                    </div>
+	                    <div className="pt-4 border-t border-border">
+	                      {renderCompactModelRouteRow(
+	                        '聊天',
+	                        renderCompactRouteControls('chat', [
+	                          { mode: 'official', label: '官方' },
+	                          { mode: 'custom', label: '自定义', disabled: customAiSources.length === 0 },
+	                        ]),
+	                        aiModelRoutes.chat.mode === 'official'
+	                          ? renderOfficialRouteModelField('chat', '选择聊天模型')
+	                          : renderCustomRouteFields(
+	                            aiModelRoutes.chat.sourceId || firstCustomAiSource?.id || '',
+	                            customAiSources,
+	                            (nextSourceId) => {
+	                              const normalizedSourceId = canonicalizeOfficialAutoSourceId(nextSourceId);
+	                              const source = getAiSourceById(normalizedSourceId) || firstCustomAiSource;
+	                              const model = pickBestModelForSource(source, aiModelRoutes.chat.model, 'chat');
+	                              updateAiModelRoute('chat', {
+	                                mode: 'custom',
+	                                sourceId: source?.id || normalizedSourceId,
+	                                model,
+	                              });
+	                              if (source?.id) {
+	                                setActiveAiSourceId(source.id);
+	                                setAiSourceExpandState((prev) => ({ ...prev, [source.id]: true }));
+	                              }
+	                              setFormData((prev) => ({ ...prev, model_name: model }));
+	                            },
+	                            currentRouteModelValue('chat'),
+	                            chatRouteSourceModels,
+	                            (modelId) => applyRouteModel('chat', modelId),
+	                            '请选择聊天模型',
+	                            !chatRouteSource || chatRouteSourceModels.length === 0,
+	                          )
+	                      )}
+	                    </div>
+
+
+
+                  <div className="pt-4 border-t border-border space-y-3">
+                    <h3 className="text-sm font-medium text-text-primary">转录模型设置</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div className="group">
                         <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                          转录供应商
+                          供应商
                         </label>
                         <AiSourceSelect
                           value={transcriptionSourceId}
@@ -5918,7 +7052,7 @@ export function Settings({
                       </div>
                       <div className="group">
                         <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                          转录模型
+                          模型
                         </label>
                         <AiModelSelect
                           value={formData.transcription_model}
@@ -5930,24 +7064,19 @@ export function Settings({
                             inputIcons: buildModelInputIcons(model.inputCapabilities),
                           }))}
                           disabled={!transcriptionSourceModels.length}
-                          placeholder="请先在该源中添加模型"
+                          placeholder="请先在该供应商中添加模型"
                           className="w-full"
                         />
                       </div>
                     </div>
-                    <p className="text-[11px] text-text-tertiary">
-                      转录会自动复用所选供应商的 Endpoint 与 API Key。
-                    </p>
                   </div>
 
-                  <div className="pt-4 border-t border-border">
-                    <h3 className="text-sm font-medium text-text-primary mb-4">Embedding 模型设置</h3>
-
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
+                  <div className="pt-4 border-t border-border space-y-3">
+                    <h3 className="text-sm font-medium text-text-primary">Embedding 模型设置</h3>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <div className="group">
                           <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            Embedding 供应商
+                            供应商
                           </label>
                           <AiSourceSelect
                             value={embeddingSourceId}
@@ -5958,14 +7087,14 @@ export function Settings({
                         </div>
                         <div className="group">
                           <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            Embedding 模型
+                            模型
                           </label>
                           <AiModelSelect
                             value={formData.embedding_model}
                             onChange={(modelId) => setFormData((d) => ({ ...d, embedding_model: modelId }))}
                             className="w-full"
                             disabled={!embeddingSourceModels.length}
-                            placeholder="请先在该源中添加模型"
+                            placeholder="请先在该供应商中添加模型"
                             options={embeddingSourceModels.map((model) => ({
                               id: model.id,
                               label: model.id,
@@ -5975,32 +7104,25 @@ export function Settings({
                           />
                         </div>
                       </div>
-                      <p className="text-[11px] text-text-tertiary">
-                        Embedding 会自动复用所选供应商的 Endpoint 与 API Key。
-                      </p>
-                    </div>
                   </div>
 
-                  <div className="pt-4 border-t border-border">
-                    <h3 className="text-sm font-medium text-text-primary mb-4">生图模型设置</h3>
-
-                    <div className="space-y-4">
-                      <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
+                  <div className="pt-4 border-t border-border space-y-3">
+                    <h3 className="text-sm font-medium text-text-primary">生图模型设置</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div className="group">
                             <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                              生图供应商
+                              供应商
                             </label>
                             <AiSourceSelect
                               value={imageSourceId}
-                              sources={aiSources}
+                              sources={displayedAiSources}
                               onChange={(nextSourceId) => handleLinkedSourceChange('image', nextSourceId)}
                               className="w-full"
                             />
                           </div>
                           <div className="group">
                             <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                              生图模型
+                              模型
                             </label>
                             <AiModelSelect
                               value={formData.image_model}
@@ -6019,37 +7141,163 @@ export function Settings({
                             />
                           </div>
                         </div>
-                        <p className="text-[11px] text-text-tertiary">
-                          生图会自动复用所选供应商的 Endpoint 与 API Key；模型的增删请到上方对应供应商卡片中管理。
-                        </p>
+                  </div>
+
+                  <div className="pt-4 border-t border-border space-y-3">
+                    <h3 className="text-sm font-medium text-text-primary">TTS 模型设置</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="group">
+                        <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                          供应商
+                        </label>
+                        <AiSourceSelect
+                          value={voiceSourceId}
+                          sources={displayedAiSources}
+                          onChange={(nextSourceId) => handleLinkedSourceChange('voice', nextSourceId)}
+                          className="w-full"
+                        />
+                      </div>
+                      <div className="group">
+                        <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                          模型
+                        </label>
+                        <AiModelSelect
+                          value={formData.voice_tts_model}
+                          onChange={(modelId) => applyRouteModel('voiceTts', modelId)}
+                          className="w-full"
+                          disabled={!voiceTtsSourceModels.length}
+                          placeholder="请先在该供应商中添加 TTS 模型"
+                          options={voiceTtsSourceModels.map((model) => ({
+                            id: model.id,
+                            label: model.id,
+                            badges: buildModelCapabilityBadges(model.capabilities),
+                            inputIcons: buildModelInputIcons(model.inputCapabilities),
+                          }))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-border">
+                    <div className="mb-4">
+                      <h3 className="text-sm font-medium text-text-primary">知识库视觉索引模型</h3>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="group">
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                            供应商
+                          </label>
+                          <AiSourceSelect
+                            value={visualIndexSourceId}
+                            sources={aiSources}
+                            onChange={(nextSourceId) => handleLinkedSourceChange('visual', nextSourceId)}
+                            className="w-full"
+                          />
+                        </div>
+                        <div className="group">
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                            模型
+                          </label>
+                          <AiModelSelect
+                            value={formData.visual_index_model}
+                            onChange={(modelId) => setFormData((d) => ({ ...d, visual_index_model: modelId }))}
+                            className="w-full"
+                            disabled={!visualIndexSourceModels.length}
+                            placeholder="请先在该供应商中添加支持图片输入的模型"
+                            options={visualIndexSourceModels.map((model) => ({
+                              id: model.id,
+                              label: model.id,
+                              badges: buildModelCapabilityBadges(model.capabilities),
+                              inputIcons: buildModelInputIcons(model.inputCapabilities),
+                            }))}
+                          />
+                        </div>
                       </div>
 
                     </div>
                   </div>
 
                   <div className="pt-4 border-t border-border">
-                    <h3 className="text-sm font-medium text-text-primary mb-4">生视频模型设置</h3>
+                    <div className="mb-4">
+                      <h3 className="text-sm font-medium text-text-primary">视频分析专用模型</h3>
+                    </div>
 
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
-                      <div className="rounded-lg border border-border bg-surface-primary/70 p-3 text-xs text-text-secondary">
-                        由于各家视频 API 差异巨大，AI 智能选择效果不佳，暂时仅支持 RedBox 官方供应商，其他厂商模型适配陆续开发中。
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="group">
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                            供应商
+                          </label>
+                          <AiSourceSelect
+                            value={videoAnalysisSourceId}
+                            sources={aiSources}
+                            onChange={(nextSourceId) => handleLinkedSourceChange('videoAnalysis', nextSourceId)}
+                            className="w-full"
+                          />
+                        </div>
+                        <div className="group">
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                            模型
+                          </label>
+                          <AiModelSelect
+                            value={formData.video_analysis_model}
+                            onChange={(modelId) => setFormData((d) => ({ ...d, video_analysis_model: modelId }))}
+                            className="w-full"
+                            disabled={!videoAnalysisSourceModels.length}
+                            placeholder="请先在该供应商中添加支持视频输入的模型"
+                            options={videoAnalysisSourceModels.map((model) => ({
+                              id: model.id,
+                              label: model.id,
+                              badges: buildModelCapabilityBadges(model.capabilities),
+                              inputIcons: buildModelInputIcons(model.inputCapabilities),
+                            }))}
+                          />
+                        </div>
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <div className="rounded-lg border border-border bg-surface-primary/70 p-3">
-                          <div className="text-[11px] text-text-tertiary mb-1">文生视频</div>
-                          <div className="text-sm font-medium text-text-primary">{REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video']}</div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">直传上限（bytes）</label>
+                          <input
+                            type="number"
+                            min={1048576}
+                            max={536870912}
+                            value={formData.video_analysis_max_direct_video_bytes}
+                            onChange={(e) => setFormData((d) => ({ ...d, video_analysis_max_direct_video_bytes: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                          />
                         </div>
-                        <div className="rounded-lg border border-border bg-surface-primary/70 p-3">
-                          <div className="text-[11px] text-text-tertiary mb-1">参考图视频</div>
-                          <div className="text-sm font-medium text-text-primary">{REDBOX_OFFICIAL_VIDEO_MODELS['reference-guided']}</div>
-                        </div>
-                        <div className="rounded-lg border border-border bg-surface-primary/70 p-3">
-                          <div className="text-[11px] text-text-tertiary mb-1">图片/首尾帧视频</div>
-                          <div className="text-sm font-medium text-text-primary">{REDBOX_OFFICIAL_VIDEO_MODELS['first-last-frame']}</div>
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">协议</label>
+                          <input
+                            value={formData.video_analysis_protocol}
+                            onChange={(e) => setFormData((d) => ({ ...d, video_analysis_protocol: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                          />
                         </div>
                       </div>
                     </div>
                   </div>
+
+                  <div className="pt-4 border-t border-border space-y-3">
+                    <h3 className="text-sm font-medium text-text-primary">生视频模型设置</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                          <div className="text-[11px] text-text-tertiary mb-1">文生视频</div>
+                          <div className="text-sm font-medium text-text-primary">{REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video']}</div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-text-tertiary mb-1">参考图视频</div>
+                          <div className="text-sm font-medium text-text-primary">{REDBOX_OFFICIAL_VIDEO_MODELS['reference-guided']}</div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-text-tertiary mb-1">图片/首尾帧视频</div>
+                          <div className="text-sm font-medium text-text-primary">{REDBOX_OFFICIAL_VIDEO_MODELS['first-last-frame']}</div>
+                        </div>
+                    </div>
+                  </div>
+
 
                   <div className="pt-4 border-t border-border">
                     <h3 className="text-sm font-medium text-text-primary mb-4">聊天输出上限（max_tokens）</h3>
@@ -6099,7 +7347,7 @@ export function Settings({
                   </div>
 
                   <div className="pt-4 border-t border-border">
-                    <h3 className="text-sm font-medium text-text-primary mb-4">RedClaw 上下文压缩策略</h3>
+                    <h3 className="text-sm font-medium text-text-primary mb-4">{APP_BRAND.aiDisplayName} 上下文压缩策略</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div className="group">
                         <label className="block text-xs font-medium text-text-secondary mb-1.5">
@@ -6114,20 +7362,20 @@ export function Settings({
                           className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
                         />
                         <p className="mt-1 text-[11px] text-text-tertiary">
-                          默认 256000。RedClaw 对话预计上下文超过该值时会自动 compact。
+                          默认 256000。{APP_BRAND.aiDisplayName} 对话预计上下文超过该值时会自动 compact。
                         </p>
                       </div>
                     </div>
                   </div>
 
                   <div className="pt-4 border-t border-border">
-                    <h3 className="text-sm font-medium text-text-primary mb-4">漫步模式</h3>
+                    <h3 className="text-sm font-medium text-text-primary mb-4">选题中心模式</h3>
                     <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
                       <div className="flex items-start justify-between gap-4">
                         <div>
                           <h4 className="text-sm font-medium text-text-primary">多选题模式</h4>
                           <p className="text-xs text-text-tertiary mt-1.5 leading-relaxed">
-                            漫步默认使用 Agent Runtime。关闭时每次生成 1 个方向；开启后每次基于同样素材一次性生成 3 个方向供选择。
+                            选题中心默认使用 Agent Runtime。关闭时每次生成 1 个方向；开启后每次基于同样素材一次性生成 3 个方向供选择。
                           </p>
                         </div>
                         <button
@@ -6142,48 +7390,524 @@ export function Settings({
                       </div>
                     </div>
                   </div>
-                  </>
-                  )}
-                  {officialAiPanelEnabled && (
-                    <div className={aiModelSubTab === 'login' ? 'space-y-4' : 'hidden'} aria-hidden={aiModelSubTab !== 'login'}>
-                      {OfficialAiPanelComponent ? (
-                        <OfficialAiPanelComponent onReloadSettings={reloadCustomAiSettings} />
-                      ) : (
-                        <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 text-sm text-text-tertiary">
-                          正在加载官方账号面板...
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  </>
+                      </div>
+                    )}
+                  </div>
 
                 </section>
               </div>
             )}
 
-            {/* Team Tab */}
             {activeTab === 'team' && (
               <TeamSettingsSection
                 advisors={teamAdvisors}
                 loading={isTeamAdvisorsLoading}
                 busyAdvisorId={teamAdvisorBusyId}
                 draggingAdvisorId={draggingTeamAdvisorId}
-                onCreateAdvisor={openTeamCreatePage}
+                onCreateAdvisor={handleCreateTeamAdvisor}
                 onToggleVisible={handleToggleTeamAdvisorVisible}
-                onOpenManager={openTeamMembersPage}
-                onRefresh={() => void loadTeamAdvisors()}
+                onOpenSettings={handleOpenTeamAdvisorSettings}
                 onDragStart={handleTeamAdvisorDragStart}
                 onDragOver={handleTeamAdvisorDragOver}
                 onDragEnd={handleTeamAdvisorDragEnd}
               />
             )}
 
-            {/* Ecommerce Platforms Tab */}
-            {activeTab === 'platforms' && (
-              <EcommercePlatformsSettingsSection
-                settings={ecommercePlatformsSettings}
-                onTogglePlatform={handleToggleEcommercePlatform}
-              />
+            {activeTab === 'skills' && (
+              <div className="space-y-6">
+                <section className="space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-medium text-text-primary">技能</h2>
+                      <p className="mt-1 text-xs text-text-tertiary">管理当前可用技能。内置技能由系统依赖，始终保持打开。</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={openSkillMarketplace}
+                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
+                      >
+                        <Store className="h-3.5 w-3.5" />
+                        技能市场
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void loadSettingsSkills()}
+                        disabled={isSettingsSkillsLoading}
+                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                      >
+                        <RefreshCw className={clsx('h-3.5 w-3.5', isSettingsSkillsLoading && 'animate-spin')} />
+                        刷新
+                      </button>
+                    </div>
+                  </div>
+
+                  {settingsSkillStatusMessage && (
+                    <div className="rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-xs text-text-secondary">
+                      {settingsSkillStatusMessage}
+                    </div>
+                  )}
+                </section>
+
+                <section className="overflow-hidden rounded-xl border border-border bg-surface-primary">
+                  {isSettingsSkillsLoading && settingsSkills.length === 0 ? (
+                    <div className="flex items-center gap-2 px-4 py-5 text-sm text-text-tertiary">
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                      正在读取技能
+                    </div>
+                  ) : settingsSkills.length === 0 ? (
+                    <div className="px-4 py-5 text-sm text-text-tertiary">暂无技能</div>
+                  ) : (
+                    <div className="divide-y divide-border">
+                      {builtinSettingsSkills.length > 0 && (
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => setAreBuiltinSkillsExpanded((value) => !value)}
+                            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-secondary/40"
+                            aria-expanded={areBuiltinSkillsExpanded}
+                          >
+                            <div className="min-w-0">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <ChevronDown className={clsx(
+                                  'h-4 w-4 shrink-0 text-text-tertiary transition-transform',
+                                  !areBuiltinSkillsExpanded && '-rotate-90'
+                                )} />
+                                <span className="text-sm font-medium text-text-primary">内置技能</span>
+                                <span className="rounded-full bg-accent-primary/10 px-2 py-0.5 text-[10px] font-medium text-accent-primary">
+                                  {builtinSettingsSkills.length}
+                                </span>
+                              </div>
+                            </div>
+                            <span className="shrink-0 text-xs text-text-tertiary">
+                              {areBuiltinSkillsExpanded ? '收起' : '展开'}
+                            </span>
+                          </button>
+                          {areBuiltinSkillsExpanded && (
+                            <div className="divide-y divide-border border-t border-border bg-surface-secondary/10">
+                              {builtinSettingsSkills.map(renderSettingsSkillRow)}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {editableSettingsSkills.map(renderSettingsSkillRow)}
+                    </div>
+                  )}
+                </section>
+
+                {isSkillMarketplaceOpen && (
+                  <div
+                    className="fixed inset-0 z-[140] flex items-center justify-center bg-black/45 px-5 py-6"
+                    onMouseDown={() => setIsSkillMarketplaceOpen(false)}
+                  >
+                    <div
+                      className="flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-surface-primary shadow-2xl"
+                      onMouseDown={(event) => event.stopPropagation()}
+                    >
+                      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+                        <h3 className="text-sm font-medium text-text-primary">技能市场</h3>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void loadSkillMarketplace()}
+                            disabled={isSkillMarketplaceLoading}
+                            className="flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                          >
+                            <RefreshCw className={clsx('h-3 w-3', isSkillMarketplaceLoading && 'animate-spin')} />
+                            刷新
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsSkillMarketplaceOpen(false)}
+                            className="flex h-8 w-8 items-center justify-center rounded border border-border text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                            aria-label="关闭"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="min-h-0 flex-1 overflow-auto">
+                        {isSkillMarketplaceLoading && skillMarketplaceItems.length === 0 ? (
+                          <div className="flex items-center gap-2 px-4 py-6 text-xs text-text-tertiary">
+                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            正在读取市场
+                          </div>
+                        ) : skillMarketplaceItems.length === 0 ? (
+                          <div className="px-4 py-8 text-center text-xs text-text-tertiary">市场暂无技能</div>
+                        ) : (
+                          <div className="divide-y divide-border">
+                            {skillMarketplaceItems.map((skill) => {
+                              const busy = skillMarketplaceBusyId === skill.id;
+                              return (
+                                <div key={`${skill.repo}:${skill.id}`} className="px-4 py-3">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <div className="truncate text-sm font-medium text-text-primary">{skill.name}</div>
+                                        {skill.installed ? (
+                                          <span className="rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-500">已安装</span>
+                                        ) : null}
+                                      </div>
+                                      <div className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
+                                        {skill.description || skill.repo}
+                                      </div>
+                                      <div className="mt-2 flex flex-wrap gap-1.5">
+                                        <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{skill.id}</span>
+                                        <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{skill.repo}</span>
+                                      </div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleInstallMarketplaceSkill(skill)}
+                                      disabled={busy || Boolean(skill.installed)}
+                                      className="flex shrink-0 items-center gap-1.5 rounded bg-accent-primary px-2.5 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                                    >
+                                      <Download className="h-3 w-3" />
+                                      {skill.installed ? '已安装' : busy ? '安装中' : '安装'}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'mcp' && (
+              <div className="space-y-6">
+                {mcpDraft ? (
+                  <section className="mx-auto max-w-3xl space-y-4">
+                    <button
+                      type="button"
+                      onClick={handleCancelMcpDraft}
+                      className="inline-flex items-center gap-1 text-xs text-text-tertiary transition-colors hover:text-text-primary"
+                    >
+                      <ArrowLeft className="h-3.5 w-3.5" />
+                      返回
+                    </button>
+                    <div>
+                      <h2 className="text-xl font-medium text-text-primary">
+                        {mcpDraftOriginalId ? '编辑 MCP Server' : '连接至自定义 MCP'}
+                      </h2>
+                    </div>
+                    <div className="overflow-hidden rounded-xl border border-border bg-surface-primary">
+                      <div className="space-y-3 border-b border-border p-3">
+                        <label className="block text-xs font-medium text-text-secondary">名称</label>
+                        <input
+                          value={mcpDraft.name}
+                          onChange={(event) => setMcpDraft((draft) => draft ? { ...draft, name: event.target.value } : draft)}
+                          placeholder="MCP server name"
+                          className="w-full rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                        />
+                        <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-border bg-surface-secondary/20 p-0.5">
+                          {([
+                            ['stdio', 'STDIO'],
+                            ['streamable-http', '流式 HTTP'],
+                          ] as const).map(([transport, label]) => (
+                            <button
+                              key={transport}
+                              type="button"
+                              onClick={() => setMcpDraft((draft) => draft ? { ...draft, transport } : draft)}
+                              className={clsx(
+                                'rounded-md px-3 py-2 text-xs font-medium transition-colors',
+                                mcpDraft.transport === transport
+                                  ? 'bg-surface-primary text-text-primary shadow-sm'
+                                  : 'text-text-tertiary hover:text-text-primary'
+                              )}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {mcpDraft.transport === 'stdio' ? (
+                        <>
+                          <div className="space-y-3 border-b border-border p-3">
+                            <label className="block text-xs font-medium text-text-secondary">启动命令</label>
+                            <input
+                              value={mcpDraft.command || ''}
+                              onChange={(event) => setMcpDraft((draft) => draft ? { ...draft, command: event.target.value } : draft)}
+                              placeholder="openai-dev-mcp"
+                              className="w-full rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                            />
+                          </div>
+                          <div className="space-y-2 border-b border-border p-3">
+                            <label className="block text-xs font-medium text-text-secondary">参数</label>
+                            {(mcpDraft.args && mcpDraft.args.length ? mcpDraft.args : ['']).map((arg, index) => (
+                              <div key={index} className="flex items-center gap-2">
+                                <input
+                                  value={arg}
+                                  onChange={(event) => setMcpDraft((draft) => {
+                                    if (!draft) return draft;
+                                    const args = [...(draft.args && draft.args.length ? draft.args : [''])];
+                                    args[index] = event.target.value;
+                                    return { ...draft, args };
+                                  })}
+                                  className="min-w-0 flex-1 rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setMcpDraft((draft) => draft ? { ...draft, args: (draft.args || []).filter((_, itemIndex) => itemIndex !== index) } : draft)}
+                                  className="rounded-md p-2 text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-red-600"
+                                  aria-label="删除参数"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => setMcpDraft((draft) => draft ? { ...draft, args: [...(draft.args || []), ''] } : draft)}
+                              className="w-full rounded-lg bg-surface-secondary/40 px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
+                            >
+                              + 添加参数
+                            </button>
+                          </div>
+                          <div className="space-y-2 border-b border-border p-3">
+                            <label className="block text-xs font-medium text-text-secondary">环境变量</label>
+                            {Object.entries(mcpDraft.env && Object.keys(mcpDraft.env).length ? mcpDraft.env : { '': '' }).map(([key, value], index) => (
+                              <div key={`${key}:${index}`} className="flex items-center gap-2">
+                                <input
+                                  value={key}
+                                  onChange={(event) => setMcpDraft((draft) => {
+                                    if (!draft) return draft;
+                                    const entries = Object.entries(draft.env || {});
+                                    entries[index] = [event.target.value, entries[index]?.[1] || ''];
+                                    return { ...draft, env: Object.fromEntries(entries) };
+                                  })}
+                                  placeholder="键"
+                                  className="min-w-0 flex-1 rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                                />
+                                <input
+                                  value={value}
+                                  onChange={(event) => setMcpDraft((draft) => {
+                                    if (!draft) return draft;
+                                    const entries = Object.entries(draft.env || {});
+                                    entries[index] = [entries[index]?.[0] || '', event.target.value];
+                                    return { ...draft, env: Object.fromEntries(entries) };
+                                  })}
+                                  placeholder="值"
+                                  className="min-w-0 flex-1 rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setMcpDraft((draft) => {
+                                    if (!draft) return draft;
+                                    const entries = Object.entries(draft.env || {}).filter((_, itemIndex) => itemIndex !== index);
+                                    return { ...draft, env: Object.fromEntries(entries) };
+                                  })}
+                                  className="rounded-md p-2 text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-red-600"
+                                  aria-label="删除环境变量"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => setMcpDraft((draft) => draft ? { ...draft, env: { ...(draft.env || {}), '': '' } } : draft)}
+                              className="w-full rounded-lg bg-surface-secondary/40 px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
+                            >
+                              + 添加环境变量
+                            </button>
+                          </div>
+                          <div className="space-y-2 border-b border-border p-3">
+                            <label className="block text-xs font-medium text-text-secondary">环境变量传递</label>
+                            {(mcpDraft.envPassthrough.length ? mcpDraft.envPassthrough : ['']).map((key, index) => (
+                              <div key={index} className="flex items-center gap-2">
+                                <input
+                                  value={key}
+                                  onChange={(event) => setMcpDraft((draft) => {
+                                    if (!draft) return draft;
+                                    const envPassthrough = [...(draft.envPassthrough.length ? draft.envPassthrough : [''])];
+                                    envPassthrough[index] = event.target.value;
+                                    return { ...draft, envPassthrough };
+                                  })}
+                                  className="min-w-0 flex-1 rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setMcpDraft((draft) => draft ? { ...draft, envPassthrough: draft.envPassthrough.filter((_, itemIndex) => itemIndex !== index) } : draft)}
+                                  className="rounded-md p-2 text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-red-600"
+                                  aria-label="删除传递变量"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => setMcpDraft((draft) => draft ? { ...draft, envPassthrough: [...draft.envPassthrough, ''] } : draft)}
+                              className="w-full rounded-lg bg-surface-secondary/40 px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
+                            >
+                              + 添加变量
+                            </button>
+                          </div>
+                          <div className="space-y-3 p-3">
+                            <label className="block text-xs font-medium text-text-secondary">工作目录</label>
+                            <input
+                              value={mcpDraft.cwd || ''}
+                              onChange={(event) => setMcpDraft((draft) => draft ? { ...draft, cwd: event.target.value } : draft)}
+                              placeholder="~/code"
+                              className="w-full rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="space-y-3 p-3">
+                          <label className="block text-xs font-medium text-text-secondary">URL</label>
+                          <input
+                            value={mcpDraft.url || ''}
+                            onChange={(event) => setMcpDraft((draft) => draft ? { ...draft, url: event.target.value } : draft)}
+                            placeholder="https://your-mcp-host/mcp"
+                            className="w-full rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveMcpDraft()}
+                        disabled={isSyncingMcp}
+                        className="rounded-lg bg-accent-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                      >
+                        保存
+                      </button>
+                    </div>
+                  </section>
+                ) : (
+                  <>
+                    <section className="space-y-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h2 className="text-lg font-medium text-text-primary">MCP 服务器</h2>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void loadMcpRuntimeData()}
+                            disabled={isSyncingMcp}
+                            className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                            刷新
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDiscoverAndImportMcp()}
+                            disabled={isSyncingMcp}
+                            className="rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                          >
+                            {isSyncingMcp ? '导入中' : '导入'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleAddMcpServer}
+                            disabled={isSyncingMcp}
+                            className="rounded-md bg-accent-primary px-3 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                          >
+                            新增
+                          </button>
+                        </div>
+                      </div>
+
+                      {mcpStatusMessage && (
+                        <div className="rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-xs text-text-secondary">
+                          {mcpStatusMessage}
+                        </div>
+                      )}
+                    </section>
+
+                    <section className="overflow-hidden rounded-xl border border-border bg-surface-primary">
+                      {mcpServers.length === 0 ? (
+                        <div className="px-4 py-5 text-sm text-text-tertiary">暂无 MCP Server</div>
+                      ) : (
+                        <div className="divide-y divide-border">
+                          {mcpServers.map((server) => {
+                            const enabled = server.enabled !== false;
+                            const runtime = settingsMcpRuntimeMap[server.id];
+                            const endpoint = server.transport === 'stdio'
+                              ? [server.command, ...(server.args || [])].filter(Boolean).join(' ')
+                              : server.url || '';
+                            return (
+                              <div key={server.id} className="flex items-center justify-between gap-4 px-4 py-3">
+                                <div className="min-w-0">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <span className="truncate text-sm font-medium text-text-primary">{server.name || server.id}</span>
+                                    <span className="shrink-0 rounded-full bg-surface-secondary px-2 py-0.5 text-[10px] font-medium text-text-tertiary">
+                                      {server.transport}
+                                    </span>
+                                    {runtime && (
+                                      <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600">
+                                        已连接
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="mt-1 truncate font-mono text-xs text-text-tertiary">
+                                    {endpoint || server.id}
+                                  </div>
+                                  {runtime && (
+                                    <div className="mt-1 text-[11px] text-text-tertiary">
+                                      calls {runtime.callCount} · tools {runtime.toolCount} · last {formatMcpTime(runtime.lastUsedAt)}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex shrink-0 items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEditMcpServer(server)}
+                                    disabled={isSyncingMcp}
+                                    className="rounded-md border border-border px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                                  >
+                                    编辑
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleTestMcpServer(server)}
+                                    disabled={mcpTestingId === server.id || isSyncingMcp}
+                                    className="rounded-md border border-border px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                                  >
+                                    {mcpTestingId === server.id ? '测试中' : '测试'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDeleteMcpServer(server.id)}
+                                    disabled={isSyncingMcp}
+                                    className="rounded-md border border-red-500/30 px-2.5 py-1.5 text-xs text-red-600 transition-colors hover:bg-red-500/10 disabled:opacity-50"
+                                  >
+                                    删除
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleToggleMcpServer(server)}
+                                    disabled={isSyncingMcp}
+                                    role="switch"
+                                    aria-checked={enabled}
+                                    aria-label={`${enabled ? '关闭' : '打开'} MCP Server ${server.name || server.id}`}
+                                    title={enabled ? '关闭 MCP Server' : '打开 MCP Server'}
+                                    className="ui-switch-track shrink-0 disabled:cursor-not-allowed disabled:opacity-60"
+                                    data-size="sm"
+                                    data-state={enabled ? 'on' : 'off'}
+                                  >
+                                    <span className="ui-switch-thumb" />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </section>
+                  </>
+                )}
+              </div>
             )}
 
             {/* Profile Tab */}
@@ -6193,7 +7917,7 @@ export function Settings({
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-3">
-                        <h2 className="text-lg font-medium text-text-primary">创作档案</h2>
+                        <h2 className="text-lg font-medium text-text-primary">用户创作档案</h2>
                         <button
                           type="button"
                           onClick={() => onOpenRedClawOnboarding?.()}
@@ -6205,7 +7929,7 @@ export function Settings({
                       <div className="mt-1 flex items-center gap-2 text-xs text-text-tertiary">
                         <span
                           className="rounded-full bg-surface-secondary px-2 py-1"
-                          title={redclawProfileRoot || currentSpaceId || undefined}
+                          title={redclawProfileRoot || undefined}
                         >
                           空间：{currentSpaceName}
                         </span>
@@ -6293,186 +8017,9 @@ export function Settings({
               </div>
             )}
 
-            {/* Memory Tab */}
-            {activeTab === 'memory' && (
-              <MemorySettingsSection
-                newMemoryType={newMemoryType}
-                setNewMemoryType={setNewMemoryType}
-                newMemoryContent={newMemoryContent}
-                setNewMemoryContent={setNewMemoryContent}
-                handleAddMemory={handleAddMemory}
-                isMemoryLoading={isMemoryLoading}
-                memories={memories}
-                archivedMemories={archivedMemories}
-                memoryHistory={memoryHistory}
-                maintenanceStatus={maintenanceStatus}
-                onRunMaintenance={handleRunMemoryMaintenance}
-                memorySearchQuery={memorySearchQuery}
-                setMemorySearchQuery={setMemorySearchQuery}
-                includeArchivedInSearch={includeArchivedInSearch}
-                setIncludeArchivedInSearch={setIncludeArchivedInSearch}
-                memorySearchResults={memorySearchResults}
-                isMemorySearching={isMemorySearching}
-                onSearchMemories={handleSearchMemories}
-                handleDeleteMemory={handleDeleteMemory}
-              />
-            )}
-
-            {/* Remote API Tab */}
-            {activeTab === 'remote' && (
-              <RemoteConnectionSettingsSection
-                assistantDaemonStatus={assistantDaemonStatus}
-                assistantDaemonDraft={assistantDaemonDraft}
-                setAssistantDaemonDraft={setAssistantDaemonDraft}
-                assistantDaemonLogs={assistantDaemonLogs}
-                assistantDaemonBusy={assistantDaemonBusy}
-                assistantDaemonWeixinLogin={assistantDaemonWeixinLogin}
-                assistantDaemonWeixinLoginBusy={assistantDaemonWeixinLoginBusy}
-                handleReloadAssistantDaemonStatus={loadAssistantDaemonStatus}
-                handleSaveAssistantDaemonConfig={handleSaveAssistantDaemonConfig}
-                handleStartAssistantDaemon={handleStartAssistantDaemon}
-                handleStopAssistantDaemon={handleStopAssistantDaemon}
-                handleStartAssistantDaemonWeixinLogin={handleStartAssistantDaemonWeixinLogin}
-                handleCheckAssistantDaemonWeixinLogin={handleCheckAssistantDaemonWeixinLogin}
-                handleClearAssistantDaemonWeixinLogin={handleClearAssistantDaemonWeixinLogin}
-              />
-            )}
-
-            {/* Skills Tab */}
-            {activeTab === 'skills' && (
-              <div className="space-y-6">
-                <section className="space-y-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <h2 className="text-lg font-medium text-text-primary">技能</h2>
-                      <p className="mt-1 text-xs text-text-tertiary">管理当前可用技能。内置技能由系统依赖，始终保持打开。</p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => dispatchAppIntent({ type: 'view.open', view: 'skills', skillsAction: 'open-market' })}
-                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                        技能市场
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void loadSettingsSkillsSummary()}
-                        disabled={isSettingsSkillsLoading}
-                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
-                      >
-                        <RefreshCw className={clsx('h-3.5 w-3.5', isSettingsSkillsLoading && 'animate-spin')} />
-                        刷新
-                      </button>
-                    </div>
-                  </div>
-
-                  {settingsSkillsMessage && (
-                    <div className="rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-xs text-text-secondary">
-                      {settingsSkillsMessage}
-                    </div>
-                  )}
-                </section>
-
-                <section className="overflow-hidden rounded-xl border border-border bg-surface-primary">
-                  {isSettingsSkillsLoading && settingsSkills.length === 0 ? (
-                    <div className="flex items-center gap-2 px-4 py-5 text-sm text-text-tertiary">
-                      <RefreshCw className="h-4 w-4 animate-spin" />
-                      正在读取技能
-                    </div>
-                  ) : settingsSkills.length === 0 ? (
-                    <div className="px-4 py-5 text-sm text-text-tertiary">暂无技能</div>
-                  ) : (
-                    <div className="divide-y divide-border">
-                      {builtinSettingsSkills.length > 0 && (
-                        <div>
-                          <button
-                            type="button"
-                            onClick={() => setAreBuiltinSettingsSkillsExpanded((value) => !value)}
-                            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-secondary/40"
-                            aria-expanded={areBuiltinSettingsSkillsExpanded}
-                          >
-                            <div className="flex min-w-0 items-center gap-2">
-                              <ChevronDown className={clsx(
-                                'h-4 w-4 shrink-0 text-text-tertiary transition-transform',
-                                !areBuiltinSettingsSkillsExpanded && '-rotate-90'
-                              )} />
-                              <span className="text-sm font-medium text-text-primary">内置技能</span>
-                              <span className="rounded-full bg-accent-primary/10 px-2 py-0.5 text-[10px] font-medium text-accent-primary">
-                                {builtinSettingsSkills.length}
-                              </span>
-                            </div>
-                            <span className="shrink-0 text-xs text-text-tertiary">
-                              {areBuiltinSettingsSkillsExpanded ? '收起' : '展开'}
-                            </span>
-                          </button>
-                          {areBuiltinSettingsSkillsExpanded && (
-                            <div className="divide-y divide-border border-t border-border bg-surface-secondary/10">
-                              {builtinSettingsSkills.map(renderSettingsSkillRow)}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {editableSettingsSkills.length > 0 ? (
-                        editableSettingsSkills.map(renderSettingsSkillRow)
-                      ) : (
-                        <div className="flex items-center justify-between gap-3 px-4 py-5 text-sm text-text-tertiary">
-                          <span>暂无可编辑技能</span>
-                          <div className="flex shrink-0 items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => dispatchAppIntent({ type: 'view.open', view: 'skills', skillsAction: 'open-market' })}
-                              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-                            >
-                              <ExternalLink className="h-3.5 w-3.5" />
-                              技能市场
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => dispatchAppIntent({ type: 'view.open', view: 'skills' })}
-                              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-                            >
-                              管理
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </section>
-
-                <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface-secondary/20 px-4 py-3">
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-text-tertiary">
-                    <span>总技能 {settingsSkillsSummary.total}</span>
-                    <span>已启用 {settingsSkillsSummary.enabled}</span>
-                    <span>已禁用 {settingsSkillsSummary.disabled}</span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => dispatchAppIntent({ type: 'view.open', view: 'skills', skillsAction: 'open-market' })}
-                      className="inline-flex items-center gap-2 rounded-md bg-text-primary px-3 py-2 text-xs font-medium text-background transition-opacity hover:opacity-90"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      技能市场
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => dispatchAppIntent({ type: 'view.open', view: 'skills' })}
-                      className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-                    >
-                      管理
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Tools / MCP Tabs */}
-            {(activeTab === 'tools' || activeTab === 'mcp') && (
+            {/* Tools Tab */}
+            {activeTab === 'tools' && (
               <ToolsSettingsSection
-                visibleSection={activeTab === 'mcp' ? 'mcp' : 'tools'}
                 cliRuntimeTools={cliRuntimeTools}
                 cliRuntimeEnvironments={cliRuntimeEnvironments}
                 cliRuntimeInstallDraft={cliRuntimeInstallDraft}
@@ -6484,6 +8031,8 @@ export function Settings({
                 cliRuntimeInspectingToolId={cliRuntimeInspectingToolId}
                 cliRuntimeDiagnosticCommand={cliRuntimeDiagnosticCommand}
                 setCliRuntimeDiagnosticCommand={setCliRuntimeDiagnosticCommand}
+                cliRuntimeExecutionMode={cliRuntimeExecutionMode}
+                setCliRuntimeExecutionMode={handleCliRuntimeExecutionModeChange}
                 cliRuntimeDiscoverQuery={cliRuntimeDiscoverQuery}
                 setCliRuntimeDiscoverQuery={setCliRuntimeDiscoverQuery}
                 cliRuntimeDiscoverResults={cliRuntimeDiscoverResults}
@@ -6505,7 +8054,6 @@ export function Settings({
                 mcpRuntimeItems={mcpRuntimeItems}
                 mcpLiveSessions={mcpLiveSessions}
                 handleUpdateMcpServer={handleUpdateMcpServer}
-                handleToggleMcpServer={handleToggleMcpServer}
                 handleDeleteMcpServer={handleDeleteMcpServer}
                 handleDisconnectMcpServer={handleDisconnectMcpServer}
                 handleDisconnectAllMcpSessions={handleDisconnectAllMcpSessions}
@@ -6516,15 +8064,25 @@ export function Settings({
                 handleTestMcpServer={handleTestMcpServer}
                 mcpTestingId={mcpTestingId}
                 mcpInspectingId={mcpInspectingId}
-                ytdlpStatus={ytdlpStatus}
-                handleInstallYtdlp={handleInstallYtdlp}
-                handleUpdateYtdlp={handleUpdateYtdlp}
-                browserPluginStatus={browserPluginStatus}
-                isPreparingBrowserPlugin={isPreparingBrowserPlugin}
-                handlePrepareBrowserPlugin={handlePrepareBrowserPlugin}
-                handleOpenBrowserPluginDir={handleOpenBrowserPluginDir}
-                isInstallingTool={isInstallingTool}
-                installProgress={installProgress}
+                thrivePlugins={thrivePlugins}
+                thrivePluginMarketplace={thrivePluginMarketplace}
+                codexPluginMarketplace={codexPluginMarketplace}
+                thrivePluginMarketplaceLoading={thrivePluginMarketplaceLoading}
+                codexPluginMarketplaceLoading={codexPluginMarketplaceLoading}
+                thrivePluginsLoading={thrivePluginsLoading}
+                thrivePluginBusyId={thrivePluginBusyId}
+                thrivePluginStatusMessage={thrivePluginStatusMessage}
+                thrivePluginRepoInput={thrivePluginRepoInput}
+                setThrivePluginRepoInput={setThrivePluginRepoInput}
+                handleRefreshThrivePlugins={loadThrivePlugins}
+                handleRefreshThrivePluginMarketplace={loadThrivePluginMarketplace}
+                handleRefreshCodexPluginMarketplace={loadCodexPluginMarketplace}
+                handleInstallThriveMarketplacePlugin={handleInstallThriveMarketplacePlugin}
+                handleInstallCodexMarketplacePlugin={handleInstallCodexMarketplacePlugin}
+                handleInstallThrivePluginFromRepo={handleInstallThrivePluginFromRepo}
+                handleToggleThrivePlugin={handleToggleThrivePlugin}
+                handleUninstallThrivePlugin={handleUninstallThrivePlugin}
+                handleOpenThrivePluginDataDir={handleOpenThrivePluginDataDir}
                 showDeveloperDiagnostics={Boolean(formData.developer_mode_enabled)}
                 toolDiagnostics={toolDiagnostics}
                 toolDiagnosticResults={toolDiagnosticResults}
@@ -6587,14 +8145,6 @@ export function Settings({
               />
             )}
 
-            {/* Experimental Tab */}
-            {activeTab === 'experimental' && (
-              <ExperimentalSettingsSection
-                formData={formData}
-                setFormData={setFormData}
-              />
-            )}
-
             {/* Global Save Actions (Visible on all tabs usually, but maybe better inside the form only if relevant) */}
             {/* Actually, it's safer to keep the save button available for settings that need saving (General, AI). Tools operations are immediate. */}
             <SettingsSaveBar
@@ -6602,6 +8152,47 @@ export function Settings({
               status={status}
             />
           </form>
+          {(editingTeamAdvisor || isCreatingTeamAdvisor) && (
+            <AdvisorModal
+              advisor={editingTeamAdvisor}
+              defaultMode="manual"
+              onSave={handleSaveTeamAdvisor}
+              onClose={() => {
+                setEditingTeamAdvisor(null);
+                setIsCreatingTeamAdvisor(false);
+              }}
+            />
+          )}
+          {settingsTeamAdvisor && (
+            <>
+              <button
+                type="button"
+                className="fixed inset-0 z-30 bg-black/20 backdrop-blur-[2px] transition-opacity"
+                onClick={() => setSettingsTeamAdvisor(null)}
+                aria-label="关闭成员设置"
+              />
+              <aside className="fixed bottom-4 right-4 top-4 z-40 w-[30rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-white/60 bg-white/85 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.16)] backdrop-blur-[40px] animate-slide-in-right">
+                <AdvisorSettingsPanel
+                  advisor={settingsTeamAdvisor}
+                  isActive={isActive}
+                  downloadStatus={null}
+                  isSystemPromptExpanded={isTeamSystemPromptExpanded}
+                  setIsSystemPromptExpanded={setIsTeamSystemPromptExpanded}
+                  isOptimizingPrompt={isTeamOptimizingPrompt}
+                  onOptimizePrompt={() => void handleOptimizeTeamAdvisorPrompt(settingsTeamAdvisor)}
+                  onUploadKnowledge={() => void handleUploadTeamAdvisorKnowledge(settingsTeamAdvisor)}
+                  onDeleteKnowledge={(fileName) => void handleDeleteTeamAdvisorKnowledge(settingsTeamAdvisor, fileName)}
+                  onPromoteMemberSkillCandidate={() => void handlePromoteTeamMemberSkillCandidate(settingsTeamAdvisor)}
+                  onDiscardMemberSkillCandidate={() => void handleDiscardTeamMemberSkillCandidate(settingsTeamAdvisor)}
+                  onRefreshMemberSkill={() => handleRefreshTeamMemberSkill(settingsTeamAdvisor)}
+                  onRollbackMemberSkillVersion={(version) => void handleRollbackTeamMemberSkillVersion(settingsTeamAdvisor, version)}
+                  onEdit={() => setEditingTeamAdvisor(settingsTeamAdvisor)}
+                  onDelete={() => void handleDeleteTeamAdvisor(settingsTeamAdvisor)}
+                  onClose={() => setSettingsTeamAdvisor(null)}
+                />
+              </aside>
+            </>
+          )}
           {isCreateAiSourceModalOpen && (
             <div
               className="fixed inset-0 z-[140] bg-black/45 flex items-center justify-center px-6 py-6"
@@ -6664,10 +8255,10 @@ export function Settings({
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <label className="block text-[11px] font-medium text-text-secondary">协议类型</label>
-                      <AiModelSelect
+	                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+	                    <div className="space-y-1.5">
+	                      <label className="block text-[11px] font-medium text-text-secondary">协议类型</label>
+	                      <AiModelSelect
                         value={createAiSourceDraft.protocol}
                         onChange={(value) => setCreateAiSourceDraft((prev) => ({ ...prev, protocol: value as AiProtocol }))}
                         className="w-full"
@@ -6676,17 +8267,9 @@ export function Settings({
                           { id: 'anthropic', label: 'Anthropic Native' },
                           { id: 'gemini', label: 'Gemini Native' },
                         ]}
-                      />
-                    </div>
-                    <label className="inline-flex items-center gap-2 text-sm text-text-secondary mt-6">
-                      <input
-                        type="checkbox"
-                        checked={createAiSourceDraft.setAsDefault}
-                        onChange={(e) => setCreateAiSourceDraft((prev) => ({ ...prev, setAsDefault: e.target.checked }))}
-                      />
-                      创建后设为默认聊天源
-                    </label>
-                  </div>
+	                      />
+	                    </div>
+	                  </div>
 
                   <div className="space-y-1.5">
                     <label className="block text-[11px] font-medium text-text-secondary">API Endpoint (Base URL)</label>
@@ -6743,7 +8326,7 @@ export function Settings({
                   <div className="min-w-0">
                     <h3 className="text-base font-semibold text-text-primary truncate">添加模型</h3>
                     <p className="text-xs text-text-tertiary mt-1 truncate">
-                      {addModelModalSource.name || '未命名供应商'} · 候选模型 {addModelModalRemoteModels.length} 个，可手动输入模型 ID
+                      {addModelModalSource.name || '未命名供应商'} · 已配置模型 {addModelModalRemoteModels.length} 个，可手动输入模型 ID
                     </p>
                   </div>
                   <button
@@ -6757,9 +8340,9 @@ export function Settings({
 
                 <div className="px-5 py-4 space-y-3">
                   <div className="text-[12px] text-text-tertiary">
-                    候选列表仅用于辅助选择；也可以直接手动输入模型 ID，点击确认后才会加入当前供应商。
+                    可从已配置模型中选择，也可以直接手动输入模型 ID，点击确认后才会加入当前供应商。
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr),160px,auto] gap-2">
+                  <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr),160px] gap-2">
                     <input
                       type="text"
                       list={`ai-source-model-options-${addModelModalSource.id}`}
@@ -6785,21 +8368,12 @@ export function Settings({
                       <option value="chat">语言模型</option>
                       <option value="transcription">转录模型</option>
                       <option value="audio">音频生成</option>
+                      <option value="tts">语音合成</option>
+                      <option value="voice_clone">音色克隆</option>
                       <option value="image">图片生成</option>
                       <option value="video">视频生成</option>
                       <option value="embedding">向量模型</option>
                     </select>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveAiSourceId(addModelModalSource.id);
-                        void fetchModelsForSource(addModelModalSource, { manual: true });
-                      }}
-                      disabled={Boolean(fetchingModelsBySourceId[addModelModalSource.id])}
-                      className="px-3 py-2 text-xs border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
-                    >
-                      {fetchingModelsBySourceId[addModelModalSource.id] ? '拉取中...' : '刷新候选'}
-                    </button>
                   </div>
                   <div className="max-h-40 overflow-auto rounded border border-border bg-surface-secondary/20 p-2">
                     {addModelModalRemoteModels.length ? (
@@ -6848,7 +8422,7 @@ export function Settings({
                       </div>
                     ) : (
                       <div className="text-xs text-text-tertiary">
-                        暂无候选模型，可直接手动输入模型 ID，或点击“刷新候选”拉取。
+                        暂无已配置模型，可直接手动输入模型 ID。
                       </div>
                     )}
                   </div>
@@ -6876,6 +8450,8 @@ export function Settings({
           )}
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

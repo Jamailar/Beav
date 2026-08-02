@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
+import { Bot, Image as ImageIcon, Loader2, MessageSquarePlus, Heart, PanelRight, Plus, Sparkles, SlidersHorizontal, X } from 'lucide-react';
 import { clsx } from 'clsx';
-import { Archive, Bot, Clock3, Edit3, FileText, Folder, History, Image as ImageIcon, Loader2, MessageSquarePlus, Heart, PanelRight, PanelRightOpen, Pin, Plus, RefreshCw, Sparkles, SlidersHorizontal, Trash2, X } from 'lucide-react';
-import { Chat } from './Chat';
-import { Advisors, type AdvisorProfile } from './Advisors';
-import type { ChatMessageLinkKind, ChatMessageLinkTarget } from '../components/MessageItem';
-import type { PendingChatMessage, RedClawNavigationAction } from '../features/app-shell/types';
+import { APP_BRAND } from '../config/brand';
+import { Chat, clearFixedSessionWarmSnapshot } from './Chat';
+import { AdvisorModal, type Advisor, type AdvisorProfile } from './Advisors';
+import { TeamWorkbench } from './team-workbench/TeamWorkbench';
+import type { TeamWorkbenchSession } from './team-workbench/teamWorkbenchTypes';
+import type { PendingChatMessage } from '../features/app-shell/types';
+import { type ChatMessageLinkKind, type ChatMessageLinkTarget } from '../components/MessageItem';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
-import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
-import { isMediaJobSuccessful, isMediaJobTerminal, type MediaJobProjection } from '../features/media-jobs/types';
-import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
+import { shallowArrayEqual, useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
+import { isMediaJobTerminal, isMediaJobSuccessful, type MediaJobProjection } from '../features/media-jobs/types';
+import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
-import { resolveAssetUrl } from '../utils/pathManager';
+import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import {
     HEARTBEAT_INTERVAL_OPTIONS,
     REDCLAW_CONTEXT_TYPE,
@@ -19,23 +23,26 @@ import {
     RUNNER_INTERVAL_OPTIONS,
     RUNNER_MAX_AUTOMATION_OPTIONS,
     SCHEDULE_TEMPLATES,
+    createRedClawComposerShortcuts,
     createRedClawComposerShortcutsForContext,
     pickScheduleTemplate,
     scheduleDraftFromTemplate,
+    type RedClawComposerShortcutInput,
 } from './redclaw/config';
 import {
     buildRedClawContextId,
     buildRedClawInitialContext,
+    buildRedClawRuntimeMetadata,
     buildRedClawSessionTitle,
     createContextSessionListItem,
-    formatDateTime,
     normalizeClawHubSlug,
     sortContextSessionItems,
 } from './redclaw/helpers';
+import { RedClawHistorySidebarSection, type RedClawHistoryListItem, type RedClawHistorySessionActivity } from './redclaw/RedClawHistoryDrawer';
 import { RedClawFilePreviewPane } from './redclaw/RedClawFilePreviewPane';
-import { RedClawHistoryDrawer, type RedClawHistoryListItem, type RedClawHistorySessionActivity } from './redclaw/RedClawHistoryDrawer';
 import {
     isRedClawOnboardingCompleted,
+    type RedclawOnboardingState,
 } from './redclaw/onboardingState';
 import { RedClawSidebar } from './redclaw/RedClawSidebar';
 import type {
@@ -45,29 +52,7 @@ import type {
     SidebarTab,
 } from './redclaw/types';
 
-interface RedClawProps {
-    pendingMessage?: PendingChatMessage | null;
-    onPendingMessageConsumed?: () => void;
-    navigationAction?: RedClawNavigationAction | null;
-    onNavigationActionConsumed?: () => void;
-    isActive?: boolean;
-    onExecutionStateChange?: (active: boolean) => void;
-    onOpenRedClawOnboarding?: () => void;
-    redclawOnboardingVersion?: number;
-    onGlobalSidebarContentChange?: (content: ReactNode | null) => void;
-    onTitleBarActionsChange?: (content: ReactNode | null) => void;
-    onOpenChatSurface?: () => void;
-    onOpenManuscriptEditor?: (filePath: string) => void;
-    onOpenManuscript?: (filePath: string) => void;
-    activeManuscriptPath?: string | null;
-    onOpenTeamMembers?: () => void;
-    titleBarActive?: boolean;
-}
-
-interface RedClawSpaceListPayload {
-    activeSpaceId: string;
-    spaces: Array<{ id: string; name: string }>;
-}
+const PREVIEW_SIDEBAR_ANIMATION_MS = 280;
 
 interface FilePreviewResolveResult {
     success?: boolean;
@@ -86,66 +71,25 @@ interface FilePreviewResolveResult {
     previewText?: string | null;
 }
 
-type RedClawAiSurface = 'redclaw' | 'advisor';
-type RedClawGlobalSidebarTab = 'sessions' | 'manuscripts';
+type RedClawAiSurface = 'redclaw' | 'advisor' | 'room';
 
-interface RedClawManuscriptNode {
+interface RedClawTeamRoom {
+    id: string;
     name: string;
-    path: string;
-    isDirectory: boolean;
-    children?: RedClawManuscriptNode[];
-    title?: string;
-    updatedAt?: number | string;
+    advisorIds?: string[];
+    session?: TeamWorkbenchSession;
+    createdAt?: string;
+    isSystem?: boolean;
+    systemType?: string;
 }
 
-interface RedClawFlatManuscriptNode extends RedClawManuscriptNode {
-    depth: number;
-}
-
-const ADVISOR_CHAT_CONTEXT_TYPE = 'advisor-discussion';
-const PREVIEW_SIDEBAR_ANIMATION_MS = 240;
 const REDCLAW_AI_SURFACE_STORAGE_KEY = 'redbox:redclaw-ai-surface:v1';
-const REDCLAW_PINNED_SESSION_IDS_STORAGE_KEY = 'redbox:redclaw:pinned-session-ids:v1';
 const REDCLAW_HIDDEN_EXTERNAL_SESSION_IDS_STORAGE_KEY = 'redbox:redclaw:hidden-external-session-ids:v1';
-const PREVIEW_KIND_SET = new Set<ChatMessageLinkKind>([
-    'image',
-    'video',
-    'audio',
-    'manuscript',
-    'document',
-    'pdf',
-    'html',
-    'text',
-    'archive',
-    'web',
-    'unknown',
-]);
-
-const normalizePreviewKind = (value: unknown, fallback: ChatMessageLinkKind): ChatMessageLinkKind => {
-    const normalized = String(value || '').trim().toLowerCase() as ChatMessageLinkKind;
-    return PREVIEW_KIND_SET.has(normalized) ? normalized : fallback;
-};
-
+const REDCLAW_DRAFT_SESSION_SENTINEL = '__draft__';
 function readInitialRedClawAiSurface(): RedClawAiSurface {
     if (typeof window === 'undefined') return 'redclaw';
     const saved = String(window.localStorage.getItem(REDCLAW_AI_SURFACE_STORAGE_KEY) || '').trim();
-    return saved === 'advisor' ? 'advisor' : 'redclaw';
-}
-
-function readRedClawPinnedSessionIds(): string[] {
-    if (typeof window === 'undefined') return [];
-    try {
-        const raw = window.localStorage.getItem(REDCLAW_PINNED_SESSION_IDS_STORAGE_KEY);
-        const parsed = raw ? JSON.parse(raw) : [];
-        return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
-    } catch {
-        return [];
-    }
-}
-
-function writeRedClawPinnedSessionIds(ids: string[]): void {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(REDCLAW_PINNED_SESSION_IDS_STORAGE_KEY, JSON.stringify(ids));
+    return saved === 'advisor' || saved === 'room' ? saved : 'redclaw';
 }
 
 function readHiddenExternalSessionIds(): string[] {
@@ -170,6 +114,40 @@ function writeHiddenExternalSessionIds(sessionIds: string[]): void {
     } catch (error) {
         console.warn('Failed to write hidden external RedClaw sessions:', error);
     }
+}
+
+function visibleTeamSessions(sessions: TeamWorkbenchSession[]): TeamWorkbenchSession[] {
+    return sessions.filter((session) => !['archived', 'completed'].includes(String(session.status || '').toLowerCase()));
+}
+
+function teamRoomFromSession(session: TeamWorkbenchSession): RedClawTeamRoom {
+    const metadata = session.metadata && typeof session.metadata === 'object'
+        ? session.metadata as Record<string, unknown>
+        : {};
+    const advisorIds = Array.isArray(metadata.advisorIds)
+        ? metadata.advisorIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
+    return {
+        id: session.id,
+        name: session.title || '未命名团队',
+        advisorIds,
+        session,
+        createdAt: session.createdAt ? new Date(session.createdAt).toISOString() : undefined,
+    };
+}
+
+function advisorAvatarText(advisor: AdvisorProfile): string {
+    const avatar = String(advisor.avatar || '').trim();
+    if (avatar) return avatar.slice(0, 2);
+    return String(advisor.name || '成').trim().slice(0, 2);
+}
+
+function isRenderableAdvisorAvatar(advisor: AdvisorProfile): boolean {
+    return hasRenderableAssetUrl(advisor.avatar);
+}
+
+function advisorRedClawOrder(advisor: AdvisorProfile, index: number): number {
+    return Number.isFinite(advisor.redclawOrder) ? Number(advisor.redclawOrder) : index;
 }
 
 function sessionTimestampMs(value: unknown): number {
@@ -201,76 +179,52 @@ function sessionUpdatedAtMs(item: ContextChatSessionListItem): number {
     );
 }
 
-function displayRedClawHistoryTitle(title: string, surface?: RedClawHistoryListItem['surface']): string {
-    if (surface !== 'redclaw') return title;
-    const legacyAiPrefix = new RegExp(`^${['Red', 'Claw'].join('')}(\\s*·\\s*)`);
-    return title.replace(legacyAiPrefix, `${REDCLAW_DISPLAY_NAME}$1`);
+const PREVIEW_KIND_SET = new Set<ChatMessageLinkKind>([
+    'image',
+    'video',
+    'audio',
+    'manuscript',
+    'document',
+    'pdf',
+    'html',
+    'text',
+    'archive',
+    'web',
+    'unknown',
+]);
+
+const defaultSessionTitleFromPendingMessage = (message: PendingChatMessage | null | undefined): string => {
+    const titleSource = String(message?.displayContent || message?.content || '').trim();
+    return Array.from(titleSource).slice(0, 15).join('');
+};
+
+const normalizePreviewKind = (value: unknown, fallback: ChatMessageLinkKind): ChatMessageLinkKind => {
+    const normalized = String(value || '').trim().toLowerCase() as ChatMessageLinkKind;
+    return PREVIEW_KIND_SET.has(normalized) ? normalized : fallback;
+};
+
+interface RedClawProps {
+    pendingMessage?: PendingChatMessage | null;
+    onPendingMessageConsumed?: () => void;
+    navigationAction?: { action: 'new' | 'open-team' | 'open-session'; sessionId?: string; nonce: number } | null;
+    onNavigationActionConsumed?: () => void;
+    isActive?: boolean;
+    onExecutionStateChange?: (active: boolean) => void;
+    onOpenRedClawOnboarding?: () => void;
+    redclawOnboardingVersion?: number;
+    composerShortcutInputs?: RedClawComposerShortcutInput[];
+    welcomeShortcutInputs?: RedClawComposerShortcutInput[];
+    onGlobalSidebarContentChange?: (content: ReactNode | null) => void;
+    onTitleBarActionsChange?: (content: ReactNode | null) => void;
+    onOpenChatSurface?: () => void;
+    onOpenManuscriptEditor?: (filePath: string) => void;
+    activeManuscriptPath?: string | null;
+    titleBarActive?: boolean;
 }
 
-function redClawHistoryRecord(value: unknown): Record<string, unknown> {
-    return value && typeof value === 'object' && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : {};
-}
-
-function isRedClawAutomationHistorySession(session: RedClawHistoryListItem): boolean {
-    if (session.surface !== 'redclaw') return false;
-    const sessionId = String(session.id || session.chatSession?.id || '').toLowerCase();
-    if (sessionId.includes('automation')) return true;
-    const context = redClawHistoryRecord(session.context);
-    const metadata = redClawHistoryRecord(session.metadata);
-    const contextId = String(
-        context.contextId || context.context_id || context.id || metadata.contextId || metadata.context_id || ''
-    ).toLowerCase();
-    const contextType = String(
-        context.contextType || context.context_type || context.type || metadata.contextType || metadata.context_type || ''
-    ).toLowerCase();
-    const sourceKind = String(context.sourceKind || context.source_kind || metadata.sourceKind || metadata.source_kind || '').toLowerCase();
-    return contextId.includes('automation') || contextType === 'automation' || sourceKind === 'scheduled';
-}
-
-function redClawManuscriptLabel(node: RedClawManuscriptNode): string {
-    return String(node.title || node.name || node.path || '未命名稿件').trim();
-}
-
-function sortRedClawManuscripts(nodes: RedClawManuscriptNode[]): RedClawManuscriptNode[] {
-    return [...nodes].sort((left, right) => {
-        if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1;
-        const leftUpdated = Number(left.updatedAt || 0);
-        const rightUpdated = Number(right.updatedAt || 0);
-        if (!left.isDirectory && rightUpdated !== leftUpdated) return rightUpdated - leftUpdated;
-        return redClawManuscriptLabel(left).localeCompare(redClawManuscriptLabel(right), 'zh-Hans-CN');
-    });
-}
-
-function flattenRedClawManuscripts(nodes: RedClawManuscriptNode[], depth = 0): RedClawFlatManuscriptNode[] {
-    const output: RedClawFlatManuscriptNode[] = [];
-    for (const node of sortRedClawManuscripts(nodes)) {
-        output.push({ ...node, depth });
-        if (node.isDirectory && Array.isArray(node.children) && node.children.length > 0) {
-            output.push(...flattenRedClawManuscripts(node.children, depth + 1));
-        }
-    }
-    return output;
-}
-
-function countRedClawManuscriptFiles(nodes: RedClawManuscriptNode[]): number {
-    let count = 0;
-    for (const node of nodes) {
-        if (node.isDirectory) {
-            count += countRedClawManuscriptFiles(node.children || []);
-        } else {
-            count += 1;
-        }
-    }
-    return count;
-}
-
-function formatRedClawManuscriptUpdatedAt(value: RedClawManuscriptNode['updatedAt']): string {
-    if (!value) return '';
-    const date = typeof value === 'number' ? new Date(value) : new Date(value);
-    if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleDateString();
+interface RedClawSpaceListPayload {
+    activeSpaceId: string;
+    spaces: Array<{ id: string; name: string }>;
 }
 
 const normalizeRedClawSpaceListPayload = (value: unknown): RedClawSpaceListPayload => {
@@ -305,52 +259,28 @@ function redClawLastSessionStorageKey(spaceId: string): string {
 function readRedClawLastSessionId(spaceId: string): string | null {
     if (typeof window === 'undefined') return null;
     const raw = localStorage.getItem(redClawLastSessionStorageKey(spaceId));
+    if (raw === REDCLAW_DRAFT_SESSION_SENTINEL) return null;
     const sessionId = String(raw || '').trim();
     return sessionId || null;
 }
 
-function canReuseAsFreshSession(sessionItem: ContextChatSessionListItem | null | undefined): boolean {
-    if (!sessionItem) return false;
-    return Number(sessionItem.messageCount || 0) === 0;
+function writeRedClawLastSessionId(spaceId: string, sessionId: string | null): void {
+    if (typeof window === 'undefined') return;
+    const normalized = String(sessionId || '').trim();
+    localStorage.setItem(redClawLastSessionStorageKey(spaceId), normalized || REDCLAW_DRAFT_SESSION_SENTINEL);
 }
 
-function advisorAvatarText(advisor: AdvisorProfile): string {
-    const avatar = String(advisor.avatar || '').trim();
-    if (avatar && !hasRenderableAdvisorAvatar(advisor)) return avatar.slice(0, 2);
-    return String(advisor.name || '成').trim().slice(0, 2);
-}
-
-function hasRenderableAdvisorAvatar(advisor: AdvisorProfile): boolean {
-    const value = String(advisor.avatar || '').trim();
-    return /^(https?:|file:|data:|local-file:|redbox-asset:)/i.test(value) || value.startsWith('/');
-}
-
-function advisorRedClawOrder(advisor: AdvisorProfile, index: number): number {
-    return Number.isFinite(advisor.redclawOrder) ? Number(advisor.redclawOrder) : index;
-}
-
-function visibleRedClawAdvisors(advisors: AdvisorProfile[]): AdvisorProfile[] {
-    return advisors
-        .map((advisor, index) => ({ advisor, index }))
-        .filter(({ advisor }) => advisor.redclawVisible !== false)
-        .sort((left, right) => {
-            const orderDelta = advisorRedClawOrder(left.advisor, left.index) - advisorRedClawOrder(right.advisor, right.index);
-            return orderDelta || left.index - right.index;
-        })
-        .map(({ advisor }) => advisor);
-}
-
-function buildAdvisorInitialContext(advisor: AdvisorProfile): string {
-    const knowledgeFiles = Array.isArray(advisor.knowledgeFiles) ? advisor.knowledgeFiles : [];
-    const sections = [
-        `当前对话绑定成员：${advisor.name}`,
-        advisor.personality ? `成员定位：${advisor.personality}` : null,
-        `知识库语言：${advisor.knowledgeLanguage || '中文'}`,
-        knowledgeFiles.length > 0 ? `已接入知识文件：${knowledgeFiles.length} 个` : '当前暂无知识文件',
-        '请始终以该成员身份回答，保持表达风格、专业倾向和角色设定一致。',
-        advisor.systemPrompt ? `系统设定：\n${advisor.systemPrompt}` : null,
-    ];
-    return sections.filter(Boolean).join('\n\n');
+function automationRunSessionId(value: unknown): string {
+    const root = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+    const run = root.run && typeof root.run === 'object' && !Array.isArray(root.run)
+        ? root.run as Record<string, unknown>
+        : {};
+    const result = run.result && typeof run.result === 'object' && !Array.isArray(run.result)
+        ? run.result as Record<string, unknown>
+        : {};
+    return String(root.sessionId || run.sessionId || result.sessionId || '').trim();
 }
 
 function getRedClawImageJobExpectedCount(job: MediaJobProjection): number {
@@ -534,57 +464,69 @@ function RedClawAiSwitchBar({
     onSelectAdvisor: (advisorId: string) => void;
     onCreateAdvisor: () => void;
 }) {
-    const visibleAdvisors = visibleRedClawAdvisors(advisors).slice(0, 6);
-
+    const visibleAdvisors = advisors
+        .map((advisor, index) => ({ advisor, index }))
+        .filter(({ advisor }) => advisor.redclawVisible !== false)
+        .sort((left, right) => {
+            const orderDelta = advisorRedClawOrder(left.advisor, left.index) - advisorRedClawOrder(right.advisor, right.index);
+            return orderDelta || left.index - right.index;
+        })
+        .map(({ advisor }) => advisor)
+        .slice(0, 6);
     return (
-        <div className="flex max-w-[min(84vw,32rem)] items-center gap-1.5 overflow-visible rounded-[22px] bg-surface-elevated/95 px-2 py-2 shadow-sm backdrop-blur-xl">
-            <button
-                type="button"
-                onClick={onSelectRedClaw}
-                className={clsx(
-                    'inline-flex h-9 shrink-0 items-center gap-2 rounded-2xl px-3 text-[12px] font-bold transition-colors',
-                    activeSurface === 'redclaw'
-                        ? 'bg-surface-primary text-text-primary shadow-sm'
-                        : 'text-text-tertiary hover:bg-surface-primary/70 hover:text-text-primary'
-                )}
-                title="RedClaw"
-                aria-label="RedClaw"
-            >
-                <Bot className="h-4 w-4" />
-                <span>RedClaw</span>
-            </button>
-            {visibleAdvisors.length > 0 && <div className="h-5 w-px bg-border" />}
-            {visibleAdvisors.map((advisor) => (
+        <div>
+            <div className="flex max-w-[min(84vw,32rem)] items-center gap-1.5 overflow-visible rounded-[22px] bg-surface-elevated/95 px-2 py-2 shadow-sm backdrop-blur-xl">
                 <button
-                    key={advisor.id}
                     type="button"
-                    onClick={() => onSelectAdvisor(advisor.id)}
+                    onClick={onSelectRedClaw}
                     className={clsx(
-                        'flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full text-[13px] font-semibold transition-all duration-200 ease-out hover:scale-125 active:scale-110',
-                        activeSurface === 'advisor' && selectedAdvisorId === advisor.id
-                            ? 'bg-accent-primary/10 text-accent-primary'
+                        'inline-flex h-9 shrink-0 items-center gap-2 rounded-2xl px-3 text-[12px] font-bold transition-colors',
+                        activeSurface === 'redclaw'
+                            ? 'bg-surface-primary text-text-primary shadow-sm'
                             : 'text-text-tertiary hover:bg-surface-primary/70 hover:text-text-primary'
                     )}
-                    title={advisor.name}
-                    aria-label={advisor.name}
+                    title={REDCLAW_DISPLAY_NAME}
+                    aria-label={REDCLAW_DISPLAY_NAME}
                 >
-                    {hasRenderableAdvisorAvatar(advisor) ? (
-                        <img src={resolveAssetUrl(advisor.avatar)} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                        advisorAvatarText(advisor)
-                    )}
+                    <Bot className="h-4 w-4" />
+                    <span>{REDCLAW_DISPLAY_NAME}</span>
                 </button>
-            ))}
-            <div className="h-5 w-px bg-border" />
-            <button
-                type="button"
-                onClick={onCreateAdvisor}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-primary/70 hover:text-text-primary"
-                title="成员"
-                aria-label="成员"
-            >
-                <Plus className="h-4 w-4" />
-            </button>
+                {visibleAdvisors.length > 0 && <div className="h-5 w-px bg-border" />}
+                {visibleAdvisors.map((advisor) => {
+                    const active = activeSurface === 'advisor' && selectedAdvisorId === advisor.id;
+                    return (
+                        <button
+                            key={advisor.id}
+                            type="button"
+                            onClick={() => onSelectAdvisor(advisor.id)}
+                            className={clsx(
+                                'flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full text-[13px] font-semibold transition-all duration-200 ease-out hover:scale-125 active:scale-110',
+                                active
+                                    ? 'bg-accent-primary/10 text-accent-primary'
+                                    : 'text-text-tertiary hover:bg-surface-primary/70 hover:text-text-primary'
+                            )}
+                            title={advisor.name}
+                            aria-label={advisor.name}
+                        >
+                            {isRenderableAdvisorAvatar(advisor) ? (
+                                <img src={resolveAssetUrl(advisor.avatar)} alt="" className="h-full w-full object-cover" />
+                            ) : (
+                                advisorAvatarText(advisor)
+                            )}
+                        </button>
+                    );
+                })}
+                <div className="h-5 w-px bg-border" />
+                <button
+                    type="button"
+                    onClick={onCreateAdvisor}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-surface-primary/70 hover:text-text-primary"
+                    title="创建成员"
+                    aria-label="创建成员"
+                >
+                    <Plus className="h-4 w-4" />
+                </button>
+            </div>
         </div>
     );
 }
@@ -598,13 +540,13 @@ export function RedClaw({
     onExecutionStateChange,
     onOpenRedClawOnboarding,
     redclawOnboardingVersion = 0,
+    composerShortcutInputs,
+    welcomeShortcutInputs,
     onGlobalSidebarContentChange,
     onTitleBarActionsChange,
     onOpenChatSurface,
     onOpenManuscriptEditor,
-    onOpenManuscript,
     activeManuscriptPath = null,
-    onOpenTeamMembers,
     titleBarActive = false,
 }: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
@@ -618,16 +560,26 @@ export function RedClaw({
     const [sessionActivityById, setSessionActivityById] = useState<Record<string, RedClawHistorySessionActivity>>({});
     const [isSessionLoading, setIsSessionLoading] = useState(true);
     const [historyLoading, setHistoryLoading] = useState(false);
-    const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
-    const [historyDrawerInitialTab, setHistoryDrawerInitialTab] = useState<'sessions' | 'manuscripts'>('sessions');
-    const [previewTarget, setPreviewTarget] = useState<ChatMessageLinkTarget | null>(null);
-    const [previewSidebarCollapsed, setPreviewSidebarCollapsed] = useState(false);
-    const [isPreviewSidebarClosing, setIsPreviewSidebarClosing] = useState(false);
     const [activeSpaceName, setActiveSpaceName] = useState<string>('默认空间');
     const [activeSpaceId, setActiveSpaceId] = useState<string>('default');
     const [chatRefreshKey, setChatRefreshKey] = useState(0);
     const [chatActionLoading, setChatActionLoading] = useState<'clear' | 'compact' | null>(null);
     const [chatActionMessage, setChatActionMessage] = useState('');
+    const [previewTarget, setPreviewTarget] = useState<ChatMessageLinkTarget | null>(null);
+    const [previewSidebarCollapsed, setPreviewSidebarCollapsed] = useState(false);
+    const [isPreviewSidebarClosing, setIsPreviewSidebarClosing] = useState(false);
+    const [activeAiSurface, setActiveAiSurface] = useState<RedClawAiSurface>(readInitialRedClawAiSurface);
+    const [teamRooms, setTeamRooms] = useState<RedClawTeamRoom[]>([]);
+    const [advisors, setAdvisors] = useState<AdvisorProfile[]>([]);
+    const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+    const [selectedAdvisorId, setSelectedAdvisorId] = useState<string | null>(null);
+    const [advisorCreateModalOpen, setAdvisorCreateModalOpen] = useState(false);
+    const [roomCreateModalOpen, setRoomCreateModalOpen] = useState(false);
+    const [roomCreateName, setRoomCreateName] = useState('');
+    const [roomCreateAdvisorIds, setRoomCreateAdvisorIds] = useState<string[]>([]);
+    const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+    const [roomCreateError, setRoomCreateError] = useState('');
+    const [isRedClawChatExecuting, setIsRedClawChatExecuting] = useState(false);
 
     const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
     const [sidebarTab, setSidebarTab] = useState<SidebarTab>('skills');
@@ -637,85 +589,45 @@ export function RedClaw({
     const [skillsMessage, setSkillsMessage] = useState('');
     const [installSource, setInstallSource] = useState('');
     const [isInstallingSkill, setIsInstallingSkill] = useState(false);
-    const [advisors, setAdvisors] = useState<AdvisorProfile[]>([]);
-    const [activeAiSurface, setActiveAiSurface] = useState<RedClawAiSurface>(() => readInitialRedClawAiSurface());
-    const [selectedAdvisorId, setSelectedAdvisorId] = useState<string | null>(null);
-    const [advisorSessionId, setAdvisorSessionId] = useState<string | null>(null);
-    const [isAdvisorSessionLoading, setIsAdvisorSessionLoading] = useState(false);
-    const [advisorCreateRequestKey, setAdvisorCreateRequestKey] = useState(0);
-    const [chatModelKey, setChatModelKey] = useState('');
-    const [globalSidebarTab, setGlobalSidebarTab] = useState<RedClawGlobalSidebarTab>('sessions');
-    const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() => readRedClawPinnedSessionIds());
-    const [globalManuscriptTree, setGlobalManuscriptTree] = useState<RedClawManuscriptNode[]>([]);
-    const [globalManuscriptsLoading, setGlobalManuscriptsLoading] = useState(false);
-    const [globalManuscriptsError, setGlobalManuscriptsError] = useState('');
-    const [renameSessionTarget, setRenameSessionTarget] = useState<ContextChatSessionListItem | null>(null);
-    const [renameSessionTitle, setRenameSessionTitle] = useState('');
-    const [renameSessionError, setRenameSessionError] = useState('');
-    const [isRenamingSession, setIsRenamingSession] = useState(false);
 
     const [runnerStatus, setRunnerStatus] = useState<RunnerStatus | null>(null);
     const [automationLoading, setAutomationLoading] = useState(false);
     const [automationMessage, setAutomationMessage] = useState('');
-    const [onboardingState, setOnboardingState] = useState<Record<string, unknown> | null>(null);
-    const [hideOnboardingPrompt, setHideOnboardingPrompt] = useState(false);
+    const [onboardingState, setOnboardingState] = useState<RedclawOnboardingState | undefined>(undefined);
     const [resolvedPendingMessage, setResolvedPendingMessage] = useState<PendingChatMessage | null>(null);
-    const trackedMediaJobsById = useMediaJobsStore((state) => state.jobsById);
-    const trackedImageJobs = useMemo(() => (
-        Object.values(trackedMediaJobsById)
+    const trackedImageJobs = useMediaJobsStore(useCallback((state) => (
+        Object.values(state.jobsById)
             .filter((job) => job.kind === 'image' && job.ownerSessionId === activeSessionId)
             .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
-    ), [activeSessionId, trackedMediaJobsById]);
-    const visibleImageJobs = useMemo(() => (
-        trackedImageJobs
-            .filter((job) => !isMediaJobSuccessful(job.status) && !isMediaJobTerminal(job.status))
-            .slice(0, 3)
-    ), [trackedImageJobs]);
-    const globalFlatManuscripts = useMemo(() => (
-        flattenRedClawManuscripts(globalManuscriptTree).slice(0, 18)
-    ), [globalManuscriptTree]);
-    const pinnedSessionIdSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
-    const hiddenExternalSessionIdSet = useMemo(() => new Set(hiddenExternalSessionIds), [hiddenExternalSessionIds]);
-    const unifiedHistorySessions = useMemo<RedClawHistoryListItem[]>(() => (
-        [
-            ...sessionList.map((session): RedClawHistoryListItem => ({
-                ...session,
-                surface: 'redclaw',
-                speakerLabel: 'RedClaw',
-            })),
-            ...externalAgentSessions.map((session): RedClawHistoryListItem => ({
-                ...session,
-                surface: 'external',
-                speakerLabel: 'External Agent',
-            })),
-        ].sort((left, right) => sessionUpdatedAtMs(right) - sessionUpdatedAtMs(left))
-    ), [externalAgentSessions, sessionList]);
-    const visibleGlobalSessions = useMemo(() => (
-        unifiedHistorySessions
-            .map((session, index) => ({ session, index }))
-            .sort((left, right) => {
-                const leftPinned = left.session.surface !== 'external' && pinnedSessionIdSet.has(left.session.id);
-                const rightPinned = right.session.surface !== 'external' && pinnedSessionIdSet.has(right.session.id);
-                if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
-                return left.index - right.index;
-            })
-            .map(({ session }) => session)
-    ), [pinnedSessionIdSet, unifiedHistorySessions]);
-    const globalManuscriptCount = useMemo(() => (
-        countRedClawManuscriptFiles(globalManuscriptTree)
-    ), [globalManuscriptTree]);
-    const normalizedActiveManuscriptPath = useMemo(() => (
-        String(activeManuscriptPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
-    ), [activeManuscriptPath]);
+    ), [activeSessionId]), shallowArrayEqual);
+    const visibleImageJobs = useMemo(() => {
+        return trackedImageJobs.filter((job) => {
+            if (isMediaJobSuccessful(job.status)) return false;
+            return !isMediaJobTerminal(job.status);
+        }).slice(0, 3);
+    }, [trackedImageJobs]);
+    const imageJobSubscriptionIds = useMemo(() => [], []);
     const imageJobBootstrapFilter = useMemo(() => activeSessionId ? {
         kind: 'image' as const,
         ownerSessionId: activeSessionId,
         limit: 12,
     } : null, [activeSessionId]);
-    useMediaJobSubscription([], {
+    useMediaJobSubscription(imageJobSubscriptionIds, {
         enabled: Boolean(activeSessionId),
         bootstrapFilter: imageJobBootstrapFilter,
     });
+    const composerShortcuts = useMemo(
+        () => composerShortcutInputs
+            ? createRedClawComposerShortcuts(composerShortcutInputs)
+            : createRedClawComposerShortcutsForContext,
+        [composerShortcutInputs],
+    );
+    const welcomeShortcuts = useMemo(
+        () => welcomeShortcutInputs
+            ? createRedClawComposerShortcuts(welcomeShortcutInputs)
+            : createRedClawComposerShortcutsForContext,
+        [welcomeShortcutInputs],
+    );
 
     const [runnerIntervalMinutes, setRunnerIntervalMinutes] = useState<number>(20);
     const [runnerMaxAutomationPerTick, setRunnerMaxAutomationPerTick] = useState<number>(2);
@@ -728,6 +640,9 @@ export function RedClaw({
     const [scheduleAdvanced, setScheduleAdvanced] = useState(false);
     const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft>(() => scheduleDraftFromTemplate(SCHEDULE_TEMPLATES[0]));
     const [isAddingSchedule, setIsAddingSchedule] = useState(false);
+
+    const shouldSyncGlobalHistory = Boolean(onGlobalSidebarContentChange);
+    const shouldLoadHistory = isActive || shouldSyncGlobalHistory;
     const sessionRequestIdRef = useRef(0);
     const isActiveRef = useRef(isActive);
     const activeSessionIdRef = useRef<string | null>(null);
@@ -735,12 +650,13 @@ export function RedClaw({
     const runnerStatusRequestIdRef = useRef(0);
     const skillsRequestIdRef = useRef(0);
     const onboardingRequestIdRef = useRef(0);
-    const advisorSessionRequestIdRef = useRef(0);
     const hasSessionSnapshotRef = useRef(false);
     const hasRunnerSnapshotRef = useRef(false);
     const hasSkillsSnapshotRef = useRef(false);
+    const manualDraftActiveRef = useRef(false);
     const routedPendingMessageRef = useRef<PendingChatMessage | null>(null);
     const consumedNavigationActionNonceRef = useRef<number | null>(null);
+    const pendingRoomSelectionRef = useRef<string | null>(null);
     const previewSidebarAnimationTimerRef = useRef<number | null>(null);
 
     const clearPreviewSidebarAnimationTimer = useCallback(() => {
@@ -748,29 +664,6 @@ export function RedClaw({
         window.clearTimeout(previewSidebarAnimationTimerRef.current);
         previewSidebarAnimationTimerRef.current = null;
     }, []);
-
-    useEffect(() => {
-        isActiveRef.current = isActive;
-    }, [isActive]);
-
-    useEffect(() => {
-        activeSessionIdRef.current = activeSessionId;
-    }, [activeSessionId]);
-
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-        if (!activeSpaceId || !activeSessionId) return;
-        localStorage.setItem(redClawLastSessionStorageKey(activeSpaceId), activeSessionId);
-    }, [activeSessionId, activeSpaceId]);
-
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-        window.localStorage.setItem(REDCLAW_AI_SURFACE_STORAGE_KEY, activeAiSurface);
-    }, [activeAiSurface]);
-
-    useEffect(() => {
-        sessionListRef.current = sessionList;
-    }, [sessionList]);
 
     const applyHistorySessionUnread = useCallback((sessionId: string | null | undefined, unread: boolean) => {
         const safeSessionId = String(sessionId || '').trim();
@@ -792,16 +685,14 @@ export function RedClaw({
             };
         };
         sessionListRef.current = sessionListRef.current.map(updateItem);
-        setSessionList((current) => current.map(updateItem));
-        setExternalAgentSessions((current) => current.map(updateItem));
+        setSessionList((prev) => prev.map(updateItem));
+        setExternalAgentSessions((prev) => prev.map(updateItem));
     }, []);
 
     const setHistorySessionUnread = useCallback((sessionId: string | null | undefined, unread: boolean) => {
         const safeSessionId = String(sessionId || '').trim();
         if (!safeSessionId) return;
-        const allItems = [...sessionListRef.current, ...externalAgentSessions];
-        const currentItem = allItems.find((item) => item.id === safeSessionId);
-        if (!currentItem && !safeSessionId.startsWith('session_bridge_')) return;
+        const currentItem = sessionListRef.current.find((item) => item.id === safeSessionId);
         const currentMetadata = currentItem?.metadata && typeof currentItem.metadata === 'object' && !Array.isArray(currentItem.metadata)
             ? currentItem.metadata as Record<string, unknown>
             : null;
@@ -811,13 +702,13 @@ export function RedClaw({
         void window.ipcRenderer.chat.setSessionUnread({ sessionId: safeSessionId, unread }).catch((error) => {
             console.error('Failed to update RedClaw session unread state:', error);
         });
-    }, [applyHistorySessionUnread, externalAgentSessions]);
+    }, [applyHistorySessionUnread]);
 
     const markSessionRunning = useCallback((sessionId: string | null | undefined) => {
         const safeSessionId = String(sessionId || '').trim();
         if (!safeSessionId) return;
-        setSessionActivityById((current) => (
-            current[safeSessionId] === 'running' ? current : { ...current, [safeSessionId]: 'running' }
+        setSessionActivityById((prev) => (
+            prev[safeSessionId] === 'running' ? prev : { ...prev, [safeSessionId]: 'running' }
         ));
     }, []);
 
@@ -825,8 +716,8 @@ export function RedClaw({
         const safeSessionId = String(sessionId || '').trim();
         if (!safeSessionId) return;
         const isCurrentlyOpen = isActiveRef.current && activeSessionIdRef.current === safeSessionId;
-        setSessionActivityById((current) => {
-            const next = { ...current };
+        setSessionActivityById((prev) => {
+            const next = { ...prev };
             if (isCurrentlyOpen) {
                 delete next[safeSessionId];
             } else {
@@ -840,9 +731,9 @@ export function RedClaw({
     const clearSessionActivity = useCallback((sessionId: string | null | undefined) => {
         const safeSessionId = String(sessionId || '').trim();
         if (!safeSessionId) return;
-        setSessionActivityById((current) => {
-            if (!current[safeSessionId]) return current;
-            const next = { ...current };
+        setSessionActivityById((prev) => {
+            if (!prev[safeSessionId]) return prev;
+            const next = { ...prev };
             delete next[safeSessionId];
             return next;
         });
@@ -851,14 +742,267 @@ export function RedClaw({
     const clearRunningSessionActivity = useCallback((sessionId: string | null | undefined) => {
         const safeSessionId = String(sessionId || '').trim();
         if (!safeSessionId) return;
-        setSessionActivityById((current) => {
-            if (current[safeSessionId] !== 'running') return current;
-            const next = { ...current };
+        setSessionActivityById((prev) => {
+            if (prev[safeSessionId] !== 'running') return prev;
+            const next = { ...prev };
             delete next[safeSessionId];
             return next;
         });
     }, []);
 
+    useEffect(() => {
+        isActiveRef.current = isActive;
+    }, [isActive]);
+
+    useEffect(() => {
+        activeSessionIdRef.current = activeSessionId;
+    }, [activeSessionId]);
+
+    useEffect(() => () => {
+        clearPreviewSidebarAnimationTimer();
+    }, [clearPreviewSidebarAnimationTimer]);
+
+    useEffect(() => {
+        clearPreviewSidebarAnimationTimer();
+        setIsPreviewSidebarClosing(false);
+        setPreviewTarget(null);
+    }, [activeSessionId, activeSpaceId, clearPreviewSidebarAnimationTimer]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!activeSpaceId || !activeSessionId) return;
+        writeRedClawLastSessionId(activeSpaceId, activeSessionId);
+    }, [activeSessionId, activeSpaceId]);
+
+    useEffect(() => {
+        if (typeof window !== 'undefined') {
+            localStorage.setItem(REDCLAW_AI_SURFACE_STORAGE_KEY, activeAiSurface);
+        }
+    }, [activeAiSurface]);
+
+    useEffect(() => {
+        if (!shouldLoadHistory) return;
+        let cancelled = false;
+
+        const loadTeamData = async () => {
+            try {
+                const [teamSessionList, advisorList] = await Promise.all([
+                    window.ipcRenderer.teamRuntime.listSessions() as Promise<TeamWorkbenchSession[]>,
+                    window.ipcRenderer.advisors.list<AdvisorProfile>(),
+                ]);
+                if (cancelled) return;
+                const sessions = Array.isArray(teamSessionList) ? visibleTeamSessions(teamSessionList) : [];
+                setTeamRooms(sessions.map(teamRoomFromSession));
+                const pendingRoomId = pendingRoomSelectionRef.current;
+                if (pendingRoomId && sessions.some((session) => session.id === pendingRoomId)) {
+                    pendingRoomSelectionRef.current = null;
+                    setSelectedRoomId(pendingRoomId);
+                    setActiveAiSurface('room');
+                }
+                setAdvisors(Array.isArray(advisorList) ? advisorList : []);
+            } catch (error) {
+                if (cancelled) return;
+                console.error('Failed to load RedClaw team surfaces:', error);
+            }
+        };
+
+        void loadTeamData();
+        const handleTeamSettingsChanged = () => {
+            void loadTeamData();
+        };
+        const handleTeamRuntimeEvent = (_event: unknown, envelope?: { eventType?: string }) => {
+            const event = envelope || {};
+            if (!String(event?.eventType || '').startsWith('runtime:collab-')) return;
+            void loadTeamData();
+        };
+        window.addEventListener('redclaw:team-settings-changed', handleTeamSettingsChanged);
+        window.ipcRenderer.teamRuntime.onEvent(handleTeamRuntimeEvent);
+        return () => {
+            cancelled = true;
+            window.removeEventListener('redclaw:team-settings-changed', handleTeamSettingsChanged);
+            window.ipcRenderer.teamRuntime.offEvent(handleTeamRuntimeEvent);
+        };
+    }, [shouldLoadHistory]);
+
+    useEffect(() => {
+        onExecutionStateChange?.(isRedClawChatExecuting);
+    }, [isRedClawChatExecuting, onExecutionStateChange]);
+
+    useEffect(() => {
+        sessionListRef.current = sessionList;
+    }, [sessionList]);
+
+    const hiddenExternalSessionIdSet = useMemo(
+        () => new Set(hiddenExternalSessionIds),
+        [hiddenExternalSessionIds],
+    );
+
+    const normalizeExternalAgentSession = useCallback((item: ContextChatSessionListItem): ContextChatSessionListItem => {
+        const rawTitle = String(
+            item.chatSession?.title
+            || (item as unknown as { title?: string }).title
+            || '外部 Agent 对话'
+        ).trim() || '外部 Agent 对话';
+        const rawUpdatedAt = String(
+            item.chatSession?.updatedAt
+            || (item as unknown as { updatedAt?: string }).updatedAt
+            || item.chatSession?.createdAt
+            || Date.now()
+        );
+        const rawCreatedAt = String(
+            item.chatSession?.createdAt
+            || (item as unknown as { createdAt?: string }).createdAt
+            || rawUpdatedAt
+        );
+        return {
+            ...item,
+            id: String(item.id || item.chatSession?.id || '').trim(),
+            metadata: item.metadata || null,
+            chatSession: {
+                id: String(item.chatSession?.id || item.id || '').trim(),
+                title: rawTitle,
+                updatedAt: rawUpdatedAt,
+                createdAt: rawCreatedAt,
+            },
+        };
+    }, []);
+
+    const loadExternalAgentSessions = useCallback(async () => {
+        try {
+            const result = await window.ipcRenderer.sessions.list() as ContextChatSessionListItem[];
+            const items = Array.isArray(result)
+                ? sortContextSessionItems(result
+                    .filter((item) => {
+                        const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+                            ? item.metadata as Record<string, unknown>
+                            : {};
+                        const sessionId = String(item.id || item.chatSession?.id || '').trim();
+                        return String(metadata.source || '').trim() === 'acp'
+                            && !hiddenExternalSessionIdSet.has(sessionId)
+                            && !item.archived
+                            && metadata.archived !== true
+                            && String(metadata.status || '').trim() !== 'archived';
+                    })
+                    .map(normalizeExternalAgentSession))
+                : [];
+            setExternalAgentSessions(items);
+        } catch (error) {
+            console.error('Failed to load external agent sessions:', error);
+        }
+    }, [hiddenExternalSessionIdSet, normalizeExternalAgentSession]);
+
+    useEffect(() => {
+        return subscribeRuntimeEventStream({
+            eventTypes: [
+                'runtime:stream-start',
+                'runtime:tool-start',
+                'runtime:task-node-changed',
+                'runtime:cli-install-started',
+                'runtime:cli-execution-started',
+                'runtime:cli-escalation-requested',
+                'runtime:done',
+                'runtime:checkpoint',
+            ],
+            checkpointTypes: [
+                'chat.response_end',
+                'chat.cancelled',
+                'chat.error',
+            ],
+            onPhaseStart: ({ sessionId }) => markSessionRunning(sessionId),
+            onToolRequest: ({ sessionId }) => markSessionRunning(sessionId),
+            onTaskNodeChanged: ({ sessionId, status }) => {
+                if (status === 'running' || status === 'pending') {
+                    markSessionRunning(sessionId);
+                }
+            },
+            onCliInstallStarted: ({ sessionId }) => markSessionRunning(sessionId),
+            onCliExecutionStarted: ({ sessionId }) => markSessionRunning(sessionId),
+            onCliEscalationRequested: ({ sessionId }) => markSessionRunning(sessionId),
+            onChatDone: ({ sessionId, status }) => {
+                if (status === 'completed') {
+                    markSessionComplete(sessionId);
+                    void loadExternalAgentSessions();
+                } else {
+                    clearRunningSessionActivity(sessionId);
+                }
+            },
+            onChatResponseEnd: ({ sessionId }) => {
+                markSessionComplete(sessionId);
+                void loadExternalAgentSessions();
+            },
+            onChatCancelled: ({ sessionId }) => clearRunningSessionActivity(sessionId),
+            onChatError: ({ sessionId }) => clearRunningSessionActivity(sessionId),
+        });
+    }, [clearRunningSessionActivity, loadExternalAgentSessions, markSessionComplete, markSessionRunning]);
+
+    useEffect(() => {
+        if (teamRooms.length === 0) {
+            if (pendingRoomSelectionRef.current) return;
+            setSelectedRoomId(null);
+            return;
+        }
+        if (!selectedRoomId || !teamRooms.some((room) => room.id === selectedRoomId)) {
+            setSelectedRoomId(teamRooms[0].id);
+        }
+    }, [selectedRoomId, teamRooms]);
+
+    useEffect(() => {
+        if (advisors.length === 0) {
+            setSelectedAdvisorId(null);
+            return;
+        }
+        if (!selectedAdvisorId || !advisors.some((advisor) => advisor.id === selectedAdvisorId)) {
+            setSelectedAdvisorId(advisors[0].id);
+        }
+    }, [advisors, selectedAdvisorId]);
+
+    const selectedAdvisor = useMemo(
+        () => advisors.find((advisor) => advisor.id === selectedAdvisorId) || null,
+        [advisors, selectedAdvisorId],
+    );
+    const selectedRoom = useMemo(
+        () => teamRooms.find((room) => room.id === selectedRoomId) || null,
+        [selectedRoomId, teamRooms],
+    );
+    const unifiedHistorySessions = useMemo<RedClawHistoryListItem[]>(() => (
+        [
+            ...sessionList.map((session): RedClawHistoryListItem => ({
+                ...session,
+                surface: 'redclaw',
+                speakerLabel: REDCLAW_DISPLAY_NAME,
+            })),
+            ...externalAgentSessions.map((session): RedClawHistoryListItem => ({
+                ...session,
+                surface: 'external',
+                speakerLabel: 'External Agent',
+            })),
+        ].sort((left, right) => sessionUpdatedAtMs(right) - sessionUpdatedAtMs(left))
+    ), [externalAgentSessions, sessionList]);
+    const activeChatSessionId = activeAiSurface === 'room' ? null : activeSessionId;
+    useEffect(() => {
+        if (isActive && activeChatSessionId) {
+            clearSessionActivity(activeChatSessionId);
+            setHistorySessionUnread(activeChatSessionId, false);
+        }
+    }, [activeChatSessionId, clearSessionActivity, isActive, setHistorySessionUnread]);
+    const activeMemberMention = activeAiSurface === 'advisor' && selectedAdvisor ? {
+        id: selectedAdvisor.id,
+        name: selectedAdvisor.name,
+        avatar: selectedAdvisor.avatar,
+        personality: selectedAdvisor.personality,
+    } : null;
+    const activeWelcomeTitle = activeAiSurface === 'advisor' && selectedAdvisor
+        ? selectedAdvisor.name
+        : activeAiSurface === 'room' && selectedRoom
+            ? selectedRoom.name || '未命名团队'
+            : `${REDCLAW_DISPLAY_NAME} 自媒体AI工作台`;
+    const activeWelcomeIconSrc = activeAiSurface === 'advisor' && selectedAdvisor && isRenderableAdvisorAvatar(selectedAdvisor)
+        ? resolveAssetUrl(selectedAdvisor.avatar)
+        : REDCLAW_WELCOME_ICON_SRC;
+    const activeWelcomeAvatarText = activeAiSurface === 'advisor' && selectedAdvisor && !isRenderableAdvisorAvatar(selectedAdvisor)
+        ? advisorAvatarText(selectedAdvisor)
+        : undefined;
+    const activeWelcomeIconVariant = activeAiSurface === 'advisor' ? 'avatar' as const : 'default' as const;
     useEffect(() => {
         if (!pendingMessage) {
             routedPendingMessageRef.current = null;
@@ -872,7 +1016,8 @@ export function RedClaw({
             return;
         }
 
-        const routing = pendingMessage.sessionRouting || 'current';
+        const isAuthoringTask = pendingMessage.taskHints?.intent === 'manuscript_creation';
+        const routing = pendingMessage.sessionRouting || (isAuthoringTask ? 'new' : 'current');
         if (routing !== 'new') {
             routedPendingMessageRef.current = pendingMessage;
             setResolvedPendingMessage(pendingMessage);
@@ -884,15 +1029,6 @@ export function RedClaw({
             return;
         }
 
-        const activeSession = activeSessionIdRef.current
-            ? sessionListRef.current.find((item) => item.id === activeSessionIdRef.current) || null
-            : null;
-        if (canReuseAsFreshSession(activeSession)) {
-            routedPendingMessageRef.current = pendingMessage;
-            setResolvedPendingMessage(pendingMessage);
-            return;
-        }
-
         let cancelled = false;
         setResolvedPendingMessage(null);
 
@@ -900,13 +1036,15 @@ export function RedClaw({
             const nextActiveSpaceId = activeSpaceId || 'default';
             const nextSpaceName = activeSpaceName || nextActiveSpaceId;
             const contextId = buildRedClawContextId(nextActiveSpaceId);
+            const sessionTitle = defaultSessionTitleFromPendingMessage(pendingMessage) || buildRedClawSessionTitle(nextSpaceName);
             try {
                 const session = await uiMeasure('redclaw', 'sessions:create_for_pending_message', async () => (
                     window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
                         contextId,
                         contextType: REDCLAW_CONTEXT_TYPE,
-                        title: buildRedClawSessionTitle(nextSpaceName),
+                        title: sessionTitle,
                         initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
+                        metadata: buildRedClawRuntimeMetadata(nextActiveSpaceId, nextSpaceName),
                     })
                 ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName });
 
@@ -917,9 +1055,11 @@ export function RedClaw({
 
                 const nextItem = createContextSessionListItem(session);
                 setSessionList((prev) => sortContextSessionItems([nextItem, ...prev.filter((item) => item.id !== session.id)]));
+                sessionListRef.current = sortContextSessionItems([nextItem, ...sessionListRef.current.filter((item) => item.id !== session.id)]);
+                activeSessionIdRef.current = session.id;
                 setActiveSessionId(session.id);
-                setChatModelKey('');
                 hasSessionSnapshotRef.current = true;
+                manualDraftActiveRef.current = false;
                 routedPendingMessageRef.current = pendingMessage;
                 setResolvedPendingMessage(pendingMessage);
                 debugUi('sessions:create_for_pending_message_done', {
@@ -957,7 +1097,7 @@ export function RedClaw({
         },
     ) => {
         const requestId = ++sessionRequestIdRef.current;
-        const shouldCreateIfEmpty = options?.createIfEmpty !== false;
+        const shouldCreateIfEmpty = options?.createIfEmpty === true;
         if (!hasSessionSnapshotRef.current && !options?.silent) {
             setIsSessionLoading(true);
         }
@@ -980,6 +1120,8 @@ export function RedClaw({
                     setActiveSpaceId(nextActiveSpaceId);
                     setActiveSpaceName(nextSpaceName);
                     setSessionList([]);
+                    sessionListRef.current = [];
+                    activeSessionIdRef.current = null;
                     setActiveSessionId(null);
                 }
                 return;
@@ -988,14 +1130,18 @@ export function RedClaw({
             let items = sortContextSessionItems(listResult);
             const rememberedSessionId = readRedClawLastSessionId(nextActiveSpaceId);
 
-            let nextActiveSessionId =
-                options?.preferredSessionId && items.some((item) => item.id === options.preferredSessionId)
+            const preserveManualDraft = manualDraftActiveRef.current
+                && !options?.preferredSessionId
+                && !activeSessionIdRef.current;
+            let nextActiveSessionId = preserveManualDraft
+                ? null
+                : options?.preferredSessionId && items.some((item) => item.id === options.preferredSessionId)
                     ? options.preferredSessionId
                     : activeSessionIdRef.current && items.some((item) => item.id === activeSessionIdRef.current)
                         ? activeSessionIdRef.current
                         : rememberedSessionId && items.some((item) => item.id === rememberedSessionId)
                             ? rememberedSessionId
-                        : items[0]?.id || null;
+                            : null;
 
             if (items.length === 0 && shouldCreateIfEmpty) {
                 const created = await uiMeasure('redclaw', 'sessions:create_context', async () => (
@@ -1004,11 +1150,14 @@ export function RedClaw({
                         contextType: REDCLAW_CONTEXT_TYPE,
                         title: buildRedClawSessionTitle(nextSpaceName),
                         initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
+                        metadata: buildRedClawRuntimeMetadata(nextActiveSpaceId, nextSpaceName),
                     })
                 ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName });
                 if (!created) {
                     if (!hasSessionSnapshotRef.current) {
                         setSessionList([]);
+                        sessionListRef.current = [];
+                        activeSessionIdRef.current = null;
                         setActiveSessionId(null);
                     }
                     return;
@@ -1022,6 +1171,9 @@ export function RedClaw({
             setActiveSpaceId(nextActiveSpaceId);
             setActiveSpaceName(nextSpaceName);
             setSessionList(items);
+            sessionListRef.current = items;
+            void loadExternalAgentSessions();
+            activeSessionIdRef.current = nextActiveSessionId;
             setActiveSessionId(nextActiveSessionId);
             hasSessionSnapshotRef.current = true;
             debugUi('sessions:loaded', {
@@ -1034,6 +1186,8 @@ export function RedClaw({
             console.error('Failed to load RedClaw context sessions:', error);
             if (!hasSessionSnapshotRef.current) {
                 setSessionList([]);
+                sessionListRef.current = [];
+                activeSessionIdRef.current = null;
                 setActiveSessionId(null);
             }
         } finally {
@@ -1042,7 +1196,7 @@ export function RedClaw({
                 setHistoryLoading(false);
             }
         }
-    }, [debugUi]);
+    }, [debugUi, loadExternalAgentSessions]);
 
     const initSession = useCallback(async () => {
         if (!hasSessionSnapshotRef.current) {
@@ -1055,7 +1209,7 @@ export function RedClaw({
             const normalizedSpaceInfo = normalizeRedClawSpaceListPayload(spaceInfo);
             const nextActiveSpaceId = normalizedSpaceInfo.activeSpaceId || 'default';
             const nextSpaceName = normalizedSpaceInfo.spaces.find((space) => space.id === nextActiveSpaceId)?.name || nextActiveSpaceId;
-            await loadContextSessions(nextActiveSpaceId, nextSpaceName, { createIfEmpty: true });
+            await loadContextSessions(nextActiveSpaceId, nextSpaceName, { createIfEmpty: false });
         } catch (error) {
             console.error('Failed to initialize RedClaw session list:', error);
             if (!hasSessionSnapshotRef.current) {
@@ -1133,179 +1287,6 @@ export function RedClaw({
         }
     }, []);
 
-    const loadAdvisors = useCallback(async () => {
-        try {
-            const list = await window.ipcRenderer.advisors.list<AdvisorProfile>();
-            setAdvisors(Array.isArray(list) ? list : []);
-        } catch (error) {
-            console.error('Failed to load RedClaw advisors:', error);
-        }
-    }, []);
-
-    const normalizeExternalAgentSession = useCallback((item: ContextChatSessionListItem): ContextChatSessionListItem => {
-        const rawTitle = String(
-            item.chatSession?.title
-            || (item as unknown as { title?: string }).title
-            || '外部 Agent 对话'
-        ).trim() || '外部 Agent 对话';
-        const rawUpdatedAt = String(
-            item.chatSession?.updatedAt
-            || (item as unknown as { updatedAt?: string }).updatedAt
-            || item.chatSession?.createdAt
-            || Date.now()
-        );
-        const rawCreatedAt = String(
-            item.chatSession?.createdAt
-            || (item as unknown as { createdAt?: string }).createdAt
-            || rawUpdatedAt
-        );
-        return {
-            ...item,
-            id: String(item.id || item.chatSession?.id || '').trim(),
-            metadata: item.metadata || null,
-            chatSession: {
-                id: String(item.chatSession?.id || item.id || '').trim(),
-                title: rawTitle,
-                updatedAt: rawUpdatedAt,
-                createdAt: rawCreatedAt,
-            },
-        };
-    }, []);
-
-    const loadExternalAgentSessions = useCallback(async () => {
-        try {
-            const result = await window.ipcRenderer.sessions.list() as ContextChatSessionListItem[];
-            const items = Array.isArray(result)
-                ? sortContextSessionItems(result
-                    .filter((item) => {
-                        const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
-                            ? item.metadata as Record<string, unknown>
-                            : {};
-                        const sessionId = String(item.id || item.chatSession?.id || '').trim();
-                        return String(metadata.source || '').trim() === 'acp'
-                            && !hiddenExternalSessionIdSet.has(sessionId)
-                            && !item.archived
-                            && metadata.archived !== true
-                            && String(metadata.status || '').trim() !== 'archived';
-                    })
-                    .map(normalizeExternalAgentSession))
-                : [];
-            setExternalAgentSessions(items);
-        } catch (error) {
-            console.error('Failed to load external RedClaw sessions:', error);
-        }
-    }, [hiddenExternalSessionIdSet, normalizeExternalAgentSession]);
-
-    useEffect(() => subscribeRuntimeEventStream({
-        eventTypes: [
-            'runtime:stream-start',
-            'runtime:tool-start',
-            'runtime:task-node-changed',
-            'runtime:cli-install-started',
-            'runtime:cli-execution-started',
-            'runtime:cli-escalation-requested',
-            'runtime:done',
-            'runtime:checkpoint',
-        ],
-        checkpointTypes: [
-            'chat.response_end',
-            'chat.cancelled',
-            'chat.error',
-        ],
-        onPhaseStart: ({ sessionId }) => markSessionRunning(sessionId),
-        onToolRequest: ({ sessionId }) => markSessionRunning(sessionId),
-        onTaskNodeChanged: ({ sessionId, status }) => {
-            if (status === 'running' || status === 'pending') {
-                markSessionRunning(sessionId);
-            }
-        },
-        onCliInstallStarted: ({ sessionId }) => markSessionRunning(sessionId),
-        onCliExecutionStarted: ({ sessionId }) => markSessionRunning(sessionId),
-        onCliEscalationRequested: ({ sessionId }) => markSessionRunning(sessionId),
-        onChatDone: ({ sessionId, status }) => {
-            if (status === 'completed') {
-                markSessionComplete(sessionId);
-                void loadExternalAgentSessions();
-            } else {
-                clearRunningSessionActivity(sessionId);
-            }
-        },
-        onChatResponseEnd: ({ sessionId }) => {
-            markSessionComplete(sessionId);
-            void loadExternalAgentSessions();
-        },
-        onChatCancelled: ({ sessionId }) => clearRunningSessionActivity(sessionId),
-        onChatError: ({ sessionId }) => clearRunningSessionActivity(sessionId),
-    }), [
-        clearRunningSessionActivity,
-        loadExternalAgentSessions,
-        markSessionComplete,
-        markSessionRunning,
-    ]);
-
-    const loadGlobalManuscripts = useCallback(async () => {
-        setGlobalManuscriptsLoading(true);
-        setGlobalManuscriptsError('');
-        try {
-            const tree = await window.ipcRenderer.manuscripts.list<RedClawManuscriptNode[]>();
-            setGlobalManuscriptTree(Array.isArray(tree) ? sortRedClawManuscripts(tree) : []);
-        } catch (error) {
-            console.error('Failed to load RedClaw global manuscripts:', error);
-            setGlobalManuscriptsError('稿件加载失败');
-        } finally {
-            setGlobalManuscriptsLoading(false);
-        }
-    }, []);
-
-    const loadAdvisorSession = useCallback(async (advisor: AdvisorProfile) => {
-        const requestId = ++advisorSessionRequestIdRef.current;
-        setIsAdvisorSessionLoading(true);
-        setAdvisorSessionId(null);
-
-        try {
-            const listResult = await uiMeasure('redclaw', 'advisor_session:list_context', async () => (
-                window.ipcRenderer.chat.listContextSessionsGuarded<ContextChatSessionListItem>({
-                    contextId: advisor.id,
-                    contextType: ADVISOR_CHAT_CONTEXT_TYPE,
-                })
-            ), { advisorId: advisor.id }) as ContextChatSessionListItem[] | null;
-
-            if (requestId !== advisorSessionRequestIdRef.current) return;
-            const items = sortContextSessionItems(listResult || []);
-            const existingSessionId = items[0]?.id || null;
-            if (existingSessionId) {
-                setAdvisorSessionId(existingSessionId);
-                return;
-            }
-
-            const created = await uiMeasure('redclaw', 'advisor_session:create_context', async () => (
-                window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
-                    contextId: advisor.id,
-                    contextType: ADVISOR_CHAT_CONTEXT_TYPE,
-                    title: `与 ${advisor.name} 聊聊`,
-                    initialContext: buildAdvisorInitialContext(advisor),
-                })
-            ), { advisorId: advisor.id });
-
-            if (requestId !== advisorSessionRequestIdRef.current) return;
-            if (!created?.id) {
-                throw new Error('create advisor context session timed out');
-            }
-            setAdvisorSessionId(created.id);
-        } catch (error) {
-            console.error('Failed to load RedClaw advisor session:', error);
-            if (requestId === advisorSessionRequestIdRef.current) {
-                setAdvisorSessionId(null);
-                setChatActionMessage('打开成员对话失败，请稍后重试');
-                setActiveAiSurface('redclaw');
-            }
-        } finally {
-            if (requestId === advisorSessionRequestIdRef.current) {
-                setIsAdvisorSessionLoading(false);
-            }
-        }
-    }, []);
-
     const loadOnboardingBundle = useCallback(async () => {
         const requestId = ++onboardingRequestIdRef.current;
         try {
@@ -1315,9 +1296,16 @@ export function RedClaw({
                 onboardingState?: Record<string, unknown>;
             } | null;
             if (requestId !== onboardingRequestIdRef.current) return;
-            setOnboardingState(bundle?.onboardingState || null);
+            setOnboardingState(
+                bundle?.onboardingState && typeof bundle.onboardingState === 'object'
+                    ? bundle.onboardingState
+                    : null
+            );
         } catch (error) {
             console.error('Failed to load RedClaw onboarding bundle:', error);
+            if (requestId === onboardingRequestIdRef.current) {
+                setOnboardingState(null);
+            }
         }
     }, []);
 
@@ -1336,29 +1324,14 @@ export function RedClaw({
         };
     }, [debugUi]);
 
-    useEffect(() => () => {
-        clearPreviewSidebarAnimationTimer();
-    }, [clearPreviewSidebarAnimationTimer]);
-
     useEffect(() => {
-        clearPreviewSidebarAnimationTimer();
-        setIsPreviewSidebarClosing(false);
-        setPreviewSidebarCollapsed(false);
-        setPreviewTarget(null);
-    }, [activeSessionId, activeSpaceId, clearPreviewSidebarAnimationTimer]);
-
-    useEffect(() => {
-        if (!isActive || !activeSessionId) return;
-        clearSessionActivity(activeSessionId);
-        setHistorySessionUnread(activeSessionId, false);
-    }, [activeSessionId, clearSessionActivity, isActive, setHistorySessionUnread]);
-
-    useEffect(() => {
-        if (!isActive) return;
+        if (!shouldLoadHistory) return;
         void initSession();
         void loadExternalAgentSessions();
-        void loadRunnerStatus(true);
-    }, [initSession, isActive, loadExternalAgentSessions, loadRunnerStatus]);
+        if (isActive) {
+            void loadRunnerStatus(true);
+        }
+    }, [initSession, isActive, loadExternalAgentSessions, loadRunnerStatus, shouldLoadHistory]);
 
     useEffect(() => {
         if (!isActive || !activeSessionId) return;
@@ -1369,29 +1342,28 @@ export function RedClaw({
         if (!redclawOnboardingVersion) return;
         void loadOnboardingBundle();
         void loadSkills();
-        setHideOnboardingPrompt(true);
         setChatActionMessage('已完成这个空间的风格定义');
     }, [loadOnboardingBundle, loadSkills, redclawOnboardingVersion]);
 
     useEffect(() => {
-        if (!isActive) return;
+        if (!shouldLoadHistory) return;
         const onSpaceChanged = () => {
+            setOnboardingState(undefined);
             void initSession();
-            void loadRunnerStatus(true);
-            void loadSkills();
-            void loadAdvisors();
-            void loadExternalAgentSessions();
-            void loadOnboardingBundle();
-            setHideOnboardingPrompt(false);
+            if (isActive) {
+                void loadRunnerStatus(true);
+                void loadSkills();
+                void loadOnboardingBundle();
+            }
         };
         window.ipcRenderer.spaces.onChanged(onSpaceChanged);
         return () => {
             window.ipcRenderer.spaces.offChanged(onSpaceChanged);
         };
-    }, [initSession, isActive, loadAdvisors, loadExternalAgentSessions, loadOnboardingBundle, loadRunnerStatus, loadSkills]);
+    }, [initSession, isActive, loadOnboardingBundle, loadRunnerStatus, loadSkills, shouldLoadHistory]);
 
     useEffect(() => {
-        setHideOnboardingPrompt(false);
+        setOnboardingState(undefined);
     }, [activeSpaceId]);
 
     useEffect(() => {
@@ -1402,56 +1374,18 @@ export function RedClaw({
 
     useEffect(() => {
         if (!isActive) return;
-        void loadAdvisors();
-    }, [isActive, loadAdvisors]);
-
-    useEffect(() => {
-        if (!isActive) return;
-        const handleAdvisorsChanged = () => {
-            void loadAdvisors();
-        };
-        window.ipcRenderer.advisors.onChanged(handleAdvisorsChanged);
-        return () => {
-            window.ipcRenderer.advisors.offChanged(handleAdvisorsChanged);
-        };
-    }, [isActive, loadAdvisors]);
-
-    useEffect(() => {
-        if (advisors.length === 0) {
-            if (activeAiSurface === 'advisor') {
-                setActiveAiSurface('redclaw');
-            }
-            setSelectedAdvisorId(null);
-            setAdvisorSessionId(null);
-            return;
-        }
-        if (!selectedAdvisorId) {
-            if (activeAiSurface === 'advisor') {
-                const firstVisibleAdvisor = visibleRedClawAdvisors(advisors)[0] || advisors[0];
-                setSelectedAdvisorId(firstVisibleAdvisor.id);
-            }
-            return;
-        }
-        if (advisors.some((advisor) => advisor.id === selectedAdvisorId)) return;
-        setSelectedAdvisorId(null);
-        setAdvisorSessionId(null);
-        setActiveAiSurface('redclaw');
-    }, [activeAiSurface, advisors, selectedAdvisorId]);
-
-    useEffect(() => {
-        if (!isActive) return;
         const onRunnerStatus = (_event: unknown, status: RunnerStatus) => {
             if (!status || typeof status !== 'object') return;
             setRunnerStatus(status);
         };
-        window.ipcRenderer.redclawRunner.onStatus(onRunnerStatus as (...args: unknown[]) => void);
+        window.ipcRenderer.redclawRunner.onStatus(onRunnerStatus);
         return () => {
-            window.ipcRenderer.redclawRunner.offStatus(onRunnerStatus as (...args: unknown[]) => void);
+            window.ipcRenderer.redclawRunner.offStatus(onRunnerStatus);
         };
     }, [isActive]);
 
     useEffect(() => {
-        if (!isActive) return;
+        if (!shouldLoadHistory) return;
         const onSessionTitleUpdated = (_event: unknown, payload: { sessionId?: string; title?: string }) => {
             const nextSessionId = String(payload?.sessionId || '').trim();
             const nextTitle = String(payload?.title || '').trim();
@@ -1465,25 +1399,16 @@ export function RedClaw({
                             id: item.chatSession?.id || item.id,
                             title: nextTitle,
                             updatedAt: new Date().toISOString(),
+                            createdAt: item.chatSession?.createdAt,
                         },
                     }
             ))));
         };
-        window.ipcRenderer.chat.onSessionTitleUpdated(onSessionTitleUpdated as (...args: unknown[]) => void);
+        window.ipcRenderer.chat.onSessionTitleUpdated(onSessionTitleUpdated);
         return () => {
-            window.ipcRenderer.chat.offSessionTitleUpdated(onSessionTitleUpdated as (...args: unknown[]) => void);
+            window.ipcRenderer.chat.offSessionTitleUpdated(onSessionTitleUpdated);
         };
-    }, [isActive]);
-
-    useEffect(() => {
-        if (!isActive || !historyDrawerOpen) return;
-        void loadContextSessions(activeSpaceId || 'default', activeSpaceName || '默认空间', {
-            preferredSessionId: activeSessionIdRef.current,
-            createIfEmpty: true,
-            silent: false,
-        });
-        void loadExternalAgentSessions();
-    }, [activeSpaceId, activeSpaceName, historyDrawerOpen, isActive, loadContextSessions, loadExternalAgentSessions]);
+    }, [shouldLoadHistory]);
 
     useEffect(() => {
         if (!chatActionMessage) return;
@@ -1514,301 +1439,88 @@ export function RedClaw({
         });
     }, [runnerStatus]);
 
-    const selectedAdvisor = useMemo(() => (
-        selectedAdvisorId
-            ? advisors.find((advisor) => advisor.id === selectedAdvisorId) || null
-            : null
-    ), [advisors, selectedAdvisorId]);
-
-    useEffect(() => {
-        if (activeAiSurface !== 'advisor') return;
-        if (!selectedAdvisor || advisorSessionId || isAdvisorSessionLoading) return;
-        void loadAdvisorSession(selectedAdvisor);
-    }, [activeAiSurface, advisorSessionId, isAdvisorSessionLoading, loadAdvisorSession, selectedAdvisor]);
-
-    useEffect(() => {
-        if (!onGlobalSidebarContentChange || globalSidebarTab !== 'manuscripts') return;
-        void loadGlobalManuscripts();
-        const timer = window.setInterval(() => {
-            void loadGlobalManuscripts();
-        }, 5000);
-        return () => window.clearInterval(timer);
-    }, [globalSidebarTab, loadGlobalManuscripts, onGlobalSidebarContentChange]);
-
-    const createNewSession = useCallback(async () => {
+    const createNewSession = useCallback(async (
+        defaultTitle?: string,
+        options?: { onCreated?: (sessionId: string) => void },
+    ): Promise<string | null> => {
         const nextActiveSpaceId = activeSpaceId || 'default';
         const nextSpaceName = activeSpaceName || nextActiveSpaceId;
         const contextId = buildRedClawContextId(nextActiveSpaceId);
+        const sessionTitle = String(defaultTitle || '').trim() || buildRedClawSessionTitle(nextSpaceName);
         setHistoryLoading(true);
         try {
             const session = await uiMeasure('redclaw', 'sessions:create_manual', async () => (
                 window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
                     contextId,
                     contextType: REDCLAW_CONTEXT_TYPE,
-                    title: buildRedClawSessionTitle(nextSpaceName),
+                    title: sessionTitle,
                     initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
+                    metadata: buildRedClawRuntimeMetadata(nextActiveSpaceId, nextSpaceName),
                 })
             ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName });
             if (!session) {
                 throw new Error('create context session timed out');
             }
+            options?.onCreated?.(session.id);
             const nextItem = createContextSessionListItem(session);
-            setSessionList((prev) => sortContextSessionItems([nextItem, ...prev.filter((item) => item.id !== session.id)]));
-            setActiveSessionId(session.id);
-            setActiveAiSurface('redclaw');
-            setChatModelKey('');
-            onOpenChatSurface?.();
-            hasSessionSnapshotRef.current = true;
+            flushSync(() => {
+                const nextList = sortContextSessionItems([nextItem, ...sessionListRef.current.filter((item) => item.id !== session.id)]);
+                sessionListRef.current = nextList;
+                setSessionList(nextList);
+                setActiveSessionId(session.id);
+                setActiveAiSurface('redclaw');
+                hasSessionSnapshotRef.current = true;
+            });
+            activeSessionIdRef.current = session.id;
+            manualDraftActiveRef.current = false;
             debugUi('sessions:create_done', { sessionId: session.id, activeSpaceId: nextActiveSpaceId });
+            return session.id;
         } catch (error) {
             console.error('Failed to create RedClaw context session:', error);
             setChatActionMessage('新建对话失败，请稍后重试');
+            return null;
         } finally {
             setHistoryLoading(false);
         }
-    }, [activeSpaceId, activeSpaceName, debugUi, onOpenChatSurface]);
+    }, [activeSpaceId, activeSpaceName, debugUi]);
 
-    const switchSession = useCallback((nextSessionId: string) => {
-        if (!nextSessionId || nextSessionId === activeSessionIdRef.current) return;
-        setActiveSessionId(nextSessionId);
-        setActiveAiSurface('redclaw');
-        setChatModelKey('');
+    const startNewDraftSession = useCallback(() => {
         onOpenChatSurface?.();
-        debugUi('sessions:switch', { sessionId: nextSessionId, activeSpaceId });
+        sessionRequestIdRef.current += 1;
+        setActiveAiSurface('redclaw');
+        manualDraftActiveRef.current = true;
+        activeSessionIdRef.current = null;
+        setActiveSessionId(null);
+        setIsSessionLoading(false);
+        setHistoryLoading(false);
+        setPreviewTarget(null);
+        writeRedClawLastSessionId(activeSpaceId || 'default', null);
+        setChatRefreshKey((value) => value + 1);
+        debugUi('sessions:new_draft', { activeSpaceId: activeSpaceId || 'default' });
     }, [activeSpaceId, debugUi, onOpenChatSurface]);
 
-    const openHistoryDrawer = useCallback((tab: 'sessions' | 'manuscripts' = 'sessions') => {
-        setHistoryDrawerInitialTab(tab);
-        setHistoryDrawerOpen(true);
-    }, []);
-
-    const openRenameSessionDialog = useCallback((session: ContextChatSessionListItem) => {
-        setRenameSessionTarget(session);
-        setRenameSessionTitle(session.chatSession?.title?.trim() || '未命名会话');
-        setRenameSessionError('');
-    }, []);
-
-    const closeRenameSessionDialog = useCallback(() => {
-        if (isRenamingSession) return;
-        setRenameSessionTarget(null);
-        setRenameSessionTitle('');
-        setRenameSessionError('');
-    }, [isRenamingSession]);
-
-    const togglePinnedSession = useCallback((sessionId: string) => {
-        if (!sessionId) return;
-        setPinnedSessionIds((current) => {
-            const next = current.includes(sessionId)
-                ? current.filter((id) => id !== sessionId)
-                : [sessionId, ...current.filter((id) => id !== sessionId)];
-            writeRedClawPinnedSessionIds(next);
-            return next;
-        });
-    }, []);
-
-    const submitRenameSession = useCallback(async () => {
-        if (!renameSessionTarget || isRenamingSession) return;
-        const nextTitle = renameSessionTitle.trim();
-        if (!nextTitle) {
-            setRenameSessionError('请输入名称');
-            return;
-        }
-
-        setIsRenamingSession(true);
-        setRenameSessionError('');
-        try {
-            const result = await window.ipcRenderer.chat.renameSession({
-                sessionId: renameSessionTarget.id,
-                title: nextTitle,
-            });
-            if (result && result.success === false) {
-                throw new Error(result.error || '重命名失败');
-            }
-            const nextUpdatedAt = result?.session?.updatedAt || new Date().toISOString();
-            setSessionList((current) => sortContextSessionItems(current.map((item) => (
-                item.id === renameSessionTarget.id
-                    ? {
-                        ...item,
-                        chatSession: {
-                            id: item.chatSession?.id || item.id,
-                            title: nextTitle,
-                            updatedAt: nextUpdatedAt,
-                        },
-                    }
-                    : item
-            ))));
-            setRenameSessionTarget(null);
-            setRenameSessionTitle('');
-        } catch (error) {
-            setRenameSessionError(error instanceof Error ? error.message : '重命名失败');
-        } finally {
-            setIsRenamingSession(false);
-        }
-    }, [isRenamingSession, renameSessionTarget, renameSessionTitle]);
-
-    const openGlobalManuscript = useCallback((path: string) => {
-        const normalizedPath = String(path || '').trim();
-        if (!normalizedPath) return;
-        if (onOpenManuscriptEditor) {
-            onOpenManuscriptEditor(normalizedPath);
-            return;
-        }
-        if (onOpenManuscript) {
-            onOpenManuscript(normalizedPath);
-            return;
-        }
-        openHistoryDrawer('manuscripts');
-    }, [onOpenManuscript, onOpenManuscriptEditor, openHistoryDrawer]);
-
-    const handlePreviewLink = useCallback((target: ChatMessageLinkTarget) => {
-        clearPreviewSidebarAnimationTimer();
-        setIsPreviewSidebarClosing(false);
-        setPreviewTarget(target);
-        setPreviewSidebarCollapsed(false);
-        const source = String(target.localPathCandidate || target.href || '').trim();
-        if (!source || /^https?:\/\//i.test(source)) return;
-
-        void (async () => {
-            try {
-                const result = await window.ipcRenderer.files.resolvePreview({ source }) as FilePreviewResolveResult;
-                if (!result?.success) {
-                    setPreviewTarget((current) => current?.href === target.href
-                        ? { ...current, error: result?.error || '解析文件路径失败' }
-                        : current);
-                    return;
-                }
-                const localCandidate = String(result.localPathCandidate || result.absolutePath || source).trim();
-                const rawResolved = String(result.resolvedUrl || localCandidate || target.resolvedUrl || '').trim();
-                const resolvedUrl = rawResolved ? resolveAssetUrl(rawResolved) : '';
-                setPreviewTarget((current) => current?.href === target.href
-                    ? {
-                        ...current,
-                        label: String(result.title || current.label || target.label),
-                        kind: normalizePreviewKind(result.kind, current.kind),
-                        resolvedUrl: resolvedUrl || current.resolvedUrl,
-                        isLocal: result.isLocal ?? current.isLocal,
-                        localPathCandidate: localCandidate || current.localPathCandidate,
-                        extension: String(result.extension || current.extension || '').trim() || undefined,
-                        exists: result.exists,
-                        isDirectory: result.isDirectory,
-                        mimeType: String(result.mimeType || '').trim() || undefined,
-                        sizeBytes: typeof result.sizeBytes === 'number' ? result.sizeBytes : undefined,
-                        previewText: typeof result.previewText === 'string' ? result.previewText : undefined,
-                        error: result.exists === false ? '文件不存在或已被移动' : undefined,
-                    }
-                    : current);
-            } catch (error) {
-                console.error('Failed to resolve RedClaw preview target:', error);
-                setPreviewTarget((current) => current?.href === target.href
-                    ? { ...current, error: '解析文件路径失败' }
-                    : current);
-            }
-        })();
-    }, [clearPreviewSidebarAnimationTimer]);
-
-    const handleClosePreview = useCallback(() => {
-        if (!previewTarget || isPreviewSidebarClosing) return;
-        clearPreviewSidebarAnimationTimer();
-        setIsPreviewSidebarClosing(true);
-        previewSidebarAnimationTimerRef.current = window.setTimeout(() => {
-            setPreviewTarget(null);
-            setPreviewSidebarCollapsed(false);
-            setIsPreviewSidebarClosing(false);
-            previewSidebarAnimationTimerRef.current = null;
-        }, PREVIEW_SIDEBAR_ANIMATION_MS);
-    }, [clearPreviewSidebarAnimationTimer, isPreviewSidebarClosing, previewTarget]);
-
-    const togglePreviewSidebarCollapsed = useCallback(() => {
-        if (!previewTarget) return;
-        clearPreviewSidebarAnimationTimer();
-        if (previewSidebarCollapsed || isPreviewSidebarClosing) {
-            setIsPreviewSidebarClosing(false);
-            setPreviewSidebarCollapsed(false);
-            return;
-        }
-        setIsPreviewSidebarClosing(true);
-        previewSidebarAnimationTimerRef.current = window.setTimeout(() => {
-            setPreviewSidebarCollapsed(true);
-            setIsPreviewSidebarClosing(false);
-            previewSidebarAnimationTimerRef.current = null;
-        }, PREVIEW_SIDEBAR_ANIMATION_MS);
-    }, [clearPreviewSidebarAnimationTimer, isPreviewSidebarClosing, previewSidebarCollapsed, previewTarget]);
-
-    const handleOpenPreviewExternal = useCallback(async (target: ChatMessageLinkTarget) => {
-        const source = String(target.localPathCandidate || target.href || '').trim();
-        if (!source) return;
-
-        if (/^https?:\/\//i.test(target.resolvedUrl)) {
-            window.open(target.resolvedUrl, '_blank', 'noopener,noreferrer');
-            return;
-        }
-
-        try {
-            const result = await window.ipcRenderer.openPath(source);
-            if (result && result.success === false) {
-                setChatActionMessage(result.error || '打开文件失败');
-            }
-        } catch (error) {
-            console.error('Failed to open RedClaw preview target:', error);
-            setChatActionMessage('打开文件失败');
-        }
-    }, []);
-
-    const handleRevealPreviewInFolder = useCallback(async (target: ChatMessageLinkTarget) => {
-        const source = String(target.localPathCandidate || target.href || '').trim();
-        if (!source || !target.isLocal) return;
-        try {
-            const result = await window.ipcRenderer.files.showInFolder({ source }) as { success?: boolean; error?: string };
-            if (result && result.success === false) {
-                setChatActionMessage(result.error || '定位文件失败');
-            }
-        } catch (error) {
-            console.error('Failed to reveal RedClaw preview target:', error);
-            setChatActionMessage('定位文件失败');
-        }
-    }, []);
-
-    const handleSelectRedClawShortcut = useCallback(() => {
-        advisorSessionRequestIdRef.current += 1;
+    const switchSession = useCallback((nextSessionId: string) => {
+        if (!nextSessionId) return;
         setActiveAiSurface('redclaw');
-        setIsAdvisorSessionLoading(false);
-    }, []);
-
-    const handleSelectAdvisorShortcut = useCallback((advisorId: string) => {
-        const advisor = advisors.find((item) => item.id === advisorId);
-        if (!advisor) {
-            onOpenTeamMembers?.();
-            return;
-        }
-        setSelectedAdvisorId(advisor.id);
-        setAdvisorSessionId(null);
-        setActiveAiSurface('advisor');
-        void loadAdvisorSession(advisor);
-    }, [advisors, loadAdvisorSession, onOpenTeamMembers]);
-
-    const handleCreateAdvisorShortcut = useCallback(() => {
-        setAdvisorCreateRequestKey((value) => value + 1);
-    }, []);
-
-    const handleAdvisorHostChange = useCallback((nextAdvisors: AdvisorProfile[]) => {
-        setAdvisors(Array.isArray(nextAdvisors) ? nextAdvisors : []);
-    }, []);
-
-    const handleAdvisorHostSelected = useCallback((advisorId: string | null) => {
-        const nextAdvisorId = String(advisorId || '').trim();
-        if (!nextAdvisorId) return;
-        setSelectedAdvisorId(nextAdvisorId);
-        setAdvisorSessionId(null);
-        setActiveAiSurface('advisor');
-    }, []);
+        manualDraftActiveRef.current = false;
+        activeSessionIdRef.current = nextSessionId;
+        setActiveSessionId(nextSessionId);
+        debugUi('sessions:switch', { sessionId: nextSessionId, activeSpaceId });
+    }, [activeSpaceId, debugUi]);
 
     useEffect(() => {
         if (!isActive || !navigationAction) return;
         if (consumedNavigationActionNonceRef.current === navigationAction.nonce) return;
         consumedNavigationActionNonceRef.current = navigationAction.nonce;
         if (navigationAction.action === 'new') {
-            void createNewSession();
-        } else if ((navigationAction.action === 'open-session' || navigationAction.action === 'open-team') && navigationAction.sessionId) {
+            startNewDraftSession();
+        } else if (navigationAction.action === 'open-team' && navigationAction.sessionId) {
+            pendingRoomSelectionRef.current = navigationAction.sessionId;
+            setSelectedRoomId(navigationAction.sessionId);
+            setActiveAiSurface('room');
+            onOpenChatSurface?.();
+        } else if (navigationAction.action === 'open-session' && navigationAction.sessionId) {
+            onOpenChatSurface?.();
             switchSession(navigationAction.sessionId);
             void loadContextSessions(
                 activeSpaceId || 'default',
@@ -1821,112 +1533,281 @@ export function RedClaw({
             );
         }
         onNavigationActionConsumed?.();
-    }, [activeSpaceId, activeSpaceName, createNewSession, isActive, loadContextSessions, navigationAction, onNavigationActionConsumed, switchSession]);
+    }, [activeSpaceId, activeSpaceName, isActive, loadContextSessions, navigationAction, onNavigationActionConsumed, onOpenChatSurface, startNewDraftSession, switchSession]);
 
-    const deleteHistorySession = useCallback(async (targetSessionId: string) => {
-        if (!targetSessionId) return;
-        const nextActiveSpaceId = activeSpaceId || 'default';
-        const nextSpaceName = activeSpaceName || nextActiveSpaceId;
-        setHistoryLoading(true);
-        try {
-            await window.ipcRenderer.chat.deleteSession(targetSessionId);
-            if (typeof window !== 'undefined' && readRedClawLastSessionId(nextActiveSpaceId) === targetSessionId) {
-                localStorage.removeItem(redClawLastSessionStorageKey(nextActiveSpaceId));
-            }
-            setPinnedSessionIds((current) => {
-                if (!current.includes(targetSessionId)) return current;
-                const next = current.filter((id) => id !== targetSessionId);
-                writeRedClawPinnedSessionIds(next);
-                return next;
-            });
-            const remaining = sessionListRef.current.filter((item) => item.id !== targetSessionId);
-            setSessionList(remaining);
+    const markHistorySessionActivity = useCallback((sessionId: string, updatedAt: string) => {
+        const nextSessionId = String(sessionId || '').trim();
+        const nextUpdatedAt = String(updatedAt || '').trim() || new Date().toISOString();
+        if (!nextSessionId) return;
+        const updateItem = <T extends ContextChatSessionListItem,>(item: T): T => (
+            item.id !== nextSessionId
+                ? item
+                : {
+                    ...item,
+                    chatSession: {
+                        id: item.chatSession?.id || item.id,
+                        title: item.chatSession?.title || '未命名会话',
+                        updatedAt: nextUpdatedAt,
+                        createdAt: item.chatSession?.createdAt,
+                    },
+                }
+        );
+        setSessionList((prev) => sortContextSessionItems(prev.map(updateItem)));
+    }, []);
 
-            if (activeSessionIdRef.current !== targetSessionId) {
-                return;
-            }
+    const applyHistorySessionTitle = useCallback((sessionId: string, title: string) => {
+        const nextSessionId = String(sessionId || '').trim();
+        const nextTitle = String(title || '').trim();
+        if (!nextSessionId || !nextTitle) return;
+        const nextUpdatedAt = new Date().toISOString();
+        const updateItem = <T extends ContextChatSessionListItem,>(item: T): T => (
+            item.id !== nextSessionId
+                ? item
+                : {
+                    ...item,
+                    chatSession: {
+                        id: item.chatSession?.id || item.id,
+                        title: nextTitle,
+                        updatedAt: nextUpdatedAt,
+                        createdAt: item.chatSession?.createdAt,
+                    },
+                }
+        );
+        setSessionList((prev) => sortContextSessionItems(prev.map(updateItem)));
+    }, []);
 
-            if (remaining.length > 0) {
-                setActiveSessionId(remaining[0].id);
-                setActiveAiSurface('redclaw');
-                setChatModelKey('');
-                return;
-            }
+    const renameUnifiedHistorySession = useCallback(async (session: RedClawHistoryListItem, title: string) => {
+        const nextSessionId = String(session?.id || '').trim();
+        const nextTitle = String(title || '').trim();
+        if (!nextSessionId || !nextTitle) return;
+        await window.ipcRenderer.chat.renameSession({ sessionId: nextSessionId, title: nextTitle });
+        applyHistorySessionTitle(nextSessionId, nextTitle);
+    }, [applyHistorySessionTitle]);
 
-            const created = await uiMeasure('redclaw', 'sessions:create_after_delete', async () => (
-                    window.ipcRenderer.chat.createContextSessionGuarded<ChatSession>({
-                        contextId: buildRedClawContextId(nextActiveSpaceId),
-                        contextType: REDCLAW_CONTEXT_TYPE,
-                        title: buildRedClawSessionTitle(nextSpaceName),
-                        initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
-                    })
-                ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName });
-            if (!created) {
-                throw new Error('create context session timed out');
-            }
-            const nextItem = createContextSessionListItem(created);
-            setSessionList([nextItem]);
-            setActiveSessionId(created.id);
-            setActiveAiSurface('redclaw');
-            setChatModelKey('');
-        } catch (error) {
-            console.error('Failed to delete RedClaw session:', error);
-            setChatActionMessage('删除对话失败，请稍后重试');
-            void loadContextSessions(nextActiveSpaceId, nextSpaceName, { createIfEmpty: true, silent: true });
-        } finally {
-            setHistoryLoading(false);
+    const switchHistorySession = useCallback((session: RedClawHistoryListItem) => {
+        if (!session?.id) return;
+        onOpenChatSurface?.();
+        clearSessionActivity(session.id);
+        setHistorySessionUnread(session.id, false);
+        if (session.surface === 'room' && session.roomId) {
+            setSelectedRoomId(session.roomId);
+            setActiveAiSurface('room');
+            return;
         }
-    }, [activeSpaceId, activeSpaceName, loadContextSessions]);
-
-    const archiveUnifiedHistorySession = useCallback(async (session: RedClawHistoryListItem) => {
-        const targetSessionId = String(session?.id || '').trim();
-        if (!targetSessionId) return;
-        const nextActiveSpaceId = activeSpaceId || 'default';
-        const nextSpaceName = activeSpaceName || nextActiveSpaceId;
-        const isExternalSession = session.surface === 'external';
-        setHistoryLoading(true);
-        if (isExternalSession) {
-            setHiddenExternalSessionIds((current) => {
-                if (current.includes(targetSessionId)) return current;
-                const next = [...current, targetSessionId];
-                writeHiddenExternalSessionIds(next);
-                return next;
-            });
-            setExternalAgentSessions((current) => current.filter((item) => item.id !== targetSessionId));
+        if (session.surface === 'external') {
+            clearFixedSessionWarmSnapshot(session.id);
+            setChatRefreshKey((value) => value + 1);
         }
-        try {
-            await window.ipcRenderer.chat.archiveSession(targetSessionId);
-            setPinnedSessionIds((current) => {
-                if (!current.includes(targetSessionId)) return current;
-                const next = current.filter((id) => id !== targetSessionId);
-                writeRedClawPinnedSessionIds(next);
-                return next;
-            });
-            const remaining = sessionListRef.current.filter((item) => item.id !== targetSessionId);
-            sessionListRef.current = remaining;
-            setSessionList(remaining);
+        switchSession(session.id);
+    }, [clearSessionActivity, onOpenChatSurface, setHistorySessionUnread, switchSession]);
 
-            if (activeSessionIdRef.current === targetSessionId) {
-                const nextSessionId = remaining[0]?.id || null;
-                setActiveSessionId(nextSessionId);
-                setActiveAiSurface('redclaw');
-                setChatModelKey('');
-                if (!nextSessionId) {
-                    void loadContextSessions(nextActiveSpaceId, nextSpaceName, { createIfEmpty: true, silent: true });
+    const ensureActiveChatSessionForSend = useCallback(async (
+        defaultTitle?: string,
+        options?: { onCreated?: (sessionId: string) => void },
+    ): Promise<string | null> => {
+        if (activeSessionIdRef.current) return activeSessionIdRef.current;
+        return createNewSession(defaultTitle, options);
+    }, [createNewSession]);
+
+    const switchRoom = useCallback((roomId: string) => {
+        const room = teamRooms.find((item) => item.id === roomId);
+        if (!room) return;
+        onOpenChatSurface?.();
+        setSelectedRoomId(room.id);
+        setActiveAiSurface('room');
+    }, [onOpenChatSurface, teamRooms]);
+
+    const switchAdvisor = useCallback((advisorId: string) => {
+        const advisor = advisors.find((item) => item.id === advisorId);
+        if (!advisor) return;
+        onOpenChatSurface?.();
+        setSelectedAdvisorId(advisor.id);
+        setActiveAiSurface('advisor');
+    }, [advisors, onOpenChatSurface]);
+
+    const createAdvisorFromRedClaw = useCallback(() => {
+        setAdvisorCreateModalOpen(true);
+    }, []);
+
+    const saveAdvisorFromRedClaw = useCallback(async (
+        data: Omit<Advisor, 'id' | 'createdAt' | 'knowledgeFiles'>,
+        youtubeParams?: { url: string; count: number; channelId?: string },
+        knowledgeFilePaths?: string[],
+    ) => {
+        try {
+            const createData: Record<string, unknown> = { ...data };
+            if (youtubeParams?.url) {
+                createData.youtubeChannel = {
+                    url: youtubeParams.url,
+                    channelId: youtubeParams.channelId || '',
+                };
+            }
+            const result = await window.ipcRenderer.advisors.create({
+                ...createData,
+            }) as { success?: boolean; id?: string; error?: string };
+            if (result?.success === false) {
+                throw new Error(result.error || '创建成员失败');
+            }
+            if (result?.id && Array.isArray(knowledgeFilePaths) && knowledgeFilePaths.length > 0) {
+                await window.ipcRenderer.advisors.uploadKnowledge({
+                    advisorId: result.id,
+                    filePaths: knowledgeFilePaths,
+                });
+            }
+            const list = await window.ipcRenderer.advisors.list<AdvisorProfile>();
+            setAdvisors(Array.isArray(list) ? list : []);
+            setAdvisorCreateModalOpen(false);
+            if (result?.id) {
+                const advisor = Array.isArray(list) ? list.find((item) => item.id === result.id) : null;
+                if (advisor) {
+                    setSelectedAdvisorId(advisor.id);
+                    setActiveAiSurface('advisor');
                 }
             }
         } catch (error) {
-            console.error('Failed to archive RedClaw session:', error);
-            setChatActionMessage(error instanceof Error ? error.message : '归档对话失败');
-            if (isExternalSession) {
-                void loadExternalAgentSessions();
-            } else {
-                void loadContextSessions(nextActiveSpaceId, nextSpaceName, { createIfEmpty: true, silent: true });
-            }
-        } finally {
-            setHistoryLoading(false);
+            console.error('Failed to create advisor from RedClaw:', error);
+            setChatActionMessage(error instanceof Error ? error.message : '创建成员失败');
         }
-    }, [activeSpaceId, activeSpaceName, loadContextSessions, loadExternalAgentSessions]);
+    }, []);
+
+    const createRoomFromRedClaw = useCallback(() => {
+        const visibleAdvisorIds = advisors
+            .filter((advisor) => advisor.redclawVisible !== false)
+            .map((advisor) => advisor.id);
+        const defaultAdvisorIds = selectedAdvisorId && visibleAdvisorIds.includes(selectedAdvisorId)
+            ? [selectedAdvisorId]
+            : visibleAdvisorIds.slice(0, 3);
+        setRoomCreateName('');
+        setRoomCreateAdvisorIds(defaultAdvisorIds);
+        setRoomCreateError('');
+        setRoomCreateModalOpen(true);
+    }, [advisors, selectedAdvisorId]);
+
+    const closeRoomCreateModal = useCallback(() => {
+        if (isCreatingRoom) return;
+        setRoomCreateModalOpen(false);
+        setRoomCreateName('');
+        setRoomCreateAdvisorIds([]);
+        setRoomCreateError('');
+    }, [isCreatingRoom]);
+
+    const toggleRoomCreateAdvisor = useCallback((advisorId: string) => {
+        setRoomCreateAdvisorIds((current) => current.includes(advisorId)
+            ? current.filter((id) => id !== advisorId)
+            : [...current, advisorId]);
+    }, []);
+
+    const submitRoomCreate = useCallback(async () => {
+        const name = roomCreateName.trim();
+        if (!name) {
+            setRoomCreateError('请输入团队名称');
+            return;
+        }
+        if (roomCreateAdvisorIds.length === 0) {
+            setRoomCreateError('请至少选择一位成员');
+            return;
+        }
+        setIsCreatingRoom(true);
+        setRoomCreateError('');
+        try {
+            const session = await window.ipcRenderer.teamRuntime.createSession({
+                title: name,
+                objective: `团队 ${name} 的协作任务`,
+                source: 'team-workbench',
+                runtimeMode: 'team',
+                metadata: {
+                    advisorIds: roomCreateAdvisorIds,
+                    surface: 'redclaw',
+                },
+            }) as TeamWorkbenchSession;
+            for (const advisorId of roomCreateAdvisorIds) {
+                const advisor = advisors.find((item) => item.id === advisorId);
+                if (!advisor) continue;
+                await window.ipcRenderer.teamRuntime.addMember({
+                    sessionId: session.id,
+                    displayName: advisor.name || '成员',
+                    roleId: advisor.id,
+                    backend: 'redbox-runtime',
+                    status: 'idle',
+                    capabilities: ['discussion', 'creation'],
+                    metadata: {
+                        advisorId: advisor.id,
+                        avatar: advisor.avatar,
+                        personality: advisor.personality,
+                    },
+                });
+            }
+            const room = teamRoomFromSession({
+                ...session,
+                metadata: {
+                    ...(session.metadata || {}),
+                    advisorIds: roomCreateAdvisorIds,
+                    surface: 'redclaw',
+                },
+            });
+            setTeamRooms((prev) => [...prev.filter((item) => item.id !== room.id), room]);
+            setSelectedRoomId(room.id);
+            onOpenChatSurface?.();
+            setActiveAiSurface('room');
+            setRoomCreateModalOpen(false);
+            setRoomCreateName('');
+            setRoomCreateAdvisorIds([]);
+        } catch (error) {
+            console.error('Failed to create RedClaw room:', error);
+            setRoomCreateError(error instanceof Error ? error.message : '创建团队失败');
+        } finally {
+            setIsCreatingRoom(false);
+        }
+    }, [advisors, onOpenChatSurface, roomCreateAdvisorIds, roomCreateName]);
+
+    const archiveUnifiedHistorySession = useCallback(async (session: RedClawHistoryListItem) => {
+        const targetSessionId = String(session?.id || '').trim();
+        if (!targetSessionId || (session.surface !== 'redclaw' && session.surface !== 'external')) return;
+        const isExternalSession = session.surface === 'external';
+        if (isExternalSession) {
+            setHiddenExternalSessionIds((prev) => {
+                if (prev.includes(targetSessionId)) return prev;
+                const next = [...prev, targetSessionId];
+                writeHiddenExternalSessionIds(next);
+                return next;
+            });
+            setExternalAgentSessions((prev) => prev.filter((item) => item.id !== targetSessionId));
+        }
+        try {
+            await window.ipcRenderer.chat.archiveSession(targetSessionId);
+            const remaining = sessionListRef.current.filter((item) => item.id !== targetSessionId);
+            sessionListRef.current = remaining;
+            setSessionList(remaining);
+            if (activeSessionIdRef.current !== targetSessionId) return;
+            const nextSessionId = remaining[0]?.id || null;
+            activeSessionIdRef.current = nextSessionId;
+            setActiveSessionId(nextSessionId);
+            if (!nextSessionId) {
+                manualDraftActiveRef.current = true;
+                writeRedClawLastSessionId(activeSpaceId || 'default', null);
+                setChatRefreshKey((value) => value + 1);
+            }
+        } catch (error) {
+            console.error('Failed to archive RedClaw session:', error);
+            if (isExternalSession) return;
+            setChatActionMessage(error instanceof Error ? error.message : '归档对话失败');
+        }
+    }, [activeSpaceId]);
+
+    const deleteRoomFromRedClaw = useCallback(async (room: RedClawTeamRoom) => {
+        if (!room?.id) return;
+        try {
+            await window.ipcRenderer.teamRuntime.archiveSession({ sessionId: room.id });
+            setTeamRooms((prev) => prev.filter((item) => item.id !== room.id));
+            if (activeAiSurface === 'room' && selectedRoomId === room.id) {
+                setSelectedRoomId(null);
+                setActiveAiSurface('redclaw');
+            }
+        } catch (error) {
+            console.error('Failed to delete RedClaw room:', error);
+            setChatActionMessage(error instanceof Error ? error.message : '删除团队失败');
+        }
+    }, [activeAiSurface, selectedRoomId]);
 
     const compactRedClawContext = useCallback(async () => {
         if (!activeSessionId || chatActionLoading) return;
@@ -2171,15 +2052,29 @@ export function RedClaw({
                 setAutomationMessage(result?.error || '触发执行失败');
                 return;
             }
+            const sessionId = automationRunSessionId(result);
             setAutomationMessage('已触发定时任务执行');
             await loadRunnerStatus(false);
+            if (sessionId) {
+                onOpenChatSurface?.();
+                switchSession(sessionId);
+                void loadContextSessions(
+                    activeSpaceId || 'default',
+                    activeSpaceName || activeSpaceId || 'default',
+                    {
+                        preferredSessionId: sessionId,
+                        createIfEmpty: false,
+                        silent: true,
+                    },
+                );
+            }
         } catch (error) {
             console.error('Failed to run schedule now:', error);
             setAutomationMessage('触发执行失败');
         } finally {
             setAutomationLoading(false);
         }
-    }, [loadRunnerStatus]);
+    }, [activeSpaceId, activeSpaceName, loadContextSessions, loadRunnerStatus, onOpenChatSurface, switchSession]);
 
     const removeScheduleTask = useCallback(async (taskId: string) => {
         setAutomationLoading(true);
@@ -2199,18 +2094,22 @@ export function RedClaw({
         }
     }, [loadRunnerStatus]);
 
-    const onboardingCompleted = useMemo(() => isRedClawOnboardingCompleted(onboardingState), [onboardingState]);
+    const onboardingKnown = onboardingState !== undefined;
+    const onboardingCompleted = useMemo(
+        () => onboardingState !== undefined && isRedClawOnboardingCompleted(onboardingState),
+        [onboardingState],
+    );
 
     const welcomeActions = useMemo(() => {
         const actions = [];
-        if (!onboardingCompleted) {
+        if (onboardingKnown && !onboardingCompleted) {
             actions.push({
                 label: '定义这个空间',
                 onClick: () => onOpenRedClawOnboarding?.(),
                 icon: <Sparkles className="w-5 h-5" />,
                 color: 'text-amber-500',
             });
-        } else {
+        } else if (onboardingKnown) {
             actions.push({
                 label: '重新定义空间风格',
                 onClick: () => onOpenRedClawOnboarding?.(),
@@ -2221,315 +2120,181 @@ export function RedClaw({
         actions.push(
             {
                 label: '想吐槽或提建议?',
-                url: 'https://github.com/Jamailar/RedBox/issues',
+                url: APP_BRAND.githubIssuesUrl || 'https://github.com/Jamailar/RedBox/issues',
                 icon: <MessageSquarePlus className="w-5 h-5" />,
             },
             {
                 label: '喜欢我就点个 Star 吧',
-                url: 'https://github.com/Jamailar/RedBox',
+                url: APP_BRAND.githubRepoUrl || 'https://github.com/Jamailar/RedBox',
                 icon: <Heart className="w-5 h-5 fill-current" />,
                 color: 'text-rose-500'
             }
         );
         return actions;
-    }, [onOpenRedClawOnboarding, onboardingCompleted]);
+    }, [onOpenRedClawOnboarding, onboardingCompleted, onboardingKnown]);
+
+    const handlePreviewLink = useCallback((target: ChatMessageLinkTarget) => {
+        clearPreviewSidebarAnimationTimer();
+        setIsPreviewSidebarClosing(false);
+        setPreviewTarget(target);
+        setPreviewSidebarCollapsed(false);
+        const source = String(target.localPathCandidate || target.href || '').trim();
+        if (!source || /^https?:\/\//i.test(source)) return;
+
+        void (async () => {
+            try {
+                const result = await window.ipcRenderer.files.resolvePreview({ source }) as FilePreviewResolveResult;
+                if (!result?.success) {
+                    setPreviewTarget((current) => current?.href === target.href
+                        ? { ...current, error: result?.error || '解析文件路径失败' }
+                        : current);
+                    return;
+                }
+                const localCandidate = String(result.localPathCandidate || result.absolutePath || source).trim();
+                const rawResolved = String(result.resolvedUrl || localCandidate || target.resolvedUrl || '').trim();
+                const resolvedUrl = rawResolved ? resolveAssetUrl(rawResolved) : '';
+                setPreviewTarget((current) => current?.href === target.href
+                    ? {
+                        ...current,
+                        label: String(result.title || current.label || target.label),
+                        kind: normalizePreviewKind(result.kind, current.kind),
+                        resolvedUrl: resolvedUrl || current.resolvedUrl,
+                        isLocal: result.isLocal ?? current.isLocal,
+                        localPathCandidate: localCandidate || current.localPathCandidate,
+                        extension: String(result.extension || current.extension || '').trim() || undefined,
+                        exists: result.exists,
+                        isDirectory: result.isDirectory,
+                        mimeType: String(result.mimeType || '').trim() || undefined,
+                        sizeBytes: typeof result.sizeBytes === 'number' ? result.sizeBytes : undefined,
+                        previewText: typeof result.previewText === 'string' ? result.previewText : undefined,
+                        error: result.exists === false ? '文件不存在或已被移动' : undefined,
+                    }
+                    : current);
+            } catch (error) {
+                console.error('Failed to resolve RedClaw preview target:', error);
+                setPreviewTarget((current) => current?.href === target.href
+                    ? { ...current, error: '解析文件路径失败' }
+                    : current);
+            }
+        })();
+    }, [clearPreviewSidebarAnimationTimer]);
+
+    const handleOpenManuscript = useCallback((filePath: string) => {
+        const normalizedPath = String(filePath || '').trim();
+        if (!normalizedPath) return;
+        if (onOpenManuscriptEditor) {
+            onOpenManuscriptEditor(normalizedPath);
+            return;
+        }
+        handlePreviewLink({
+            href: `manuscripts://${normalizedPath}`,
+            label: normalizedPath.split('/').filter(Boolean).pop() || normalizedPath,
+            kind: normalizedPath.toLowerCase().endsWith('.md') ? 'text' : 'manuscript',
+            resolvedUrl: '',
+            isLocal: true,
+            localPathCandidate: `manuscripts://${normalizedPath}`,
+            extension: normalizedPath.toLowerCase().endsWith('.md') ? 'md' : undefined,
+            sourceMessageId: 'redclaw-manuscript-list',
+        });
+    }, [handlePreviewLink, onOpenManuscriptEditor]);
+
+    const handleClosePreview = useCallback(() => {
+        if (!previewTarget || isPreviewSidebarClosing) return;
+        clearPreviewSidebarAnimationTimer();
+        setIsPreviewSidebarClosing(true);
+        previewSidebarAnimationTimerRef.current = window.setTimeout(() => {
+            setPreviewTarget(null);
+            setPreviewSidebarCollapsed(false);
+            setIsPreviewSidebarClosing(false);
+            previewSidebarAnimationTimerRef.current = null;
+        }, PREVIEW_SIDEBAR_ANIMATION_MS);
+    }, [clearPreviewSidebarAnimationTimer, isPreviewSidebarClosing, previewTarget]);
+
+    const togglePreviewSidebarCollapsed = useCallback(() => {
+        if (!previewTarget) return;
+        clearPreviewSidebarAnimationTimer();
+        if (previewSidebarCollapsed || isPreviewSidebarClosing) {
+            setIsPreviewSidebarClosing(false);
+            setPreviewSidebarCollapsed(false);
+            return;
+        }
+
+        setIsPreviewSidebarClosing(true);
+        previewSidebarAnimationTimerRef.current = window.setTimeout(() => {
+            setPreviewSidebarCollapsed(true);
+            setIsPreviewSidebarClosing(false);
+            previewSidebarAnimationTimerRef.current = null;
+        }, PREVIEW_SIDEBAR_ANIMATION_MS);
+    }, [clearPreviewSidebarAnimationTimer, isPreviewSidebarClosing, previewSidebarCollapsed, previewTarget]);
+
+    const handleOpenPreviewExternal = useCallback(async (target: ChatMessageLinkTarget) => {
+        const source = String(target.localPathCandidate || target.href || '').trim();
+        if (!source) return;
+        try {
+            const result = await window.ipcRenderer.openPath(source);
+            if (result && result.success === false) {
+                setChatActionMessage(result.error || '打开文件失败');
+            }
+        } catch (error) {
+            console.error('Failed to open RedClaw preview target:', error);
+            setChatActionMessage('打开文件失败');
+        }
+    }, []);
+
+    const handleRevealPreviewInFolder = useCallback(async (target: ChatMessageLinkTarget) => {
+        const source = String(target.localPathCandidate || target.href || '').trim();
+        if (!source || !target.isLocal) return;
+        try {
+            const result = await window.ipcRenderer.files.showInFolder({ source }) as { success?: boolean; error?: string };
+            if (result && result.success === false) {
+                setChatActionMessage(result.error || '定位文件失败');
+            }
+        } catch (error) {
+            console.error('Failed to reveal RedClaw preview target:', error);
+            setChatActionMessage('定位文件失败');
+        }
+    }, []);
 
     useEffect(() => {
         if (!onGlobalSidebarContentChange) return;
         onGlobalSidebarContentChange(
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/70 bg-surface-primary/60 text-text-primary">
-                <div className="border-b border-border/70 px-3 py-3">
-                    <div className="truncate text-[11px] font-bold uppercase tracking-[0.08em] text-text-tertiary">RedClaw</div>
-                    <div className="mt-1 truncate text-sm font-semibold text-text-primary">{activeSpaceName || '默认空间'}</div>
-                </div>
-                <div className="grid grid-cols-2 gap-1 border-b border-border/70 p-2">
-                    {[
-                        { id: 'sessions' as const, label: '会话', count: unifiedHistorySessions.length },
-                        { id: 'manuscripts' as const, label: '稿件', count: globalManuscriptCount },
-                    ].map((tab) => (
-                        <button
-                            key={tab.id}
-                            type="button"
-                            onClick={() => setGlobalSidebarTab(tab.id)}
-                            className={clsx(
-                                'flex h-8 items-center justify-center gap-1.5 rounded-lg text-[11px] font-bold transition-colors',
-                                globalSidebarTab === tab.id
-                                    ? 'bg-surface-secondary text-text-primary shadow-sm'
-                                    : 'text-text-tertiary hover:text-text-primary'
-                            )}
-                        >
-                            <span>{tab.label}</span>
-                            <span className="text-[9px] opacity-70">{tab.count}</span>
-                        </button>
-                    ))}
-                </div>
-                <div className="grid gap-1.5 p-2">
-                    {globalSidebarTab === 'sessions' ? (
-                        <button
-                            type="button"
-                            onClick={() => void createNewSession()}
-                            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-                        >
-                            <Plus className="h-3.5 w-3.5 shrink-0" />
-                            <span className="truncate">新建对话</span>
-                        </button>
-                    ) : (
-                        <button
-                            type="button"
-                            onClick={() => openHistoryDrawer('manuscripts')}
-                            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-                        >
-                            <Plus className="h-3.5 w-3.5 shrink-0" />
-                            <span className="truncate">新建 / 管理稿件</span>
-                        </button>
-                    )}
-                    <button
-                        type="button"
-                        onClick={() => setSidebarCollapsed(false)}
-                        className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-                    >
-                        <span className="truncate">技能面板</span>
-                        <span className="rounded-full bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-tertiary">{enabledSkillCount}</span>
-                    </button>
-                </div>
-                <div className="flex items-center justify-between border-y border-border/70 px-3 py-2">
-                    <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-text-tertiary">
-                        {globalSidebarTab === 'sessions' ? '最近会话' : '稿件库'}
-                    </div>
-                    {globalSidebarTab === 'sessions' && historyLoading ? <Loader2 className="h-3 w-3 animate-spin text-text-tertiary" /> : null}
-                    {globalSidebarTab === 'manuscripts' ? (
-                        <button
-                            type="button"
-                            onClick={() => void loadGlobalManuscripts()}
-                            disabled={globalManuscriptsLoading}
-                            className="text-text-tertiary transition-colors hover:text-text-primary disabled:opacity-50"
-                            title="刷新稿件"
-                            aria-label="刷新稿件"
-                        >
-                            <RefreshCw className={clsx('h-3 w-3', globalManuscriptsLoading && 'animate-spin')} />
-                        </button>
-                    ) : null}
-                </div>
-                <div className="redclaw-history-scroll min-h-0 flex-1 overflow-y-auto p-2">
-                    {globalSidebarTab === 'manuscripts' ? (
-                        globalManuscriptsLoading && globalFlatManuscripts.length === 0 ? (
-                            <div className="flex h-full items-center justify-center py-8">
-                                <Loader2 className="h-4 w-4 animate-spin text-accent-primary/60" />
-                            </div>
-                        ) : globalManuscriptsError && globalFlatManuscripts.length === 0 ? (
-                            <div className="flex h-full flex-col items-center justify-center px-4 py-8 text-center text-text-tertiary">
-                                <FileText className="mb-2 h-5 w-5 text-red-400/40" />
-                                <div className="text-[12px] font-medium">{globalManuscriptsError}</div>
-                            </div>
-                        ) : globalFlatManuscripts.length === 0 ? (
-                            <div className="flex h-full flex-col items-center justify-center px-4 py-8 text-center text-text-tertiary">
-                                <FileText className="mb-2 h-5 w-5 text-accent-primary/25" />
-                                <div className="text-[12px] font-medium">暂无稿件</div>
-                            </div>
-                        ) : (
-                            <div className="space-y-0.5 pb-2">
-                                {globalFlatManuscripts.map((node) => {
-                                    const label = redClawManuscriptLabel(node);
-                                    const normalizedNodePath = String(node.path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-                                    const isCurrentManuscript = !node.isDirectory
-                                        && normalizedActiveManuscriptPath
-                                        && normalizedNodePath === normalizedActiveManuscriptPath;
-                                    const containsCurrentManuscript = node.isDirectory
-                                        && normalizedActiveManuscriptPath
-                                        && normalizedNodePath
-                                        && normalizedActiveManuscriptPath.startsWith(`${normalizedNodePath}/`);
-                                    const updatedLabel = formatRedClawManuscriptUpdatedAt(node.updatedAt);
-                                    return (
-                                        <button
-                                            key={`${node.isDirectory ? 'folder' : 'file'}:${node.path || label}`}
-                                            type="button"
-                                            onClick={() => {
-                                                if (node.isDirectory) {
-                                                    openHistoryDrawer('manuscripts');
-                                                    return;
-                                                }
-                                                openGlobalManuscript(node.path);
-                                            }}
-                                            className={clsx(
-                                                'flex w-full items-center gap-2 rounded-lg py-1.5 pr-2 text-left text-[12px] font-medium transition-colors hover:bg-surface-secondary/70 hover:text-text-primary',
-                                                isCurrentManuscript
-                                                    ? 'bg-surface-elevated text-text-primary ring-1 ring-accent-primary/20'
-                                                    : containsCurrentManuscript
-                                                        ? 'bg-surface-secondary/45 text-text-primary'
-                                                        : 'text-text-secondary'
-                                            )}
-                                            style={{ paddingLeft: `${8 + node.depth * 12}px` }}
-                                            title={node.path || label}
-                                        >
-                                            {node.isDirectory
-                                                ? <Folder className="h-3.5 w-3.5 shrink-0 text-accent-primary/70" />
-                                                : <FileText className="h-3.5 w-3.5 shrink-0 text-text-tertiary" />}
-                                            <span className="min-w-0 flex-1 truncate">{label}</span>
-                                            {updatedLabel && !node.isDirectory ? (
-                                                <span className="shrink-0 text-[9px] text-text-tertiary">{updatedLabel}</span>
-                                            ) : null}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        )
-                    ) : historyLoading && unifiedHistorySessions.length === 0 ? (
-                        <div className="flex h-full items-center justify-center py-8">
-                            <Loader2 className="h-4 w-4 animate-spin text-accent-primary/60" />
-                        </div>
-                    ) : unifiedHistorySessions.length === 0 ? (
-                        <div className="flex h-full flex-col items-center justify-center px-4 py-8 text-center text-text-tertiary">
-                            <History className="mb-2 h-5 w-5 text-accent-primary/25" />
-                            <div className="text-[12px] font-medium">暂无记录</div>
-                        </div>
-                    ) : (
-                        <div className="space-y-1 pb-2">
-                            {visibleGlobalSessions.slice(0, 12).map((session) => {
-                                const isCurrentSession = session.id === activeSessionId;
-                                const isExternalSession = session.surface === 'external';
-                                const isPinned = !isExternalSession && (pinnedSessionIdSet.has(session.id) || Boolean(session.starred));
-                                const title = displayRedClawHistoryTitle(session.chatSession?.title?.trim() || '未命名会话', session.surface);
-                                const summary = session.summary?.trim();
-                                const speakerLabel = String(session.speakerLabel || '').trim();
-                                const activity = sessionActivityById[session.id];
-                                const isAutomationSession = isRedClawAutomationHistorySession(session);
-                                const isUnread = Boolean(session.unread)
-                                    || Boolean(session.metadata && typeof session.metadata === 'object' && !Array.isArray(session.metadata) && (session.metadata as Record<string, unknown>).unread);
-                                return (
-                                    <div
-                                        key={session.id}
-                                        className={clsx(
-                                            'group relative rounded-lg px-2.5 py-2 transition-colors',
-                                            isCurrentSession
-                                                ? 'bg-surface-elevated ring-1 ring-accent-primary/20'
-                                                : 'hover:bg-surface-secondary/70'
-                                        )}
-                                    >
-                                        {isCurrentSession && (
-                                            <div className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-accent-primary" />
-                                        )}
-                                        <button
-                                            type="button"
-                                            onClick={() => switchSession(session.id)}
-                                            className="block w-full min-w-0 pr-20 text-left"
-                                        >
-                                            <div className="flex min-w-0 items-center gap-1.5">
-                                                {isAutomationSession ? (
-                                                    <Clock3 className="h-3.5 w-3.5 shrink-0 text-text-tertiary" />
-                                                ) : null}
-                                                <span className={clsx(
-                                                    'min-w-0 truncate text-[12px] font-semibold',
-                                                    isCurrentSession ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
-                                                )}>
-                                                    {title}
-                                                </span>
-                                                {isPinned ? (
-                                                    <Pin className="h-3 w-3 shrink-0 text-accent-primary" />
-                                                ) : null}
-                                            </div>
-                                            <div className="mt-1 truncate text-[10px] text-text-tertiary">
-                                                {speakerLabel ? `${speakerLabel} · ` : ''}
-                                                {formatDateTime(session.chatSession?.updatedAt || null)}
-                                            </div>
-                                            {summary && (
-                                                <div className="mt-1 line-clamp-1 text-[11px] text-text-secondary/70">
-                                                    {summary}
-                                                </div>
-                                            )}
-                                        </button>
-                                        {activity === 'running' ? (
-                                            <span
-                                                className="absolute right-3 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center transition-opacity group-hover:opacity-0"
-                                                aria-label="正在执行"
-                                            >
-                                                <span className="h-4 w-4 rounded-full border-2 border-text-tertiary/30 border-t-text-tertiary/80 animate-spin" />
-                                            </span>
-                                        ) : null}
-                                        {(activity === 'unread-complete' || isUnread) ? (
-                                            <span
-                                                className="absolute right-4 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.14)] transition-opacity group-hover:opacity-0"
-                                                aria-label={isUnread ? '未读' : '执行完成'}
-                                            />
-                                        ) : null}
-                                        {!isExternalSession ? (
-                                            <button
-                                                type="button"
-                                                onClick={(event) => {
-                                                    event.stopPropagation();
-                                                    togglePinnedSession(session.id);
-                                                }}
-                                                className={clsx(
-                                                    'absolute right-[3.25rem] top-2 flex h-6 w-6 items-center justify-center rounded-md transition hover:bg-surface-secondary hover:text-text-primary group-hover:opacity-100',
-                                                    isPinned
-                                                        ? 'text-accent-primary opacity-100'
-                                                        : 'text-text-tertiary opacity-0'
-                                                )}
-                                                title={isPinned ? '取消置顶' : '置顶'}
-                                                aria-label={isPinned ? '取消置顶' : '置顶'}
-                                            >
-                                                <Pin className="h-3 w-3" />
-                                            </button>
-                                        ) : null}
-                                        {!isExternalSession ? (
-                                            <button
-                                                type="button"
-                                                onClick={(event) => {
-                                                    event.stopPropagation();
-                                                    openRenameSessionDialog(session);
-                                                }}
-                                                className="absolute right-7 top-2 flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary opacity-0 transition hover:bg-surface-secondary hover:text-text-primary group-hover:opacity-100"
-                                                title="重命名"
-                                                aria-label="重命名"
-                                            >
-                                                <Edit3 className="h-3 w-3" />
-                                            </button>
-                                        ) : null}
-                                        <button
-                                            type="button"
-                                            onClick={(event) => {
-                                                event.stopPropagation();
-                                                void archiveUnifiedHistorySession(session);
-                                            }}
-                                            className="absolute right-1.5 top-2 flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary opacity-0 transition hover:bg-red-500/12 hover:text-red-400 group-hover:opacity-100"
-                                            title="归档"
-                                            aria-label="归档"
-                                        >
-                                            <Archive className="h-3 w-3" />
-                                        </button>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
-                </div>
-            </div>
+            <RedClawHistorySidebarSection
+                historyLoading={historyLoading}
+                sessionList={unifiedHistorySessions}
+                activeSessionId={activeChatSessionId}
+                teamRooms={teamRooms}
+                activeRoomId={selectedRoomId}
+                activeSurface={activeAiSurface}
+                sessionActivityById={sessionActivityById}
+                onCreateRoom={createRoomFromRedClaw}
+                onSwitchRoom={switchRoom}
+                onDeleteRoom={(room) => void deleteRoomFromRedClaw(room)}
+                onSwitchSession={switchHistorySession}
+                onSetSessionUnread={setHistorySessionUnread}
+                onArchiveSession={(session) => void archiveUnifiedHistorySession(session)}
+                onRenameSession={renameUnifiedHistorySession}
+                onOpenManuscript={handleOpenManuscript}
+                activeManuscriptPath={activeManuscriptPath}
+            />
         );
     }, [
-        activeSessionId,
-        activeSpaceName,
+        activeAiSurface,
+        activeChatSessionId,
         archiveUnifiedHistorySession,
-        createNewSession,
-        deleteHistorySession,
-        enabledSkillCount,
-        globalFlatManuscripts,
-        globalManuscriptCount,
-        globalManuscriptsError,
-        globalManuscriptsLoading,
-        globalSidebarTab,
+        createRoomFromRedClaw,
+        deleteRoomFromRedClaw,
         historyLoading,
-        loadGlobalManuscripts,
-        normalizedActiveManuscriptPath,
+        handleOpenManuscript,
+        activeManuscriptPath,
         onGlobalSidebarContentChange,
-        openGlobalManuscript,
-        openHistoryDrawer,
-        openRenameSessionDialog,
-        pinnedSessionIdSet,
+        renameUnifiedHistorySession,
+        selectedRoomId,
+        setHistorySessionUnread,
         sessionActivityById,
-        sessionList,
-        switchSession,
-        togglePinnedSession,
+        switchHistorySession,
+        switchRoom,
+        teamRooms,
         unifiedHistorySessions,
-        visibleGlobalSessions,
     ]);
 
     useEffect(() => () => {
@@ -2568,171 +2333,95 @@ export function RedClaw({
         onTitleBarActionsChange?.(null);
     }, [onTitleBarActionsChange]);
 
-    const effectiveAiSurface: RedClawAiSurface = activeAiSurface === 'advisor' && selectedAdvisor ? 'advisor' : 'redclaw';
-    const currentChatSessionId = effectiveAiSurface === 'advisor' ? advisorSessionId : activeSessionId;
-    const currentWelcomeTitle = effectiveAiSurface === 'advisor' && selectedAdvisor
-        ? selectedAdvisor.name
-        : 'RedClaw 自媒体AI工作台';
-    const currentWelcomeIconSrc = effectiveAiSurface === 'advisor'
-        ? selectedAdvisor && hasRenderableAdvisorAvatar(selectedAdvisor)
-            ? resolveAssetUrl(selectedAdvisor.avatar)
-            : undefined
-        : REDCLAW_WELCOME_ICON_SRC;
-    const currentWelcomeAvatarText = effectiveAiSurface === 'advisor' && selectedAdvisor && !hasRenderableAdvisorAvatar(selectedAdvisor)
-        ? advisorAvatarText(selectedAdvisor)
-        : undefined;
-    const currentWelcomeIconVariant = effectiveAiSurface === 'advisor' ? 'avatar' : 'default';
-    const currentPendingMessage = effectiveAiSurface === 'redclaw' ? resolvedPendingMessage : null;
-    const currentMemberMention = effectiveAiSurface === 'advisor' && selectedAdvisor ? {
-        id: selectedAdvisor.id,
-        name: selectedAdvisor.name,
-        avatar: selectedAdvisor.avatar,
-        personality: selectedAdvisor.personality,
-    } : null;
-    const currentMessageListHeader = effectiveAiSurface === 'redclaw'
-        ? <RedClawImageGenerationProgressPanel jobs={visibleImageJobs} />
-        : null;
-    const isCurrentChatLoading = effectiveAiSurface === 'advisor' && isAdvisorSessionLoading && !advisorSessionId;
+    if (!isActive && shouldSyncGlobalHistory) {
+        return <div className="hidden" />;
+    }
+
+
     const previewPaneVisible = Boolean(previewTarget && (!previewSidebarCollapsed || isPreviewSidebarClosing));
 
     return (
-        <div className="h-full min-h-0 flex overflow-hidden bg-surface-primary">
+        <div className="h-full min-h-0 flex overflow-hidden">
             <div className={clsx(
                 'relative min-w-0 overflow-hidden transition-[flex-basis,max-width] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
                 previewPaneVisible ? 'basis-[46%] max-w-[780px] shrink-0 border-r border-border/70' : 'flex-1'
             )}>
-                {isSessionLoading && !activeSessionId ? (
+                {isSessionLoading ? (
                     <div className="h-full flex items-center justify-center">
                         <div className="flex flex-col items-center gap-3 text-text-tertiary">
                             <Loader2 className="w-6 h-6 animate-spin" />
-                            <span className="text-xs">正在初始化 RedClaw...</span>
+                            <span className="text-xs">正在初始化 {REDCLAW_DISPLAY_NAME}...</span>
                         </div>
                     </div>
-                ) : activeSessionId ? (
+                ) : (
                     <div className="h-full min-h-0 flex flex-col">
                         <div className="relative min-h-0 flex-1 overflow-hidden">
-                            {!onboardingCompleted && !hideOnboardingPrompt && (
-                                <div className="pointer-events-none absolute inset-x-0 top-4 z-20 flex justify-center px-4">
-                                    <div className="pointer-events-auto w-full max-w-2xl rounded-[28px] border border-amber-300/20 bg-[linear-gradient(135deg,rgba(24,18,14,0.96),rgba(17,13,15,0.94))] p-5 text-white shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-xl">
-                                        <div className="flex items-start justify-between gap-4">
-                                            <div className="space-y-3">
-                                                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/6 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/58">
-                                                    <Sparkles className="h-3.5 w-3.5 text-amber-300" />
-                                                    来自 RedClaw
-                                                </div>
-                                                <div className="space-y-2">
-                                                    <div className="text-lg font-semibold">先定义这个空间的经营方向和写作风格</div>
-                                                    <p className="max-w-xl text-sm leading-6 text-white/68">
-                                                        这会影响我后续怎么帮你定调性、写内容、安排转化。先做完这组 10 题，再开始长期创作会更准。
-                                                    </p>
-                                                </div>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => onOpenRedClawOnboarding?.()}
-                                                    className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black transition hover:scale-[0.99]"
-                                                >
-                                                    <SlidersHorizontal className="h-4 w-4" />
-                                                    开始定义这个空间
-                                                </button>
-                                            </div>
-                                            <button
-                                                type="button"
-                                                onClick={() => setHideOnboardingPrompt(true)}
-                                                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/6 text-white/65 transition hover:bg-white/10"
-                                                aria-label="稍后再说"
-                                            >
-                                                <X className="h-4 w-4" />
-                                            </button>
+                            <div className="h-full min-h-0 w-full overflow-hidden">
+                                {activeAiSurface === 'room' ? (
+                                    selectedRoom?.session ? (
+                                        <TeamWorkbench
+                                            session={selectedRoom.session}
+                                            isActive={isActive}
+                                        />
+                                    ) : (
+                                        <div className="flex h-full items-center justify-center text-sm text-text-tertiary">
+                                            请选择或创建团队
                                         </div>
-                                    </div>
-                                </div>
-                            )}
-                            {isCurrentChatLoading ? (
-                                <div className="flex h-full items-center justify-center">
-                                    <div className="flex flex-col items-center gap-3 text-text-tertiary">
-                                        <Loader2 className="h-5 w-5 animate-spin" />
-                                        <span className="text-xs">正在打开成员对话...</span>
-                                    </div>
-                                </div>
-                            ) : currentChatSessionId ? (
-                                <Chat
-                                isActive={isActive}
-                                onExecutionStateChange={onExecutionStateChange}
-                                key={`redclaw:${effectiveAiSurface}:${currentChatSessionId}:${chatRefreshKey}`}
-                                fixedSessionId={currentChatSessionId}
-                                initialChatModelKey={chatModelKey}
-                                onChatModelKeyChange={setChatModelKey}
-                                pendingMessage={currentPendingMessage}
-                                onMessageConsumed={onPendingMessageConsumed}
-                                defaultCollapsed={true}
-                                showClearButton={false}
-                                fixedSessionBannerText=""
-                                showWelcomeShortcuts={effectiveAiSurface === 'redclaw'}
-                                showComposerShortcuts={effectiveAiSurface === 'redclaw'}
-                                fixedSessionContextIndicatorMode="corner-ring"
-                                shortcuts={effectiveAiSurface === 'redclaw' ? createRedClawComposerShortcutsForContext : []}
-                                welcomeShortcuts={effectiveAiSurface === 'redclaw' ? createRedClawComposerShortcutsForContext : []}
-                                embeddedTheme="auto"
-                                welcomeTitle={currentWelcomeTitle}
-                                welcomeSubtitle=""
-                                welcomeIconSrc={currentWelcomeIconSrc}
-                                welcomeAvatarText={currentWelcomeAvatarText}
-                                welcomeIconVariant={currentWelcomeIconVariant}
-                                welcomeIconAccessory={(
-                                    <RedClawAiSwitchBar
-                                        activeSurface={effectiveAiSurface}
-                                        advisors={advisors}
-                                        selectedAdvisorId={selectedAdvisorId}
-                                        onSelectRedClaw={handleSelectRedClawShortcut}
-                                        onSelectAdvisor={handleSelectAdvisorShortcut}
-                                        onCreateAdvisor={handleCreateAdvisorShortcut}
+                                    )
+                                ) : (
+                                    <Chat
+                                        isActive={isActive}
+                                        onExecutionStateChange={setIsRedClawChatExecuting}
+                                        key={`redclaw:${activeAiSurface}:${activeAiSurface === 'advisor' ? selectedAdvisorId || 'advisor' : 'redclaw'}:${activeChatSessionId || 'draft'}:${chatRefreshKey}`}
+                                        fixedSessionId={activeChatSessionId}
+                                        fixedSessionDraft={!activeChatSessionId}
+                                        onEnsureSessionForSend={ensureActiveChatSessionForSend}
+                                        pendingMessage={activeAiSurface === 'redclaw' ? resolvedPendingMessage : null}
+                                        onMessageConsumed={onPendingMessageConsumed}
+                                        showClearButton={false}
+                                        fixedSessionBannerText=""
+                                        showWelcomeShortcuts={true}
+                                        showComposerShortcuts={true}
+                                        fixedSessionContextIndicatorMode="corner-ring"
+                                        shortcuts={composerShortcuts}
+                                        welcomeShortcuts={welcomeShortcuts}
+                                        embeddedTheme="auto"
+                                        welcomeTitle={activeWelcomeTitle}
+                                        welcomeSubtitle=""
+                                        welcomeIconSrc={activeWelcomeAvatarText ? undefined : activeWelcomeIconSrc}
+                                        welcomeAvatarText={activeWelcomeAvatarText}
+                                        welcomeIconVariant={activeWelcomeIconVariant}
+                                        welcomeIconAccessory={(
+                                            <RedClawAiSwitchBar
+                                                activeSurface={activeAiSurface}
+                                                advisors={advisors}
+                                                selectedAdvisorId={selectedAdvisorId}
+                                                onSelectRedClaw={() => setActiveAiSurface('redclaw')}
+                                                onSelectAdvisor={switchAdvisor}
+                                                onCreateAdvisor={createAdvisorFromRedClaw}
+                                            />
+                                        )}
+                                        welcomeActions={welcomeActions}
+                                        contentLayout="wide"
+                                        contentWidthPreset={previewPaneVisible ? 'default' : 'narrow'}
+                                        allowFileUpload={true}
+                                        attachmentPreviewMode="compact-status"
+                                        messageWorkflowPlacement="bottom"
+                                        messageWorkflowVariant="compact"
+                                        messageWorkflowEmphasis="default"
+                                        messageWorkflowAutoHideWhenComplete={true}
+                                        messageWorkflowFailureTone="neutral"
+                                        messageLinkRenderMode="preview-card"
+                                        onMessageLinkPreview={handlePreviewLink}
+                                        activePreviewHref={previewTarget?.href || null}
+                                        keepComposerInputActive={true}
+                                        placeholder="描述创作目标，使用 # 调用知识库"
+                                        fixedMemberMention={activeMemberMention}
+                                        onSessionActivity={markHistorySessionActivity}
+                                        messageListHeader={<RedClawImageGenerationProgressPanel jobs={activeAiSurface === 'redclaw' ? visibleImageJobs : []} />}
                                     />
                                 )}
-                                welcomeActions={effectiveAiSurface === 'redclaw' ? welcomeActions : []}
-                                contentLayout="wide"
-                                contentWidthPreset={previewPaneVisible ? 'default' : 'narrow'}
-                                allowFileUpload={true}
-                                attachmentPreviewMode="compact-status"
-                                placeholder="描述创作目标，使用 # 调用知识库"
-                                messageWorkflowPlacement="bottom"
-                                messageWorkflowVariant="compact"
-                                messageWorkflowEmphasis="default"
-                                messageWorkflowAutoHideWhenComplete={true}
-                                messageWorkflowFailureTone="neutral"
-                                messageLinkRenderMode="preview-card"
-                                onMessageLinkPreview={handlePreviewLink}
-                                activePreviewHref={previewTarget?.href || null}
-                                keepComposerInputActive={true}
-                                fixedMemberMention={currentMemberMention}
-                                messageListHeader={currentMessageListHeader}
-                                />
-                            ) : (
-                                <div className="flex h-full items-center justify-center">
-                                    <div className="flex flex-col items-center gap-3 text-text-tertiary">
-                                        <Loader2 className="h-5 w-5 animate-spin" />
-                                        <span className="text-xs">正在初始化对话...</span>
-                                    </div>
-                                </div>
-                            )}
-                            <RedClawHistoryDrawer
-                                open={historyDrawerOpen}
-                                initialTab={historyDrawerInitialTab}
-                                activeSpaceName={activeSpaceName}
-                                historyLoading={historyLoading}
-                                sessionList={unifiedHistorySessions}
-                                activeSessionId={activeSessionId}
-                                sessionActivityById={sessionActivityById}
-                                onToggleOpen={() => setHistoryDrawerOpen((value) => !value)}
-                                onClose={() => setHistoryDrawerOpen(false)}
-                                onCreateSession={() => void createNewSession()}
-                                onSwitchSession={switchSession}
-                                onDeleteSession={(sessionId) => void deleteHistorySession(sessionId)}
-                                onArchiveSession={(session) => void archiveUnifiedHistorySession(session)}
-                                onSetSessionUnread={setHistorySessionUnread}
-                                onRenameSession={openRenameSessionDialog}
-                                onOpenManuscript={onOpenManuscriptEditor || onOpenManuscript}
-                                activeManuscriptPath={activeManuscriptPath}
-                            />
+                            </div>
                             <RedClawSidebar
                                 open={!sidebarCollapsed}
                                 chatActionMessage={chatActionMessage}
@@ -2747,30 +2436,116 @@ export function RedClaw({
                                 onInstallSkill={() => void installSkill()}
                                 onToggleSkill={(skill) => void toggleSkill(skill)}
                             />
-                            <Advisors
-                                isActive={isActive}
-                                modalOnly
-                                createRequestKey={advisorCreateRequestKey}
-                                createRequestMode="manual"
-                                onAdvisorsChange={handleAdvisorHostChange}
-                                onSelectedAdvisorIdChange={handleAdvisorHostSelected}
-                            />
-                            {previewTarget && previewSidebarCollapsed && !isPreviewSidebarClosing ? (
-                                <button
-                                    type="button"
-                                    onClick={togglePreviewSidebarCollapsed}
-                                    className="absolute right-5 top-16 z-30 inline-flex h-9 w-9 items-center justify-center rounded-xl border border-border/80 bg-surface-elevated/92 text-text-tertiary shadow-sm backdrop-blur-xl transition-colors hover:bg-surface-primary hover:text-text-primary"
-                                    title="展开文件预览"
-                                    aria-label="展开文件预览"
+                            {advisorCreateModalOpen && (
+                                <AdvisorModal
+                                    advisor={null}
+                                    defaultMode="manual"
+                                    onSave={saveAdvisorFromRedClaw}
+                                    onClose={() => setAdvisorCreateModalOpen(false)}
+                                />
+                            )}
+                            {roomCreateModalOpen && (
+                                <div
+                                    className="fixed inset-0 z-[160] flex items-center justify-center bg-black/[0.28] px-4 backdrop-blur-sm"
+                                    onMouseDown={closeRoomCreateModal}
                                 >
-                                    <PanelRightOpen className="h-4 w-4" />
-                                </button>
-                            ) : null}
+                                    <div
+                                        className="w-full max-w-[420px] rounded-2xl border border-border bg-surface-primary p-5 shadow-[0_24px_70px_-30px_rgba(0,0,0,0.55)]"
+                                        onMouseDown={(event) => event.stopPropagation()}
+                                    >
+                                        <div className="mb-4 flex items-center justify-between gap-3">
+                                            <div>
+                                                <div className="text-base font-semibold text-text-primary">新建团队</div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={closeRoomCreateModal}
+                                                disabled={isCreatingRoom}
+                                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                                                aria-label="关闭"
+                                            >
+                                                <X className="h-4 w-4" />
+                                            </button>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            <input
+                                                autoFocus
+                                                value={roomCreateName}
+                                                onChange={(event) => setRoomCreateName(event.target.value)}
+                                                onKeyDown={(event) => {
+                                                    if (event.key === 'Enter') {
+                                                        event.preventDefault();
+                                                        void submitRoomCreate();
+                                                    } else if (event.key === 'Escape') {
+                                                        closeRoomCreateModal();
+                                                    }
+                                                }}
+                                                className="h-10 w-full rounded-xl border border-border bg-surface-secondary/40 px-3 text-sm text-text-primary outline-none transition focus:border-accent-primary/60 focus:bg-surface-primary focus:ring-2 focus:ring-accent-primary/10"
+                                                placeholder="团队名称"
+                                            />
+
+                                            <div className="max-h-56 overflow-y-auto rounded-xl border border-border/80 p-1 custom-scrollbar">
+                                                {advisors.filter((advisor) => advisor.redclawVisible !== false).length === 0 ? (
+                                                    <div className="px-3 py-4 text-center text-xs text-text-tertiary">暂无可选成员</div>
+                                                ) : advisors.filter((advisor) => advisor.redclawVisible !== false).map((advisor) => {
+                                                    const checked = roomCreateAdvisorIds.includes(advisor.id);
+                                                    return (
+                                                        <button
+                                                            key={advisor.id}
+                                                            type="button"
+                                                            onClick={() => toggleRoomCreateAdvisor(advisor.id)}
+                                                            className={clsx(
+                                                                'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors',
+                                                                checked ? 'bg-accent-primary/10' : 'hover:bg-surface-secondary/70'
+                                                            )}
+                                                        >
+                                                            <span className={clsx(
+                                                                'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border',
+                                                                checked ? 'border-accent-primary bg-accent-primary' : 'border-border bg-surface-primary'
+                                                            )}>
+                                                                {checked && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+                                                            </span>
+                                                            <span className="min-w-0 flex-1">
+                                                                <span className="block truncate text-sm font-medium text-text-primary">{advisor.name || '未命名成员'}</span>
+                                                                {advisor.personality && (
+                                                                    <span className="mt-0.5 block truncate text-[11px] text-text-tertiary">{advisor.personality}</span>
+                                                                )}
+                                                            </span>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+
+                                            {roomCreateError && (
+                                                <div className="rounded-lg border border-red-500/25 bg-red-500/[0.08] px-3 py-2 text-xs text-red-600">
+                                                    {roomCreateError}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="mt-5 flex items-center justify-end gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={closeRoomCreateModal}
+                                                disabled={isCreatingRoom}
+                                                className="h-9 rounded-xl border border-border px-4 text-sm text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                                            >
+                                                取消
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void submitRoomCreate()}
+                                                disabled={isCreatingRoom}
+                                                className="inline-flex h-9 items-center justify-center rounded-xl bg-accent-primary px-4 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+                                            >
+                                                {isCreatingRoom ? '创建中...' : '创建'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                    </div>
-                ) : (
-                    <div className="h-full flex items-center justify-center text-text-tertiary text-sm">
-                        RedClaw 会话初始化失败
                     </div>
                 )}
             </div>
@@ -2790,70 +2565,6 @@ export function RedClaw({
                     />
                 </aside>
             ) : null}
-            {renameSessionTarget && (
-                <div
-                    className="fixed inset-0 z-[80] flex items-center justify-center bg-black/25 px-4 backdrop-blur-[2px]"
-                    onMouseDown={closeRenameSessionDialog}
-                >
-                    <div
-                        className="w-full max-w-[360px] rounded-2xl border border-border bg-surface-primary p-4 shadow-2xl"
-                        onMouseDown={(event) => event.stopPropagation()}
-                    >
-                        <div className="flex items-center justify-between gap-3">
-                            <div className="text-[14px] font-bold text-text-primary">重命名会话</div>
-                            <button
-                                type="button"
-                                onClick={closeRenameSessionDialog}
-                                disabled={isRenamingSession}
-                                className="flex h-7 w-7 items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
-                            >
-                                <X className="h-3.5 w-3.5" />
-                            </button>
-                        </div>
-                        <input
-                            autoFocus
-                            value={renameSessionTitle}
-                            onChange={(event) => {
-                                setRenameSessionTitle(event.target.value);
-                                if (renameSessionError) setRenameSessionError('');
-                            }}
-                            onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                    event.preventDefault();
-                                    void submitRenameSession();
-                                } else if (event.key === 'Escape') {
-                                    event.preventDefault();
-                                    closeRenameSessionDialog();
-                                }
-                            }}
-                            className="mt-4 h-10 w-full rounded-xl border border-border bg-surface-secondary/50 px-3 text-sm text-text-primary outline-none transition placeholder:text-text-tertiary focus:border-accent-primary/50 focus:bg-surface-primary focus:ring-2 focus:ring-accent-primary/10"
-                            placeholder="会话名称"
-                            disabled={isRenamingSession}
-                        />
-                        {renameSessionError && (
-                            <div className="mt-2 text-xs text-red-500">{renameSessionError}</div>
-                        )}
-                        <div className="mt-4 flex justify-end gap-2">
-                            <button
-                                type="button"
-                                onClick={closeRenameSessionDialog}
-                                disabled={isRenamingSession}
-                                className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
-                            >
-                                取消
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => void submitRenameSession()}
-                                disabled={isRenamingSession || !renameSessionTitle.trim()}
-                                className="rounded-lg bg-accent-primary px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
-                            >
-                                {isRenamingSession ? '保存中...' : '保存'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }

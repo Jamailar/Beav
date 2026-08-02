@@ -30,8 +30,6 @@ type AppTitleBarProps = {
   isSidebarCollapsed: boolean;
   toggleSidebarCollapsed: () => void;
   openGlobalSearch: () => void;
-  openCurrentReleaseNotes: () => void;
-  showUpdateButton: boolean;
   notificationDrawerOpen: boolean;
   unreadNotificationCount: number;
   toggleNotificationDrawer: () => void;
@@ -48,8 +46,6 @@ export function AppTitleBar({
   isSidebarCollapsed,
   toggleSidebarCollapsed,
   openGlobalSearch,
-  openCurrentReleaseNotes,
-  showUpdateButton,
   notificationDrawerOpen,
   unreadNotificationCount,
   toggleNotificationDrawer,
@@ -117,18 +113,6 @@ export function AppTitleBar({
         >
           <Search className="w-[15px] h-[15px]" strokeWidth={1.7} />
         </button>
-        {showUpdateButton && (
-          <button
-            type="button"
-            onClick={openCurrentReleaseNotes}
-            className="app-titlebar-update-button"
-            title={t('layout.softwareUpdate')}
-            aria-label={t('layout.softwareUpdate')}
-            data-no-window-drag
-          >
-            {t('layout.installUpdate')}
-          </button>
-        )}
       </div>
       <div data-tauri-drag-region className="app-titlebar-title">
         {content}

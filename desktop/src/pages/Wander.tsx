@@ -1,12 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { RefreshCw, Sparkles, History, X, Trash2, Dices, Lightbulb, FileText, Play, MessageSquarePlus, Heart, ChevronLeft, ChevronRight, Shuffle, Eye, EyeOff, Search, CheckSquare, Square } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
+import { RefreshCw, Sparkles, History, X, Trash2, Dices, FileText, Play, MessageSquarePlus, Search, Square, CheckSquare, Shuffle, Check, Eye, EyeOff } from 'lucide-react';
 import { clsx } from 'clsx';
 import { WanderLoadingDice } from '../components/wander/WanderLoadingDice';
 import { resolveAssetUrl } from '../utils/pathManager';
 import type { PendingChatMessage } from '../features/app-shell/types';
-import { subscribeSettingsUpdated } from '../bridge/appEvents';
 import {
-  AUTHORING_ALLOWED_APP_CLI_ACTIONS,
   AUTHORING_ALLOWED_OPERATE_ACTIONS,
   AUTHORING_ALLOWED_TOOLS,
   buildTaskBriefPromptSection,
@@ -14,6 +12,8 @@ import {
 import type { AuthoringTaskHints, TaskBriefArticleStrategy, TaskBriefSeed } from '../utils/redclawAuthoring';
 import { usePageRefresh } from '../hooks/usePageRefresh';
 import { uiDebug } from '../utils/uiDebug';
+import { APP_BRAND } from '../config/brand';
+import { subscribeSettingsUpdated } from '../bridge/appEvents';
 
 interface WanderItem {
   id: string;
@@ -22,6 +22,52 @@ interface WanderItem {
   content: string;
   cover?: string;
   meta?: Record<string, unknown>;
+}
+
+interface WanderVisualBlock {
+  blockId: string;
+  text: string;
+  path?: string;
+  page?: number;
+  visualUnitId?: string;
+}
+
+interface KnowledgeCatalogSummary {
+  itemId: string;
+  kind: 'redbook-note' | 'youtube-video' | 'document-source';
+  noteType?: string;
+  captureKind?: string;
+  title: string;
+  author?: string;
+  sourceUrl?: string;
+  folderPath?: string;
+  rootPath?: string;
+  coverUrl?: string;
+  thumbnailUrl?: string;
+  previewText?: string;
+  createdAt?: string;
+  tags?: string[];
+  hasVideo?: boolean;
+  hasTranscript?: boolean;
+  status?: string;
+  sampleFiles?: string[];
+  fileCount?: number;
+  readyForWander?: boolean;
+  wanderIndexStatus?: 'ready' | 'indexing' | 'failed' | 'not_indexed';
+  wanderVisualBlocks?: WanderVisualBlock[];
+}
+
+interface KnowledgeListPageResponse {
+  items: KnowledgeCatalogSummary[];
+  nextCursor?: string | null;
+  total?: number;
+}
+
+interface GuidedWanderItemsResponse {
+  items?: WanderItem[];
+  warning?: string | null;
+  candidateCount?: number;
+  query?: string;
 }
 
 interface WanderMaterialRef {
@@ -35,6 +81,14 @@ interface WanderMaterialRef {
   displayTitle?: string;
   sourceUrl?: string;
   exists?: boolean;
+}
+
+interface KnowledgeFolderReference {
+  folderName: string;
+  folderPath: string;
+  metaPath: string;
+  contentHint: string;
+  suggestedReadPaths: string[];
 }
 
 interface WanderResult {
@@ -58,9 +112,6 @@ interface WanderResult {
     topic: { title: string; connections: number[] };
   }>;
   selected_index?: number;
-  method?: string;
-  created_by?: string;
-  createdBy?: string;
 }
 
 interface WanderValidationIssue {
@@ -75,8 +126,7 @@ interface WanderHistoryRecord {
   result: string | WanderResult | Record<string, unknown> | unknown;
   created_at?: number;
   createdAt?: number;
-  status?: string;
-  abandoned_at?: number | null;
+  status?: string | null;
   abandonedAt?: number | null;
 }
 
@@ -89,41 +139,37 @@ interface WanderProgressCard {
   totalSteps?: number;
 }
 
-type WanderSelectionMode = 'random' | 'manual';
-type WanderGuidedSourceMode = 'topic' | 'anchor';
-
-interface WanderKnowledgeCatalogItem {
-  itemId?: string;
-  kind?: string;
-  title?: string;
-  previewText?: string;
-  author?: string;
-  siteName?: string;
-  coverUrl?: string;
-  thumbnailUrl?: string;
-  sourceUrl?: string;
-  folderPath?: string;
-}
-
 interface WanderProps {
   isActive?: boolean;
   onExecutionStateChange?: (active: boolean) => void;
-  onNavigateToManuscript?: (filePath: string) => void;
+  onTitleBarContentChange?: (content: ReactNode | null) => void;
   onNavigateToRedClaw?: (payload: PendingChatMessage) => void;
 }
 
-export function Wander({ isActive = true, onExecutionStateChange, onNavigateToManuscript, onNavigateToRedClaw }: WanderProps) {
+type WanderSelectionMode = 'random' | 'manual' | 'comments';
+type WanderLaunchMode = 'random' | 'comments';
+type CommentSourceMode = 'random' | 'custom';
+
+export function Wander({ isActive = true, onExecutionStateChange, onTitleBarContentChange, onNavigateToRedClaw }: WanderProps) {
   const [items, setItems] = useState<WanderItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [multiChoiceEnabled, setMultiChoiceEnabled] = useState(false);
   const [isSavingMode, setIsSavingMode] = useState(false);
   const [selectionMode, setSelectionMode] = useState<WanderSelectionMode>('random');
-  const [guidedSourceMode, setGuidedSourceMode] = useState<WanderGuidedSourceMode>('topic');
+  const [activeSourceMode, setActiveSourceMode] = useState<WanderSelectionMode>('random');
+  const [pendingStartMode, setPendingStartMode] = useState<WanderLaunchMode | null>(null);
+  const [guidedSourceMode, setGuidedSourceMode] = useState<'topic' | 'anchor'>('topic');
   const [guidedTopic, setGuidedTopic] = useState('');
   const [anchorQuery, setAnchorQuery] = useState('');
   const [anchorResults, setAnchorResults] = useState<WanderItem[]>([]);
   const [selectedAnchor, setSelectedAnchor] = useState<WanderItem | null>(null);
   const [anchorLoading, setAnchorLoading] = useState(false);
+  const [commentCandidateQuery, setCommentCandidateQuery] = useState('');
+  const [commentCandidates, setCommentCandidates] = useState<WanderItem[]>([]);
+  const [selectedCommentItem, setSelectedCommentItem] = useState<WanderItem | null>(null);
+  const [commentCandidatesLoading, setCommentCandidatesLoading] = useState(false);
+  const [commentSourceMode, setCommentSourceMode] = useState<CommentSourceMode>('random');
+  const [guidedWarning, setGuidedWarning] = useState<string | null>(null);
   const [parsedResult, setParsedResult] = useState<WanderResult | null>(null);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -139,11 +185,61 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const activeRequestIdRef = useRef('');
   const historyListRef = useRef<WanderHistoryRecord[]>([]);
   const activeItemsRef = useRef<WanderItem[]>([]);
+  const topicCenterViewedRef = useRef(false);
   const activeOption = parsedResult?.options?.[selectedOptionIndex];
   const activeDirectionFrame = activeOption?.direction_frame || parsedResult?.direction_frame;
   const hasGuidedInput = guidedSourceMode === 'topic'
-    ? guidedTopic.trim().length > 0
+    ? Boolean(guidedTopic.trim())
     : Boolean(selectedAnchor);
+
+  const trackTopicEvent = useCallback((
+    event: Parameters<typeof window.ipcRenderer.analytics.track>[0],
+    properties: Record<string, string | number | boolean | null | undefined> = {},
+  ) => {
+    void window.ipcRenderer.analytics.track(event, {
+      surface: 'wander',
+      origin: 'renderer',
+      properties,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isActive || topicCenterViewedRef.current) return;
+    topicCenterViewedRef.current = true;
+    trackTopicEvent('topic_center_viewed');
+  }, [isActive, trackTopicEvent]);
+
+  function catalogSummaryToWanderItem(item: KnowledgeCatalogSummary): WanderItem {
+    const isVideo = item.kind === 'youtube-video' || Boolean(item.hasVideo);
+    const sourceType = item.kind === 'document-source'
+      ? 'document'
+      : item.kind === 'youtube-video'
+        ? 'youtube'
+        : (item.captureKind || item.noteType || 'note');
+    return {
+      id: item.itemId,
+      type: isVideo ? 'video' : 'note',
+      title: item.title || '未命名内容',
+      content: item.previewText || item.sourceUrl || '',
+      cover: item.coverUrl || item.thumbnailUrl || undefined,
+      meta: {
+        sourceType,
+        sourceName: item.title,
+        sourceKind: item.kind,
+        folderPath: item.folderPath || item.rootPath,
+        filePath: item.rootPath,
+        relativePath: item.sampleFiles?.[0] || '',
+        sampleFiles: item.sampleFiles || [],
+        sourceUrl: item.sourceUrl,
+        tags: item.tags || [],
+        status: item.status,
+        readyForWander: item.readyForWander,
+        wanderIndexStatus: item.wanderIndexStatus,
+        wanderVisualBlocks: item.wanderVisualBlocks || [],
+        hasTranscript: Boolean(item.hasTranscript),
+      },
+    };
+  }
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -176,57 +272,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       onExecutionStateChange?.(false);
     };
   }, [loading, onExecutionStateChange, phase]);
-
-  useEffect(() => {
-    if (!isActive || selectionMode !== 'manual' || guidedSourceMode !== 'anchor') return;
-    let cancelled = false;
-    setAnchorLoading(true);
-    const timer = window.setTimeout(async () => {
-      try {
-        const response = await window.ipcRenderer.knowledge.listPage<{ items?: WanderKnowledgeCatalogItem[] }>({
-          query: anchorQuery.trim(),
-          limit: 20,
-          sort: 'updated-desc',
-        });
-        if (cancelled) return;
-        const normalizedItems = (Array.isArray(response?.items) ? response.items : [])
-          .map((item) => {
-            const title = String(item.title || '').trim();
-            if (!title) return null;
-            const kind = String(item.kind || '').trim();
-            return {
-              id: String(item.itemId || `${kind}:${title}`),
-              type: kind === 'youtube-video' ? 'video' as const : 'note' as const,
-              title,
-              content: String(item.previewText || item.author || item.siteName || '').trim(),
-              cover: String(item.coverUrl || item.thumbnailUrl || ''),
-              meta: {
-                kind,
-                author: item.author,
-                siteName: item.siteName,
-                sourceUrl: item.sourceUrl,
-                folderPath: item.folderPath,
-              },
-            };
-          })
-          .filter((item): item is WanderItem => Boolean(item));
-        setAnchorResults(normalizedItems);
-      } catch (error) {
-        console.error('Failed to load wander anchor items:', error);
-        if (!cancelled) {
-          setAnchorResults([]);
-        }
-      } finally {
-        if (!cancelled) {
-          setAnchorLoading(false);
-        }
-      }
-    }, 180);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [anchorQuery, guidedSourceMode, isActive, selectionMode]);
 
   const upsertProgressCard = useCallback((next: WanderProgressCard) => {
     setProgressCards((prev) => {
@@ -349,9 +394,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       selected_index: Number.isFinite(Number(result.selected_index))
         ? Math.max(0, Number(result.selected_index))
         : (Number.isFinite(Number(embedded.selected_index)) ? Math.max(0, Number(embedded.selected_index)) : 0),
-      method: result.method || embedded.method,
-      created_by: result.created_by || embedded.created_by,
-      createdBy: result.createdBy || embedded.createdBy,
     };
   }
 
@@ -465,40 +507,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       selected_index: Number.isFinite(Number(payload.selected_index ?? payload.selectedIndex))
         ? Math.max(0, Number(payload.selected_index ?? payload.selectedIndex))
         : 0,
-      method: String(payload.method || payload.sourceMethod || payload.source_mode || payload.sourceMode || '').trim() || undefined,
-      created_by: String(payload.created_by || payload.createdBy || '').trim() || undefined,
-      createdBy: String(payload.createdBy || payload.created_by || '').trim() || undefined,
     });
-  }
-
-  function normalizedTopicMethod(value: unknown): string {
-    return String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
-  }
-
-  function topicSourceLabel(result: WanderResult | null, recordItems: WanderItem[]): string {
-    const createdBy = String(result?.created_by || result?.createdBy || '').trim().toLowerCase();
-    const method = normalizedTopicMethod(result?.method);
-    if (['agent', 'ai', 'ai_agent', 'redclaw', 'content_topic_miner'].includes(createdBy)) {
-      return 'AI创作';
-    }
-    if ([
-      'ai_creation',
-      'content_topic_miner',
-      'knowledge_mining',
-      'knowledge_similar_mining',
-      'history_mining',
-      'trend_mining',
-    ].includes(method)) {
-      return 'AI创作';
-    }
-    if (method === 'comment_insight' || method === 'comment_demand_insight' || method.includes('comment')) {
-      return '评论洞察';
-    }
-    const isCommentInsight = recordItems.some((item) => {
-      const meta = item.meta || {};
-      return String(meta.sourceType || meta.source_type || '').trim() === 'xhs-comments';
-    });
-    return isCommentInsight ? '评论洞察' : '灵感漫步';
   }
 
   function normalizeWanderValidationIssues(raw: unknown): WanderValidationIssue[] {
@@ -534,15 +543,15 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     return Number.isFinite(timestamp) ? timestamp : 0;
   }
 
-  function isAbandonedHistoryRecord(record: WanderHistoryRecord): boolean {
-    return String(record.status || '').trim() === 'abandoned' || Boolean(record.abandoned_at || record.abandonedAt);
-  }
-
   function getHistoryTitle(record: WanderHistoryRecord): string {
     const parsed = normalizeWanderResultPayload(record.result);
     return parsed?.options?.[resolveSelectedOptionIndex(parsed)]?.topic.title
       || parsed?.topic?.title
       || '未命名选题';
+  }
+
+  function isAbandonedHistoryRecord(record: WanderHistoryRecord): boolean {
+    return String(record.status || '').trim() === 'abandoned' || Boolean(record.abandonedAt);
   }
 
   const resolveWanderMaterialRef = (item: WanderItem): WanderMaterialRef | null => {
@@ -568,7 +577,48 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     };
   };
 
-  const buildKnowledgeFolderReference = (item: WanderItem) => {
+  const inferSuggestedReadPaths = (
+    item: WanderItem,
+    folderPath: string,
+    folderName: string,
+  ): string[] => {
+    const meta = (item.meta || {}) as Record<string, unknown>;
+    const sampleFiles = Array.isArray(meta.sampleFiles)
+      ? meta.sampleFiles.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const normalize = (value: unknown): string | null => {
+      if (typeof value !== 'string') return null;
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      if (trimmed.includes('/') || trimmed.includes('\\') || trimmed.startsWith('workspace://') || trimmed.startsWith('knowledge://')) {
+        return trimmed;
+      }
+      return `${folderPath}/${trimmed}`;
+    };
+    const normalizedSampleFiles = sampleFiles
+      .map((value) => normalize(value))
+      .filter((value): value is string => Boolean(value));
+    const sourceType = String(meta.sourceType || '').trim().toLowerCase();
+    const candidates = [
+      `${folderPath}/meta.json`,
+      ...normalizedSampleFiles,
+      normalize(meta.subtitleFile),
+      normalize(meta.transcriptFile),
+      normalize(meta.contentFile),
+    ];
+    if (sourceType === 'youtube') {
+      const videoId = typeof meta.videoId === 'string' && meta.videoId.trim()
+        ? meta.videoId.trim()
+        : folderName.replace(/^youtube_/, '').trim();
+      if (videoId) {
+        candidates.push(`${folderPath}/${videoId}.txt`);
+      }
+    }
+    candidates.push(`${folderPath}/content.md`);
+    return Array.from(new Set(candidates.filter((value): value is string => Boolean(value))));
+  };
+
+  const buildKnowledgeFolderReference = (item: WanderItem): KnowledgeFolderReference => {
     const meta = (item.meta || {}) as Record<string, unknown>;
     const materialRef = resolveWanderMaterialRef(item);
     if (materialRef) {
@@ -583,6 +633,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         folderPath: folderPath || `material://${item.id}`,
         metaPath: folderPath || `material://${item.id}`,
         contentHint: [materialRef.explorationHint, namingRulesHint].filter(Boolean).join(' '),
+        suggestedReadPaths: folderPath ? inferSuggestedReadPaths(item, folderPath, fallbackName) : [],
       };
     }
     if (meta.sourceType === 'document') {
@@ -595,6 +646,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         folderPath: filePath || `document://${item.id}`,
         metaPath: filePath || `document://${item.id}`,
         contentHint: `这是文档知识源（${sourceName || sourceKind || 'document'}），先列目录，再根据文件名和样例文件自行判断该读什么正文。`,
+        suggestedReadPaths: filePath ? [filePath] : [],
       };
     }
 
@@ -609,7 +661,45 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       contentHint: item.type === 'video'
         ? '先列目录，再优先读 meta.json，然后根据 transcript / subtitle / content / description 等命名线索自行寻找相关文件。'
         : '先列目录，再优先读 meta.json，然后根据 content / body / article / note 等命名线索自行寻找正文文件。',
+      suggestedReadPaths: inferSuggestedReadPaths(item, fallbackFolderPath, folderName),
     };
+  };
+
+  const getWanderVisualBlocks = (item: WanderItem): WanderVisualBlock[] => {
+    const raw = item.meta?.wanderVisualBlocks;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((block): WanderVisualBlock | null => {
+        if (!block || typeof block !== 'object') return null;
+        const payload = block as Record<string, unknown>;
+        const blockId = typeof payload.blockId === 'string' ? payload.blockId.trim() : '';
+        const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+        if (!blockId || !text) return null;
+        return {
+          blockId,
+          text,
+          path: typeof payload.path === 'string' ? payload.path : undefined,
+          page: typeof payload.page === 'number' ? payload.page : undefined,
+          visualUnitId: typeof payload.visualUnitId === 'string' ? payload.visualUnitId : undefined,
+        };
+      })
+      .filter((block): block is WanderVisualBlock => Boolean(block));
+  };
+
+  const formatWanderVisualBlocksForRedClaw = (item: WanderItem): string => {
+    const blocks = getWanderVisualBlocks(item).slice(0, 6);
+    if (blocks.length === 0) return '';
+    return [
+      '图片文字摘录：',
+      ...blocks.map((block, index) => {
+        const source = [
+          block.path || 'image',
+          typeof block.page === 'number' ? `page=${block.page}` : '',
+          `blockId=${block.blockId}`,
+        ].filter(Boolean).join(' ');
+        return `${index + 1}. ${source}：${block.text.replace(/\s+/g, ' ').slice(0, 420)}`;
+      }),
+    ].join('\n');
   };
 
   const canStartCreate = Boolean(parsedResult && onNavigateToRedClaw && validationIssues.length === 0 && !parseError);
@@ -619,22 +709,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     const selectedOption = parsedResult.options?.[selectedOptionIndex];
     const activeTopic = selectedOption?.topic || parsedResult.topic;
     const activeDirection = selectedOption?.content_direction || parsedResult.content_direction;
-    const connectedSet = new Set(activeTopic.connections || []);
-    const initialArticleStrategy: TaskBriefArticleStrategy = {
-      articleStyle: '待根据选题和素材判断',
-      readerQuestion: activeTopic.title || '读者看到这个选题后最直接的问题是什么',
-      corePromise: activeDirection || '帮读者获得一个可发布、可理解、可转发的清晰判断',
-      titleDirection: '先判断读者问题，再生成直接疑问、反常识、悬念表达等候选',
-      openingDirection: '开头直接回应读者问题，不复盘素材来源',
-      structureDirection: '围绕一个明确观点推进，素材只作为事实、场景或表达参考',
-      avoidDirection: ['不要提到原文', '不要提到原笔记', '不要提到评论区', '不要把素材复盘写进正文'],
-    };
     const referenceCards = items.map((item, index) => {
       const folderRef = buildKnowledgeFolderReference(item);
       return {
         title: item.title || '(无标题)',
         itemType: item.type,
-        tag: connectedSet.has(index + 1) ? '核心关联素材' : '辅助素材',
+        tag: '可选灵感素材',
         folderPath: folderRef.folderPath,
         summary: String(item.content || '').replace(/\s+/g, ' ').trim().slice(0, 96),
         cover: resolveAssetUrl(item.cover),
@@ -643,12 +723,17 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     const materialText = items.map((item, index) => {
       const order = index + 1;
       const folderRef = buildKnowledgeFolderReference(item);
+      const visualText = formatWanderVisualBlocksForRedClaw(item);
       return [
         `素材${order}`,
         `类型：${item.type === 'video' ? '视频笔记' : ((item.meta as Record<string, unknown> | undefined)?.sourceType === 'document' ? '文档' : '图文笔记')}`,
         `标题：${item.title || '(无标题)'}`,
-        `素材路径：${folderRef.folderPath}`,
-      ].join('\n');
+        `素材目录：${folderRef.folderPath}`,
+        folderRef.suggestedReadPaths.length > 0
+          ? `建议读取：${folderRef.suggestedReadPaths.slice(0, 3).join('、')}`
+          : `读取方式：先 List 素材目录，再 Read 具体文件`,
+        visualText,
+      ].filter(Boolean).join('\n');
     }).join('\n\n');
     const knowledgeReferences = items.map((item) => {
       const folderRef = buildKnowledgeFolderReference(item);
@@ -661,25 +746,38 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         cover: resolveAssetUrl(item.cover),
         sourceUrl: typeof meta.sourceUrl === 'string' ? meta.sourceUrl : undefined,
         folderPath: folderRef.folderPath,
-        rootPath: folderRef.folderPath,
-        updatedAt: typeof meta.updatedAt === 'string' ? meta.updatedAt : undefined,
+        rootPath: typeof meta.filePath === 'string' ? meta.filePath : folderRef.folderPath,
+        tags: Array.isArray(meta.tags) ? meta.tags.filter((tag): tag is string => typeof tag === 'string') : undefined,
+        hasTranscript: Boolean(meta.hasTranscript),
       };
     });
+    const initialArticleStrategy: TaskBriefArticleStrategy = {
+      articleStyle: '待判断',
+      readerQuestion: '',
+      corePromise: '',
+      titleDirection: '',
+      openingDirection: '',
+      structureDirection: '',
+      avoidDirection: [],
+    };
     const taskBrief: TaskBriefSeed = {
-      taskType: 'wander_xhs_creation',
-      goal: `基于漫步选题《${activeTopic.title}》创作一篇独立小红书文案，并保存到稿件工程。`,
-      currentStage: 'research',
+      taskType: 'wander_manuscript_creation',
+      goal: `围绕选题「${activeTopic.title}」创作一篇独立小红书文案，并保存到 wander 稿件工程。`,
+      currentStage: 'init',
       todo: [
-        { id: 'research', text: '判断是否需要外部调研，并读取必要素材', status: 'todo' },
-        { id: 'strategy', text: '确定文章打法、读者问题和结构方向', status: 'todo' },
-        { id: 'title', text: '调用 xhs-title 产出候选并选择最终标题', status: 'todo' },
-        { id: 'draft', text: '调用 writing-style 写正文并自检', status: 'todo' },
-        { id: 'save', text: '创建 wander 稿件工程并保存最终稿', status: 'todo' },
+        { id: 'research_decision', text: '判断是否需要外部调研；需要当前事实时调用 web.search', status: 'todo' },
+        { id: 'research_brief', text: '把素材和搜索结果压缩成可写作的事实 brief', status: 'todo' },
+        { id: 'article_strategy', text: '根据选题和调研结果判断文章打法，并写入 articleStrategy', status: 'todo' },
+        { id: 'title_skill', text: '带着 articleStrategy 调用 xhs-title，生成分风格候选标题并选出最终标题', status: 'todo' },
+        { id: 'writing_skill', text: '带着 articleStrategy 和最终标题调用 writing-style 完成正文写作和自检', status: 'todo' },
+        { id: 'save', text: '创建稿件工程并用 Write 保存最终文案', status: 'todo' },
       ],
       importantContext: [
-        { kind: 'constraint', text: '正文必须是一篇独立小红书内容，不得提到原文、原笔记、评论区或素材来源痕迹。' },
-        { kind: 'source', text: `参考素材数量：${items.length}。素材目录只作为后台参考，写作前按需读取。` },
-        { kind: 'decision', text: 'Electron 开源版保存路径使用 app_cli manuscripts.createProject / manuscripts.writeCurrent。' },
+        { kind: 'constraint', text: '这是一篇围绕选题独立创作的新内容，不是评论区洞察说明或素材复盘。' },
+        { kind: 'constraint', text: '原笔记和评论只可作为后台参考数据来源，正文禁止出现“原文”“原笔记”“评论区”“评论里”“有用户评论”“大家在评论区问”等来源痕迹。' },
+        { kind: 'validation', text: '如果任务涉及当下事实、数据、平台规则、产品、价格、政策、人物或案例，必须先用 web.search 调研并把可用事实写入 brief。' },
+        { kind: 'validation', text: '标题和正文必须共同服从 articleStrategy；不能标题走悬念、正文走解释，或标题绕开读者最直接的问题。' },
+        { kind: 'validation', text: '最终保存前必须检查正文是否使用了 brief 中的关键事实、是否调用了 xhs-title 和 writing-style、是否没有来源痕迹。' },
       ],
       articleStrategy: initialArticleStrategy,
       titleCandidates: [],
@@ -687,27 +785,27 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         platform: 'xiaohongshu',
         topicTitle: activeTopic.title,
         contentDirection: activeDirection || '',
-        referenceSourceMode: 'wander',
+        referenceSourceMode: activeSourceMode === 'comments' ? 'comment_insight' : 'wander',
         forbiddenFinalPhrases: ['原文', '原笔记', '评论区', '评论里', '有用户评论', '大家在评论区问'],
       },
     };
 
     const content = [
-      '请基于以下“漫步结果”开始创作一篇完整的小红书文案。',
+      '请基于以下“选题中心结果”创作一篇独立的小红书文案。',
       '',
-      '注意：不要只依赖我在消息里给的摘要。开始写作前，请先读取下方素材目录中的真实文件，理解哪些内容值得借鉴、哪些内容不该硬塞进正文。',
-      '优先使用 `redbox_fs(action="workspace.list" | "workspace.read", payload={ ... })` 读取这些 workspace 相对路径；只有当 `redbox_fs` 无法表达该读取动作时，才回退到 `bash`。不要再尝试历史兼容别名或自造的 `fs read` / `app_cli fs ...`。',
-      '',
-      '请先进入每条素材目录，自行列出文件，再优先读取 meta.json，并根据目录中的命名规则判断还需要读哪些正文/转录/字幕文件；重点学习其中可复用的 hook、情绪触发点、叙事结构、反差和细节，而不是逐条照搬素材。',
-      '',
-      '开始写作前必须先激活 `writing-style` 技能；不要假定它已经预加载。先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`，然后再继续读取素材、读取档案和写正文。',
-      '再次强调：这是写作任务，不要跳过 `writing-style`。开始写作前必须先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`。',
-      '最后再强调一次：先激活 `writing-style`，再写作；先激活 `writing-style`，再写作；先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`，再继续后续步骤。',
-      '需要参考用户的档案来进行创作 CreatorProfile.md 和 user.md，再基于素材完成最终标题和正文，避免模板化表达。',
-      '这不是命题作文。内容质量、传播性和完成度优先，不要求把所有目标素材都直接写进最终正文。',
-      '如果某个素材只提供了切口启发、结构方法、情绪张力或表达方式，可以只吸收其方法；如果某个素材会拖累成稿质量，可以舍弃。',
-      '写正文时不要插入控制字符、占位分隔线或额外格式标记；正文只保留正常段落结构。',
-      '完稿前自行做一次风格与事实自检，再保存。',
+      '站位：这是围绕该选题重新写一篇新的独立内容，不是为“评论区洞察”写说明，也不是复盘素材来源。',
+      '选题中心素材只是后台参考数据来源，只能用来校准事实、需求、场景、痛点和表达方向；正文中禁止出现“原文”“原笔记”“评论区”“评论里”“有用户评论”“大家在评论区问”等来源痕迹。',
+      '如果参考素材来自评论洞察，也必须把它转化为独立内容里的读者问题、场景或判断，不要把读者带回素材现场。',
+      '可按需读取下方素材目录或用户档案；素材目录不是正文文件，如需读取，请优先 Read “建议读取”里的具体文件，或先 List 目录再 Read 具体文件。',
+      '本任务必须按五个连续阶段完成，不能跳过，也不能把前一阶段的技能输出当成后一阶段的完整上下文。',
+      '开始执行后，先输出一句简短、自然的过程说明，让用户知道你会先初始化工作 brief 并核对是否需要外部调研；不要输出计划列表或整篇正文。',
+      '阶段一：调研判断。随后调用 `taskBrief.update` 初始化工作 brief；然后判断这个选题是否涉及当下事实、产品、平台规则、价格、政策、人物、案例、数据或其它容易过期的信息；涉及就必须调用 `Operate(resource="web", operation="search", input={ "query": "<搜索词>" })` 做搜索，并把可用事实、来源和不确定点写回 Task Brief。若不需要外部调研，也要把“不需要外部调研”的判断和理由写回 Task Brief。',
+      '阶段二：文章打法定向。根据选题、调研事实和读者真实好奇心，先判断 `articleStrategy`，再调用 `taskBrief.update` 写入：articleStyle、readerQuestion、corePromise、titleDirection、openingDirection、structureDirection、avoidDirection。这个阶段要先回答“读者看到这个选题，脑子里最直接的问题是什么”，并判断标题和正文应该走直接疑问、反常识、数据冲击、故事化、观点型还是其它打法。',
+      '阶段三：标题。必须显式调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "xhs-title" })`，让日志可审计；标题必须服从 `articleStrategy`，不要自由套公式。生成至少 4 个分风格候选标题，至少包含“直接疑问”和“悬念表达”两类，并把完整 titleCandidates、selectedTitle、selectedTitleReason 写回 Task Brief。最终选择时优先贴近 readerQuestion；除非悬念标题明显更强，否则商业解释型/反常识型内容优先直接疑问。',
+      '阶段四：正文。拿阶段三选出的最终标题作为正文唯一标题，然后必须显式调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "writing-style" })`，让日志可审计；正文阶段由 `writing-style` 主导，但必须同时服从 `articleStrategy`：开头兑现 openingDirection，结构服从 structureDirection，信息密度和语气服从 articleStyle。',
+      '阶段五：保存。创建稿件工程并保存最终文案。',
+      '如果 `writing-style` 要求读取用户档案或创作者档案，正文动笔前必须先读取；不要因为已经完成标题阶段，就省略写作风格上下文。创建稿件工程后，后续 `Write` 的 content 仍然必须是按 `writing-style` 自检后的完整正文。',
+      '完稿前按 `articleStrategy` 和 `writing-style` 双重自检标题、开头、结构、事实边界、语气和禁区；内容质量优先于素材覆盖率。正文不要写成报告式大纲，不要输出孤立分隔线，不要只模仿素材格式。',
       '',
       '## 灵感选题',
       `标题：${activeTopic.title}`,
@@ -715,22 +813,22 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       '',
       buildTaskBriefPromptSection(taskBrief),
       '',
-      '## 参考素材（来自漫步）',
+      '## 参考素材（来自选题中心）',
       materialText,
       '',
       '## 输出要求',
-      '1. 只输出一个最终标题，不要再输出标题候选、备选标题或标题列表。',
-      '2. 只输出一篇完整正文（可直接发布，结构清晰，优先保证成稿质量而不是素材覆盖率）。不要额外输出推荐 tag、标签建议、封面文案或其它附加栏目。',
-      '3. 这是小红书图文任务，必须保存成 `.redpost` 工程。',
-      '4. 如目标工程不存在，先调用 `app_cli(action="manuscripts.createProject", payload={ "kind": "redpost", "parent": "wander", "title": "<最终标题>" })` 获取规范工程路径。不要把标题直接当成工程文件名。',
-      '5. 创建成功后，宿主会把该工程绑定为当前写稿目标；你只需要生成最终标题和完整正文，不要展开描述工程内部文件结构，也不要自己管理其他工程文件。',
-      '6. 完成后必须调用 `app_cli(action="manuscripts.writeCurrent", payload={ "content": "<完整正文>" })` 保存完整稿件；不要重新创建工程，也不要再重复传 path。',
-      '7. 未收到工具成功返回前，禁止告诉我“已经保存”。如果保存失败，必须明确说“内容已生成但尚未保存”。',
+      '1. 先完成调研判断；需要当前事实时必须搜索，不需要时不要为了形式搜索。',
+      '2. 再完成文章打法定向，并把完整 `articleStrategy` 写入 Task Brief；标题和正文都必须受它约束。',
+      '3. 再显式调用 `xhs-title` 完成标题阶段，内部选择 1 个最终标题；必须把完整候选标题、评分和选择理由写入 Task Brief；最终稿件和最终回复都只保留最终标题。',
+      '4. 再显式调用 `writing-style` 完成正文阶段；正文必须按该技能规则和 `articleStrategy` 写作、自检，不能只沿用标题阶段的上下文。',
+      '5. 正文必须是一篇独立小红书内容，禁止提到参考来源来自原笔记或评论区。',
+      '6. 如目标工程不存在，先调用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "post", "parent": "wander", "title": "<最终标题>" })` 创建 post 文件夹稿件工程。',
+      '7. 完成后调用 `Write(path="manuscripts://current", content="<最终标题和按 articleStrategy + writing-style 自检后的完整正文>")` 保存；保存成功后的最终回复只给运行总结和稿件链接，不要重复全文。',
     ].join('\n');
 
     onNavigateToRedClaw({
       content,
-      displayContent: `基于漫步灵感开始创作：${parsedResult.topic.title}`,
+      displayContent: `基于选题中心灵感开始创作：${parsedResult.topic.title}`,
       sessionRouting: 'new',
       taskHints: {
         intent: 'manuscript_creation',
@@ -739,12 +837,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         writeTarget: 'manuscripts://current',
         requiredSkill: ['writing-style', 'xhs-title'],
         activeSkills: ['writing-style', 'xhs-title'],
-        allowedTools: AUTHORING_ALLOWED_TOOLS,
-        allowedAppCliActions: AUTHORING_ALLOWED_APP_CLI_ACTIONS,
+        allowedTools: [...AUTHORING_ALLOWED_TOOLS, 'web'],
         allowedOperateActions: [...AUTHORING_ALLOWED_OPERATE_ACTIONS, 'web.search'],
         allowedWriteTargets: ['manuscripts://current'],
-        requireSourceRead: true,
-        requireProfileRead: true,
+        requireSourceRead: false,
+        requireProfileRead: false,
         requireSave: true,
         requireTaskBrief: true,
         requireSkillInvocations: ['xhs-title', 'writing-style'],
@@ -752,7 +849,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         forbiddenFinalPhrases: ['原文', '原笔记', '评论区', '评论里', '有用户评论', '大家在评论区问'],
         deferredDiscovery: false,
         teamEscalation: 'disabled',
-        saveArtifact: 'redpost',
+        saveArtifact: 'folder',
         saveSubdir: 'wander',
         platform: 'xiaohongshu',
         taskType: 'direct_write',
@@ -761,10 +858,16 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       },
       attachment: {
         type: 'wander-references',
-        title: '漫步参考素材',
+        title: '选题中心参考素材',
         items: referenceCards,
       },
       knowledgeReferences,
+    });
+    trackTopicEvent('topic_used_for_task', {
+      sourceMode: activeSourceMode,
+      hasBrief: true,
+      evidenceCount: items.length,
+      optionIndex: selectedOptionIndex,
     });
   };
 
@@ -780,34 +883,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const persistWanderSettings = useCallback(async (patch: {
     wander_deep_think_enabled?: boolean;
   }) => {
-    const settings = await window.ipcRenderer.getSettings();
     await window.ipcRenderer.saveSettings({
-      api_endpoint: settings?.api_endpoint || '',
-      api_key: settings?.api_key || '',
-      model_name: settings?.model_name || '',
-      workspace_dir: settings?.workspace_dir,
-      active_space_id: settings?.active_space_id,
-      role_mapping: settings?.role_mapping || '{}',
-      transcription_model: settings?.transcription_model,
-      transcription_endpoint: settings?.transcription_endpoint,
-      transcription_key: settings?.transcription_key,
-      embedding_endpoint: settings?.embedding_endpoint,
-      embedding_key: settings?.embedding_key,
-      embedding_model: settings?.embedding_model,
-      ai_sources_json: settings?.ai_sources_json,
-      default_ai_source_id: settings?.default_ai_source_id,
-      image_provider: settings?.image_provider,
-      image_endpoint: settings?.image_endpoint,
-      image_api_key: settings?.image_api_key,
-      image_model: settings?.image_model,
-      image_provider_template: settings?.image_provider_template,
-      image_aspect_ratio: settings?.image_aspect_ratio,
-      image_size: settings?.image_size,
-      image_quality: settings?.image_quality,
-      mcp_servers_json: settings?.mcp_servers_json,
-      redclaw_compact_target_tokens: settings?.redclaw_compact_target_tokens,
-      wander_deep_think_enabled: patch.wander_deep_think_enabled ?? settings?.wander_deep_think_enabled,
-      wander_skill_loading_enabled: settings?.wander_skill_loading_enabled,
+      wander_deep_think_enabled: patch.wander_deep_think_enabled,
     });
   }, []);
 
@@ -829,18 +906,55 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     }
   };
 
+  const handleSelectionModeChange = (mode: 'random' | 'manual') => {
+    if (loading) return;
+    trackTopicEvent('topic_source_selected', {
+      sourceMode: mode,
+    });
+    setSelectionMode(mode);
+    setParseError(null);
+    setValidationIssues([]);
+    setGuidedWarning(null);
+    if (phase !== 'running') {
+      setPhase('idle');
+      setShowFinal(false);
+      setParsedResult(null);
+      setSelectedOptionIndex(0);
+      setItems([]);
+      setCurrentHistoryId(null);
+      setPendingStartMode(null);
+      activeRequestIdRef.current = '';
+    }
+  };
+
+  const handleGuidedSourceModeChange = (mode: 'topic' | 'anchor') => {
+    trackTopicEvent('topic_source_selected', {
+      sourceMode: 'manual',
+      guidedSourceMode: mode,
+    });
+    setGuidedSourceMode(mode);
+    setParseError(null);
+    if (mode === 'topic') {
+      setSelectedAnchor(null);
+      setAnchorQuery('');
+      setAnchorResults([]);
+    } else {
+      setGuidedTopic('');
+    }
+  };
+
   // 加载历史记录列表
   const loadHistoryList = useCallback(async (options?: { includeAbandoned?: boolean }) => {
     try {
-      const list = await window.ipcRenderer.wander.listHistory<WanderHistoryRecord[]>({
+      const list = await window.ipcRenderer.wander.listHistory({
         includeAbandoned: Boolean(options?.includeAbandoned),
-      });
+      }) as WanderHistoryRecord[];
       const normalized = Array.isArray(list) ? list : [];
       setHistoryList(normalized);
-      return normalized;
+      return normalized.filter(record => !isAbandonedHistoryRecord(record));
     } catch (error) {
       console.error('Failed to load wander history list:', error);
-      return historyListRef.current;
+      return historyListRef.current.filter(record => !isAbandonedHistoryRecord(record));
     }
   }, []);
 
@@ -852,60 +966,88 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       if (!parsedRes) {
         setParsedResult(null);
         setParseError('历史结果解析失败');
-        setPhase('done');
-        setShowFinal(true);
-        setCurrentHistoryId(record.id);
-        setShowHistory(false);
-        return;
+      setPhase('done');
+      setShowFinal(true);
+      setCurrentHistoryId(record.id);
+      setPendingStartMode(null);
+      setShowHistory(false);
+      return;
       }
       setItems(parsedItems);
       setParsedResult(parsedRes);
       setSelectedOptionIndex(resolveSelectedOptionIndex(parsedRes));
       setParseError(null);
+      setGuidedWarning(null);
       setPhase('done');
       setShowFinal(true);
       setCurrentHistoryId(record.id);
+      setPendingStartMode(null);
       setShowHistory(false);
+      trackTopicEvent('topic_selected', {
+        source: 'history',
+        topicStatus: isAbandonedHistoryRecord(record) ? 'abandoned' : 'active',
+        evidenceCount: normalizeWanderItemsPayload(record.items).length,
+      });
     } catch (e) {
       console.error('Failed to parse history:', e);
     }
-  };
-
-  const resetToIdleTopicState = () => {
-    setPhase('idle');
-    setShowFinal(false);
-    setParsedResult(null);
-    setItems([]);
-    setCurrentHistoryId(null);
   };
 
   // 删除历史记录
   const deleteHistory = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     await window.ipcRenderer.wander.deleteHistory(id);
+    trackTopicEvent('topic_deleted', {
+      source: 'history',
+    });
     const newList = historyList.filter(h => h.id !== id);
+    const activeList = newList.filter(record => !isAbandonedHistoryRecord(record));
     setHistoryList(newList);
     if (currentHistoryId === id) {
-      const activeList = newList.filter(record => !isAbandonedHistoryRecord(record));
       if (activeList.length > 0) {
         loadHistory(activeList[0]);
       } else {
-        resetToIdleTopicState();
+        setPhase('idle');
+        setShowFinal(false);
+        setParsedResult(null);
+        setItems([]);
+        setCurrentHistoryId(null);
+        setPendingStartMode(null);
       }
     }
   };
 
-  const abandonCurrentTopic = async () => {
-    if (!currentHistoryId || loading) return;
+  const clearTopicDetail = () => {
+    setPhase('idle');
+    setShowFinal(false);
+    setParsedResult(null);
+    setItems([]);
+    setCurrentHistoryId(null);
+    setSelectedOptionIndex(0);
+    setPendingStartMode(null);
+  };
+
+  const abandonSelectedTopic = async () => {
+    if (!selectedTopic || selectedTopic.abandoned || loading) return;
+    const targetId = selectedTopic.id;
+    const isPersistedTopic = targetId !== 'current-topic';
+
     try {
-      await window.ipcRenderer.wander.abandonHistory(currentHistoryId);
-      const nextList = await loadHistoryList({ includeAbandoned: showAbandonedTopics });
-      const activeList = nextList.filter(record => !isAbandonedHistoryRecord(record));
-      if (activeList.length > 0) {
-        loadHistory(activeList[0]);
-      } else {
-        resetToIdleTopicState();
+      let nextList = historyList.filter(record => record.id !== targetId && !isAbandonedHistoryRecord(record));
+      if (isPersistedTopic) {
+        await window.ipcRenderer.wander.abandonHistory(targetId);
+        nextList = await loadHistoryList({ includeAbandoned: showAbandonedTopics });
       }
+
+      if (nextList.length > 0) {
+        loadHistory(nextList[0]);
+      } else {
+        clearTopicDetail();
+      }
+      trackTopicEvent('topic_abandoned_toggled', {
+        source: isPersistedTopic ? 'history' : 'current',
+        topicStatus: 'abandoned',
+      });
     } catch (error) {
       console.error('Failed to abandon wander topic:', error);
       setParseError('放弃失败，请稍后重试');
@@ -918,7 +1060,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     }
     const [, list] = await Promise.all([
       syncWanderSettings(),
-      loadHistoryList({ includeAbandoned: showAbandonedTopics }),
+      loadHistoryList(),
     ]);
     if (list.length > 0 && currentHistoryId) {
       const currentRecord = list.find((item) => item.id === currentHistoryId);
@@ -942,41 +1084,19 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       setParseError(null);
       setItems([]);
       setCurrentHistoryId(null);
+      setPendingStartMode(null);
     }
-  }, [currentHistoryId, items.length, loadHistoryList, loading, parsedResult, phase, showAbandonedTopics, showFinal, syncWanderSettings]);
-
-  const visibleHistoryList = showAbandonedTopics
-    ? historyList
-    : historyList.filter(record => !isAbandonedHistoryRecord(record));
-  const currentTopicSourceLabel = topicSourceLabel(parsedResult, items);
-
-  const handleGuidedSourceModeChange = (mode: WanderGuidedSourceMode) => {
-    setGuidedSourceMode(mode);
-    if (mode === 'topic') {
-      setSelectedAnchor(null);
-      return;
-    }
-    setGuidedTopic('');
-  };
-
-  const buildGuidedTopicConstraint = () => {
-    if (guidedSourceMode === 'topic') {
-      return guidedTopic.trim();
-    }
-    if (!selectedAnchor) {
-      return '';
-    }
-    const summary = selectedAnchor.content.trim();
-    return [
-      `围绕锚点素材「${selectedAnchor.title}」延展选题。`,
-      summary ? `素材摘要：${summary}` : '',
-    ].filter(Boolean).join('\n');
-  };
+  }, [currentHistoryId, items.length, loadHistoryList, loading, parsedResult, phase, showFinal, syncWanderSettings]);
 
   usePageRefresh({
     isActive,
     refresh: refreshPage,
   });
+
+  useEffect(() => {
+    if (!isActive || !showAbandonedTopics) return;
+    void loadHistoryList({ includeAbandoned: true });
+  }, [isActive, loadHistoryList, showAbandonedTopics]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -985,6 +1105,75 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     };
     return subscribeSettingsUpdated(handleSettingsUpdated);
   }, [isActive, syncWanderSettings]);
+
+  useEffect(() => {
+    if (!isActive || selectionMode !== 'manual' || guidedSourceMode !== 'anchor') return;
+    const query = anchorQuery.trim();
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setAnchorLoading(true);
+      const request: Record<string, unknown> = {
+        kind: 'redbook-note',
+        limit: 24,
+        sort: 'updated',
+        readyForWanderOnly: false,
+      };
+      if (query) {
+        request.query = query;
+      }
+      window.ipcRenderer.knowledge.listPage<KnowledgeListPageResponse>(request)
+        .then((response) => {
+          if (cancelled) return;
+          const nextItems = Array.isArray(response?.items)
+            ? response.items.map(catalogSummaryToWanderItem)
+            : [];
+          setAnchorResults(nextItems);
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          console.error('Failed to search wander anchor items:', error);
+          setAnchorResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setAnchorLoading(false);
+          }
+        });
+    }, 280);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [anchorQuery, guidedSourceMode, isActive, selectionMode]);
+
+  useEffect(() => {
+    if (!isActive || pendingStartMode !== 'comments' || commentSourceMode !== 'custom') return;
+    let cancelled = false;
+    setCommentCandidatesLoading(true);
+    window.ipcRenderer.wander.listCommentCandidates<WanderItem[]>()
+      .then((items) => {
+        if (cancelled) return;
+        const nextItems = Array.isArray(items) ? items : [];
+        setCommentCandidates(nextItems);
+        setSelectedCommentItem((current) => {
+          if (!current) return null;
+          return nextItems.some((item) => item.id === current.id) ? current : null;
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error('Failed to load wander comment candidates:', error);
+        setCommentCandidates([]);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCommentCandidatesLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [commentSourceMode, isActive, pendingStartMode]);
 
   useEffect(() => {
     const handleWanderProgress = (_event: unknown, payload?: unknown) => {
@@ -1036,28 +1225,50 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       const historyId = String(data.historyId || '').trim();
       const normalizedResult = normalizeWanderResultPayload(resultText);
       const normalizedIssues = normalizeWanderValidationIssues(data.validationIssues);
+      const resultItems = Array.isArray(data.items) ? data.items as WanderItem[] : null;
       if (error) {
         setParsedResult(normalizedResult);
         setParseError(error);
         setValidationIssues(normalizedIssues);
+        trackTopicEvent('topic_generation_failed', {
+          sourceMode: activeSourceMode,
+          reason: normalizedIssues.length > 0 ? 'validation' : 'runtime',
+          issueCount: normalizedIssues.length,
+        });
+        if (resultItems) {
+          setItems(resultItems);
+          activeItemsRef.current = resultItems;
+        }
         if (normalizedResult) {
           setSelectedOptionIndex(resolveSelectedOptionIndex(normalizedResult));
         }
-        setLiveStatus(toStableTwoLineText('漫步失败'));
+        setLiveStatus(toStableTwoLineText('选题失败'));
       } else {
         if (normalizedResult) {
+          const nextItems = resultItems || activeItemsRef.current;
           setParsedResult(normalizedResult);
           setSelectedOptionIndex(resolveSelectedOptionIndex(normalizedResult));
           setValidationIssues([]);
-          setItems(activeItemsRef.current);
-          setLiveStatus(toStableTwoLineText('漫步完成'));
+          setItems(nextItems);
+          activeItemsRef.current = nextItems;
+          setLiveStatus(toStableTwoLineText('选题完成'));
           if (historyId) {
             setCurrentHistoryId(historyId);
-            void loadHistoryList({ includeAbandoned: showAbandonedTopics });
+            void loadHistoryList();
           }
+          trackTopicEvent('topic_generation_completed', {
+            sourceMode: activeSourceMode,
+            topicCount: normalizedResult.options?.length || 1,
+            evidenceCount: nextItems.length,
+            hasWarning: Boolean(guidedWarning),
+          });
         } else {
           setParsedResult(null);
           setParseError('结果解析失败');
+          trackTopicEvent('topic_generation_failed', {
+            sourceMode: activeSourceMode,
+            reason: 'parse',
+          });
         }
       }
 
@@ -1071,62 +1282,126 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     return () => {
       window.ipcRenderer.wander.offResult(handleWanderResult as (...args: unknown[]) => void);
     };
-  }, [loadHistoryList, showAbandonedTopics]);
+  }, [loadHistoryList]);
 
-  const startWander = async () => {
-    const effectiveSelectionMode = selectionMode;
-    const normalizedGuidedTopic = buildGuidedTopicConstraint();
-    if (effectiveSelectionMode === 'manual' && !normalizedGuidedTopic) {
-      setParseError(guidedSourceMode === 'topic' ? '请先输入选题方向。' : '请先选择一篇锚点笔记。');
-      setPhase('done');
-      setShowFinal(true);
-      return;
-    }
+  const startWander = async (modeOverride?: WanderSelectionMode) => {
+    const effectiveSelectionMode = modeOverride || selectionMode;
     const requestId = `wander-ui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     activeRequestIdRef.current = requestId;
+    setActiveSourceMode(effectiveSelectionMode);
+    setPendingStartMode(null);
     setPhase('running');
     setLoading(true);
-    setLiveStatus(toStableTwoLineText(effectiveSelectionMode === 'manual' ? '正在按方向选择素材...' : '正在初始化漫步...'));
+    setLiveStatus(toStableTwoLineText(
+      effectiveSelectionMode === 'manual'
+        ? '正在按方向选择素材...'
+        : effectiveSelectionMode === 'comments'
+          ? '正在选择评论素材...'
+          : '正在初始化选题...'
+    ));
     setProgressCards([]);
     setParsedResult(null);
     setSelectedOptionIndex(0);
     setParseError(null);
     setValidationIssues([]);
+    setGuidedWarning(null);
     setItems([]);
     setShowFinal(false);
     setCurrentHistoryId(null);
+    trackTopicEvent('topic_generation_started', {
+      sourceMode: effectiveSelectionMode,
+      guidedSourceMode: effectiveSelectionMode === 'manual' ? guidedSourceMode : null,
+      commentSourceMode: effectiveSelectionMode === 'comments' ? commentSourceMode : null,
+      multiChoice: effectiveSelectionMode === 'comments' ? false : multiChoiceEnabled,
+    });
     try {
       await new Promise<void>((resolve) => {
         window.requestAnimationFrame(() => resolve());
       });
-      const randomItems = await window.ipcRenderer.wander.getRandom<WanderItem[]>();
-      setItems(randomItems);
-      activeItemsRef.current = randomItems;
-      if (randomItems.length === 0) {
-        setParseError('暂无足够内容，请先收集一些笔记、视频或文档。');
+      let nextItems: WanderItem[] = [];
+      if (effectiveSelectionMode === 'manual') {
+        if (!hasGuidedInput) {
+          setParseError(guidedSourceMode === 'topic' ? '请先输入主题。' : '请先选择一篇锚点笔记。');
+          setPhase('done');
+          setShowFinal(true);
+          setLoading(false);
+          activeRequestIdRef.current = '';
+          trackTopicEvent('topic_generation_failed', {
+            sourceMode: effectiveSelectionMode,
+            reason: 'missing_input',
+          });
+          return;
+        }
+        const guided = await window.ipcRenderer.wander.getGuidedItems({
+          topic: guidedSourceMode === 'topic' ? guidedTopic.trim() : '',
+          seedText: '',
+          anchorItem: guidedSourceMode === 'anchor' ? selectedAnchor : null,
+          targetCount: 3,
+        }) as GuidedWanderItemsResponse;
+        nextItems = Array.isArray(guided?.items) ? guided.items : [];
+        setGuidedWarning(typeof guided?.warning === 'string' ? guided.warning : null);
+        if (nextItems.length < 3) {
+          setItems(nextItems);
+          activeItemsRef.current = nextItems;
+          setParseError(typeof guided?.warning === 'string'
+            ? guided.warning
+            : '系统没有补齐到 3 篇方向相近的笔记，请换一个主题或选择信息更完整的锚点笔记。');
+          setPhase('done');
+          setShowFinal(true);
+          setLoading(false);
+          activeRequestIdRef.current = '';
+          trackTopicEvent('topic_generation_failed', {
+            sourceMode: effectiveSelectionMode,
+            reason: 'insufficient_sources',
+            evidenceCount: nextItems.length,
+          });
+          return;
+        }
+      } else if (effectiveSelectionMode === 'comments') {
+        nextItems = commentSourceMode === 'custom' && selectedCommentItem ? [selectedCommentItem] : [];
+      } else {
+        nextItems = await window.ipcRenderer.wander.getRandom() as WanderItem[];
+      }
+      setItems(nextItems);
+      activeItemsRef.current = nextItems;
+      if (nextItems.length === 0 && effectiveSelectionMode !== 'comments') {
+        setParseError(effectiveSelectionMode === 'manual'
+          ? '没有找到和当前方向相关的素材，请换一个主题或选择一篇锚点笔记。'
+          : '可用于选题的素材不足 3 条，请先采集更多内容。');
         setPhase('done');
         setShowFinal(true);
         setLoading(false);
         activeRequestIdRef.current = '';
+        trackTopicEvent('topic_generation_failed', {
+          sourceMode: effectiveSelectionMode,
+          reason: 'no_sources',
+        });
         return;
       }
 
       window.ipcRenderer.wander.brainstorm({
-        items: randomItems,
+        items: nextItems,
         options: {
-          multiChoice: multiChoiceEnabled,
+          multiChoice: effectiveSelectionMode === 'comments' ? false : multiChoiceEnabled,
           requestId,
-          sourceMode: effectiveSelectionMode === 'manual' ? 'guided' : 'random',
-          guidedTopic: effectiveSelectionMode === 'manual' ? normalizedGuidedTopic : '',
+          sourceMode: effectiveSelectionMode === 'manual'
+            ? 'guided'
+            : effectiveSelectionMode === 'comments'
+              ? 'comments'
+              : 'random',
         },
       });
     } catch (error) {
       console.error('Brainstorm failed:', error);
       setParsedResult(null);
       setParseError('调用失败，请稍后重试');
-      setLiveStatus(toStableTwoLineText('漫步失败'));
+      setLiveStatus(toStableTwoLineText('选题失败'));
       setPhase('done');
       setShowFinal(true);
+      trackTopicEvent('topic_generation_failed', {
+        sourceMode: effectiveSelectionMode,
+        reason: 'exception',
+      });
     } finally {
       if (!activeRequestIdRef.current) {
         setLoading(false);
@@ -1147,58 +1422,659 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
   };
 
-  return (
-    <div className="h-full flex flex-col bg-surface-primary overflow-hidden">
-      <div className="px-6 py-3 border-b border-black/[0.03] bg-white/80 backdrop-blur-[32px] flex items-center justify-between gap-4 shrink-0 z-30">
-        <div className="min-w-0 flex items-center gap-3">
-          <h1 className="min-w-0 text-[14px] font-extrabold text-text-primary flex items-center gap-2 truncate tracking-tight">
-            <Dices className="w-4 h-4 text-accent-primary shrink-0" />
-            <span className="truncate">灵感漫步</span>
-          </h1>
-          <div className="w-[1px] h-3.5 bg-black/[0.06] hidden md:block" />
-          <span className="hidden md:block text-[11px] font-bold text-text-tertiary/60 uppercase tracking-widest truncate">
-            Random Inspiration Collision
-          </span>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {phase !== 'idle' && (
-            <>
-              <button
-                onClick={() => { void loadHistoryList({ includeAbandoned: showAbandonedTopics }); setShowHistory(true); }}
-                className="flex items-center gap-2 px-3.5 py-1.5 text-[12px] font-bold text-text-tertiary hover:text-text-primary hover:bg-black/[0.04] rounded-xl transition-all active:scale-95"
-              >
-                <History className="w-3.5 h-3.5" />
-                历史
-              </button>
-              <button
-                onClick={startWander}
-                disabled={loading}
-                className="flex items-center gap-2 px-3.5 py-1.5 bg-black/[0.03] hover:bg-black/[0.06] text-text-primary text-[12px] font-bold rounded-xl transition-all disabled:opacity-40 active:scale-95"
-              >
-                <RefreshCw className={clsx('w-3.5 h-3.5', loading && 'animate-spin')} />
-                再次漫步
-              </button>
+  const titleBarContent = null;
 
-            </>
-          )}
-          <div className="flex items-center gap-3">
-            <div className="text-[11px] font-bold text-text-tertiary/60 uppercase tracking-tight">
-              多选题
+  useEffect(() => {
+    if (!onTitleBarContentChange) return;
+    onTitleBarContentChange(isActive ? titleBarContent : null);
+    return () => {
+      onTitleBarContentChange(null);
+    };
+  }, [isActive, onTitleBarContentChange, titleBarContent]);
+
+  const activeHistoryList = useMemo(
+    () => historyList.filter(record => !isAbandonedHistoryRecord(record)),
+    [historyList]
+  );
+
+  const topicRows = useMemo(() => {
+    const hasPersistedCurrent = Boolean(currentHistoryId && historyList.some(record => record.id === currentHistoryId));
+    const generated = parsedResult && !hasPersistedCurrent
+      ? [{
+          id: currentHistoryId || 'current-topic',
+          title: activeOption?.topic.title || parsedResult.topic.title || '未命名选题',
+          direction: activeOption?.content_direction || parsedResult.content_direction || '',
+          createdAt: Date.now(),
+          source: activeSourceMode === 'comments' ? '评论洞察' : '灵感漫步',
+          score: validationIssues.length > 0 || parseError ? 62 : 86,
+          status: loading ? '生成中' : '待处理',
+          evidenceCount: items.length,
+          abandoned: false,
+          record: null as WanderHistoryRecord | null,
+        }]
+      : [];
+    const topicHistoryList = showAbandonedTopics ? historyList : activeHistoryList;
+    const historyRows = topicHistoryList.map((record, index) => {
+      const parsed = normalizeWanderResultPayload(record.result);
+      const optionIndex = resolveSelectedOptionIndex(parsed);
+      const selected = parsed?.options?.[optionIndex];
+      const recordItems = normalizeWanderItemsPayload(record.items);
+      const abandoned = isAbandonedHistoryRecord(record);
+      const isCommentInsight = recordItems.some((item) => {
+        const meta = item.meta || {};
+        return String(meta.sourceType || '').trim() === 'xhs-comments';
+      });
+      return {
+        id: record.id,
+        title: selected?.topic.title || parsed?.topic.title || getHistoryTitle(record),
+        direction: selected?.content_direction || parsed?.content_direction || '',
+        createdAt: getHistoryCreatedAt(record),
+        source: isCommentInsight ? '评论洞察' : '灵感漫步',
+        score: Math.max(68, 91 - index * 3),
+        status: abandoned ? '已放弃' : currentHistoryId === record.id ? '当前' : '待处理',
+        evidenceCount: recordItems.length || 3,
+        abandoned,
+        record,
+      };
+    });
+    const seen = new Set<string>();
+    return [...historyRows, ...generated]
+      .filter((row) => {
+        if (seen.has(row.id)) return false;
+        seen.add(row.id);
+        return true;
+      })
+      .sort((left, right) => right.createdAt - left.createdAt);
+  }, [activeHistoryList, activeOption?.content_direction, activeOption?.topic.title, activeSourceMode, currentHistoryId, historyList, items.length, loading, parseError, parsedResult, showAbandonedTopics, validationIssues.length]);
+
+  const isGeneratingTopic = loading || phase === 'running';
+  const selectedTopic = isGeneratingTopic
+    ? null
+    : currentHistoryId
+      ? topicRows.find((row) => row.id === currentHistoryId) || topicRows[0] || null
+      : topicRows.find((row) => row.id === 'current-topic') || topicRows[0] || null;
+
+  const selectedDetailResult = isGeneratingTopic
+    ? null
+    : parsedResult
+    || (selectedTopic?.record ? normalizeWanderResultPayload(selectedTopic.record.result) : null);
+  const selectedDetailOption = selectedDetailResult?.options?.[resolveSelectedOptionIndex(selectedDetailResult)];
+  const selectedDetailFrame = selectedDetailOption?.direction_frame || selectedDetailResult?.direction_frame;
+  const selectedDetailItems = isGeneratingTopic
+    ? []
+    : selectedTopic?.record
+    ? normalizeWanderItemsPayload(selectedTopic.record.items)
+    : items;
+  const filteredCommentCandidates = useMemo(() => {
+    const query = commentCandidateQuery.trim().toLowerCase();
+    if (!query) return commentCandidates;
+    return commentCandidates.filter((item) => {
+      const fields = [
+        item.title,
+        item.content,
+        String(item.meta?.sourceName || ''),
+      ];
+      return fields.some((field) => field.toLowerCase().includes(query));
+    });
+  }, [commentCandidateQuery, commentCandidates]);
+
+  const sourceActions = [
+    {
+      id: 'wander',
+      title: '灵感漫步',
+      mode: 'random' as const,
+      onClick: () => {
+        if (loading) return;
+        trackTopicEvent('topic_source_selected', {
+          sourceMode: 'random',
+        });
+        setSelectionMode('random');
+        setPendingStartMode('random');
+        setParseError(null);
+        setValidationIssues([]);
+        setGuidedWarning(null);
+      },
+    },
+    {
+      id: 'comments',
+      title: '评论区洞察',
+      mode: 'comments' as const,
+      onClick: () => {
+        if (loading) return;
+        trackTopicEvent('topic_source_selected', {
+          sourceMode: 'comments',
+          commentSourceMode: 'random',
+        });
+        setSelectionMode('comments');
+        setCommentSourceMode('random');
+        setSelectedCommentItem(null);
+        setCommentCandidateQuery('');
+        setCommentCandidatesLoading(false);
+        setPendingStartMode('comments');
+        setParseError(null);
+        setValidationIssues([]);
+        setGuidedWarning(null);
+      },
+    },
+  ];
+
+  const renderTopicDetail = () => {
+    if (isGeneratingTopic) {
+      const loadingTitle = activeSourceMode === 'comments' ? '评论区洞察中' : '灵感漫步中';
+      return (
+        <aside className="flex min-h-0 flex-1 flex-col bg-surface-primary">
+          <div className="relative flex min-h-[250px] items-center justify-center border-b border-border px-8 py-16">
+            <div className="flex flex-col items-center text-center">
+              <WanderLoadingDice size={96} />
+              <div className="mt-2 text-[11px] font-semibold text-accent-primary">正在生成选题</div>
+              <h3 className="mt-3 text-[30px] font-extrabold leading-tight tracking-normal text-text-primary">
+                {loadingTitle}
+              </h3>
             </div>
-            <button
-              type="button"
-              onClick={() => void handleToggleMultiChoice()}
-              disabled={isSavingMode || loading}
-              className="ui-switch-track shrink-0 disabled:opacity-50"
-              data-size="sm"
-              data-state={multiChoiceEnabled ? 'on' : 'off'}
-            >
-              <div className="ui-switch-thumb" />
-            </button>
           </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 custom-scrollbar">
+            <div className="mx-auto max-w-3xl rounded-lg border border-accent-primary/20 bg-accent-primary/5 p-4">
+              <div className="flex items-center gap-2 text-xs font-semibold text-accent-primary">
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                {liveStatus || '正在准备素材...'}
+              </div>
+              {progressCards.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {progressCards.slice(0, 4).map((card) => (
+                    <div key={card.phase} className="flex items-center justify-between gap-3 rounded-md bg-surface-primary px-3 py-2 text-xs">
+                      <span className="truncate font-medium text-text-secondary">{card.title}</span>
+                      <span className="shrink-0 text-text-tertiary">{card.status === 'completed' ? '完成' : '进行中'}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="mt-5 space-y-3">
+                <div className="h-3 w-2/3 rounded-full bg-border/70" />
+                <div className="h-3 w-full rounded-full bg-border/60" />
+                <div className="h-3 w-5/6 rounded-full bg-border/50" />
+              </div>
+            </div>
+          </div>
+        </aside>
+      );
+    }
+
+    if (pendingStartMode) {
+      const isCommentMode = pendingStartMode === 'comments';
+      const StartIcon = isCommentMode ? MessageSquarePlus : Dices;
+      const title = isCommentMode ? '评论区洞察' : '灵感漫步';
+      const actionLabel = isCommentMode ? '开始评论区洞察' : '开始漫步';
+      const customCommentSelection = isCommentMode && commentSourceMode === 'custom';
+      const startDisabled = loading || (customCommentSelection && !selectedCommentItem);
+
+      return (
+        <aside className="flex min-h-0 flex-1 flex-col bg-surface-primary">
+          <div className="flex min-h-0 flex-1 items-center justify-center px-8 py-10">
+            <div className="flex w-full max-w-xl flex-col items-center text-center">
+              {customCommentSelection && (
+                <div className="mb-8 w-full rounded-lg border border-border bg-surface-secondary/40 p-3 text-left">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
+                    <input
+                      value={commentCandidateQuery}
+                      onChange={(event) => setCommentCandidateQuery(event.target.value)}
+                      placeholder="搜索评论笔记"
+                      className="h-9 w-full rounded-md border border-border bg-surface-primary pl-9 pr-3 text-sm text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent-primary"
+                    />
+                  </div>
+                  <div className="mt-3 max-h-52 space-y-1 overflow-y-auto custom-scrollbar">
+                    {commentCandidatesLoading ? (
+                      <div className="rounded-md px-3 py-6 text-center text-xs text-text-tertiary">加载中</div>
+                    ) : filteredCommentCandidates.length === 0 ? (
+                      <div className="rounded-md px-3 py-6 text-center text-xs text-text-tertiary">暂无评论笔记</div>
+                    ) : (
+                      filteredCommentCandidates.slice(0, 5).map((item) => {
+                        const selected = selectedCommentItem?.id === item.id;
+                        const commentCount = Number(item.meta?.commentCount || 0);
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setSelectedCommentItem(selected ? null : item)}
+                            className={clsx(
+                              'flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors',
+                              selected
+                                ? 'border-accent-primary/40 bg-accent-primary/10'
+                                : 'border-transparent hover:border-border hover:bg-surface-primary'
+                            )}
+                          >
+                            <div className={clsx(
+                              'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+                              selected ? 'bg-accent-primary text-white' : 'bg-surface-tertiary text-text-secondary'
+                            )}>
+                              {selected ? <Check className="h-3.5 w-3.5" /> : <MessageSquarePlus className="h-3.5 w-3.5" />}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-xs font-semibold text-text-primary">{item.title || '未命名笔记'}</div>
+                              <div className="mt-0.5 truncate text-[11px] text-text-tertiary">
+                                {commentCount > 0 ? `${commentCount} 条评论` : '评论素材'}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-primary/10 text-accent-primary">
+                <StartIcon className="h-7 w-7" />
+              </div>
+              <h3 className="mt-5 text-[30px] font-extrabold leading-tight tracking-normal text-text-primary">
+                {title}
+              </h3>
+              <button
+                type="button"
+                onClick={() => void startWander(pendingStartMode)}
+                disabled={startDisabled}
+                className="mt-8 inline-flex h-10 items-center justify-center gap-2 rounded-md bg-accent-primary px-4 text-sm font-semibold text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
+              >
+                <StartIcon className="h-4 w-4" />
+                {actionLabel}
+              </button>
+              {isCommentMode && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextMode: CommentSourceMode = customCommentSelection ? 'random' : 'custom';
+                    setCommentSourceMode(nextMode);
+                    if (nextMode === 'random') {
+                      setSelectedCommentItem(null);
+                      setCommentCandidateQuery('');
+                      setCommentCandidatesLoading(false);
+                    }
+                  }}
+                  aria-pressed={customCommentSelection}
+                  className={clsx(
+                    'mt-3 inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold transition-colors',
+                    customCommentSelection
+                      ? 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary hover:bg-accent-primary/15'
+                      : 'border-border bg-surface-primary text-text-secondary hover:bg-surface-secondary hover:text-text-primary'
+                  )}
+                >
+                  {customCommentSelection ? <Shuffle className="h-3.5 w-3.5" /> : <MessageSquarePlus className="h-3.5 w-3.5" />}
+                  {customCommentSelection ? '随机选择' : '指定笔记'}
+                </button>
+              )}
+            </div>
+          </div>
+        </aside>
+      );
+    }
+
+    return (
+      <aside className="flex min-h-0 flex-1 flex-col bg-surface-primary">
+      <div className="relative flex min-h-[250px] items-center border-b border-border px-8 py-16">
+        <button
+          type="button"
+          onClick={abandonSelectedTopic}
+          disabled={!selectedTopic || selectedTopic.abandoned || loading}
+          className="absolute left-5 top-6 inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-border bg-surface-primary px-3 text-xs font-semibold text-text-secondary transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-default disabled:opacity-40"
+        >
+          <X className="h-3.5 w-3.5" />
+          放弃
+        </button>
+        <div className="mx-auto max-w-3xl text-center">
+          <div className="text-[11px] font-semibold text-accent-primary">选题详情</div>
+          <h3 className="mt-3 text-[30px] font-extrabold leading-tight tracking-normal text-text-primary">
+            {selectedTopic?.title || '暂无选题'}
+          </h3>
+        </div>
+        <button
+          type="button"
+          onClick={startCreateInRedClaw}
+          disabled={!canStartCreate}
+          className="absolute right-5 top-6 inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-accent-primary px-3 text-xs font-semibold text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
+        >
+          <MessageSquarePlus className="h-3.5 w-3.5" />
+          AI创作
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4 custom-scrollbar">
+        {loading && (
+          <div className="rounded-lg border border-accent-primary/20 bg-accent-primary/5 p-3">
+            <div className="flex items-center gap-2 text-xs font-semibold text-accent-primary">
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              正在生成选题
+            </div>
+            <div className="mt-2 text-xs leading-relaxed text-text-secondary">{liveStatus || '正在准备素材...'}</div>
+            {progressCards.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                {progressCards.slice(0, 4).map((card) => (
+                  <div key={card.phase} className="flex items-center justify-between gap-2 rounded-md bg-surface-primary px-2 py-1.5 text-[11px]">
+                    <span className="truncate text-text-secondary">{card.title}</span>
+                    <span className="shrink-0 text-text-tertiary">{card.status === 'completed' ? '完成' : '进行中'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {parseError && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-600">
+            {parseError}
+          </div>
+        )}
+
+        <section>
+          <div className="mb-2 text-[11px] font-semibold text-text-tertiary">内容方向</div>
+          <p className="text-[15px] leading-relaxed text-text-secondary">
+            {selectedDetailOption?.content_direction || selectedDetailResult?.content_direction || '选择或生成一个选题后，这里会显示内容方向。'}
+          </p>
+        </section>
+
+        <section className="grid grid-cols-2 gap-x-8 gap-y-3">
+          {[
+            ['热度', selectedTopic?.score || 0],
+            ['新鲜度', selectedTopic ? Math.min(96, selectedTopic.score + 5) : 0],
+            ['可写性', selectedTopic ? Math.max(65, selectedTopic.score - 4) : 0],
+            ['匹配度', selectedTopic ? Math.max(60, selectedTopic.score - 8) : 0],
+          ].map(([label, score]) => (
+            <div key={label} className="min-w-0">
+              <div className="text-[10px] font-semibold text-text-tertiary">{label}</div>
+              <div className="mt-1 flex items-center gap-2">
+                <div className="h-1 flex-1 overflow-hidden rounded-full bg-border">
+                  <div className="h-full rounded-full bg-accent-primary" style={{ width: `${Number(score)}%` }} />
+                </div>
+                <span className="w-6 text-right text-[11px] font-semibold text-text-primary">{score}</span>
+              </div>
+            </div>
+          ))}
+        </section>
+
+        {selectedDetailFrame && (
+          <section className="grid grid-cols-2 gap-x-8 gap-y-3">
+            {[
+              ['目标读者', selectedDetailFrame.target_reader],
+              ['核心矛盾', selectedDetailFrame.core_tension],
+              ['叙事角度', selectedDetailFrame.angle],
+              ['素材切口', selectedDetailFrame.material_entry],
+            ].map(([label, value]) => (
+              <div key={label} className="min-w-0">
+                <div className="text-[10px] font-semibold text-text-tertiary">{label}</div>
+                <div className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-text-primary">{value || '待补充'}</div>
+              </div>
+            ))}
+          </section>
+        )}
+
+        <section>
+          <div className="mb-2 text-[11px] font-semibold text-text-tertiary">证据素材</div>
+          <div className="grid grid-cols-3 gap-2">
+            {selectedDetailItems.slice(0, 4).map((item) => (
+              <div key={item.id} className="min-w-0 overflow-hidden rounded-md border border-border bg-surface-primary shadow-sm">
+                <div className="relative aspect-[4/5] w-full overflow-hidden bg-surface-secondary">
+                  {item.cover ? (
+                    <img
+                      src={resolveAssetUrl(item.cover)}
+                      alt={item.title}
+                      className="h-full w-full object-cover"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+                      {item.type === 'video' ? <Play className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 px-2.5 py-2">
+                  <div className="line-clamp-1 text-[11px] font-semibold text-text-primary">{item.title}</div>
+                  <div className="mt-0.5 line-clamp-2 text-[10px] leading-relaxed text-text-tertiary">{item.content || '暂无摘要'}</div>
+                </div>
+              </div>
+            ))}
+            {selectedDetailItems.length === 0 && (
+              <div className="col-span-3 rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-text-tertiary">
+                暂无素材
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </aside>
+    );
+  };
+
+  const renderTopicList = () => (
+    <div className="flex min-h-0 w-[430px] shrink-0 flex-col border-r border-border">
+      <div className="border-b border-border bg-surface-primary px-5 py-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold text-text-primary">选题池</h2>
+            <div className="mt-1 text-xs text-text-tertiary">统一管理灵感漫步和评论洞察生成的选题</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowAbandonedTopics((value) => !value)}
+            aria-pressed={showAbandonedTopics}
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-surface-primary px-2.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+          >
+            {showAbandonedTopics ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            {showAbandonedTopics ? '隐藏已放弃' : '展示已放弃'}
+          </button>
         </div>
       </div>
 
+      <div className="grid grid-cols-2 gap-3 border-b border-border bg-surface-primary px-5 py-3">
+        {sourceActions.map((action) => {
+          const isPrimary = action.id === 'wander';
+          const isPending = pendingStartMode === action.mode;
+          const ActionIcon = isPrimary ? Sparkles : MessageSquarePlus;
+
+          return (
+            <button
+              key={action.id}
+              type="button"
+              onClick={action.onClick}
+              disabled={loading}
+              className={clsx(
+                'group flex h-14 min-w-0 items-center justify-between gap-3 rounded-xl border px-4 text-left shadow-sm transition-all active:scale-[0.99] disabled:cursor-default',
+                isPending
+                  ? 'border-accent-primary/36 bg-accent-primary/12 text-accent-primary shadow-[0_12px_28px_-22px_rgb(var(--color-accent-primary)/0.75)]'
+                  : isPrimary
+                  ? 'border-accent-primary/24 bg-accent-primary/10 text-accent-primary shadow-[0_12px_28px_-22px_rgb(var(--color-accent-primary)/0.75)] hover:border-accent-primary/36 hover:bg-accent-primary/14 disabled:bg-accent-primary/5'
+                  : 'border-border bg-surface-secondary/70 text-text-primary hover:border-accent-primary/24 hover:bg-surface-tertiary'
+              )}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span
+                  className={clsx(
+                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                    isPending || isPrimary ? 'bg-accent-primary/14 text-accent-primary' : 'bg-surface-tertiary text-text-secondary'
+                  )}
+                >
+                  <ActionIcon className="h-4 w-4" />
+                </span>
+                <div className="min-w-0">
+                  <span className="truncate text-sm font-extrabold">{action.title}</span>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto bg-surface-secondary/25 custom-scrollbar">
+        {topicRows.length === 0 ? (
+          <div className="flex h-full min-h-[360px] flex-col items-center justify-center px-8 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div className="mt-4 text-sm font-semibold text-text-primary">暂无选题</div>
+            <div className="mt-1 max-w-sm text-xs leading-relaxed text-text-tertiary">点击上方“灵感漫步”生成第一组选题，后续评论洞察也会汇入这里。</div>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {topicRows.map((row) => {
+              const selected = selectedTopic?.id === row.id;
+              return (
+                <button
+                  key={row.id}
+                  type="button"
+                  onClick={() => {
+                    if (row.record) {
+                      loadHistory(row.record);
+                    } else {
+                      trackTopicEvent('topic_selected', {
+                        source: 'current',
+                        topicStatus: row.abandoned ? 'abandoned' : 'active',
+                        evidenceCount: row.evidenceCount,
+                      });
+                    }
+                  }}
+                  className={clsx(
+                    'relative w-full px-5 py-3 text-left transition-colors',
+                    selected
+                      ? 'bg-accent-primary/12 shadow-[inset_0_0_0_1px_rgba(167,116,73,0.18)]'
+                      : row.abandoned
+                      ? 'bg-surface-secondary/45 hover:bg-surface-secondary/65'
+                      : 'bg-surface-primary hover:bg-surface-secondary/55'
+                  )}
+                >
+                  {selected && (
+                    <span className="absolute bottom-2 left-0 top-2 w-1 rounded-r-full bg-accent-primary" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={clsx(
+                        'truncate text-sm font-semibold',
+                        selected ? 'text-accent-primary' : row.abandoned ? 'text-text-secondary' : 'text-text-primary'
+                      )}>{row.title}</span>
+                      {selected && <Check className="h-3.5 w-3.5 shrink-0 text-accent-primary" />}
+                    </div>
+                    <div className={clsx(
+                      'mt-1 line-clamp-1 text-xs',
+                      selected ? 'text-text-secondary' : 'text-text-tertiary'
+                    )}>{row.direction || '暂无方向摘要'}</div>
+                  </div>
+                  <div className="mt-2 flex min-w-0 items-center gap-2 text-xs">
+                    <span className={clsx(
+                      'rounded-md px-2 py-1 text-[11px] font-semibold',
+                      selected ? 'bg-accent-primary text-white' : row.abandoned ? 'bg-surface-tertiary text-text-tertiary' : 'bg-accent-primary/10 text-accent-primary'
+                    )}>{row.source}</span>
+                    <span className={clsx('shrink-0', selected ? 'font-semibold text-accent-primary' : row.abandoned ? 'text-text-tertiary' : 'text-text-secondary')}>{row.status}</span>
+                    <span className="text-text-tertiary">{formatDate(row.createdAt)}</span>
+                    <div className="ml-auto flex w-20 items-center gap-2">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border">
+                        <div className={clsx('h-full rounded-full', selected ? 'bg-accent-primary' : 'bg-accent-primary/80')} style={{ width: `${row.score}%` }} />
+                      </div>
+                      <span className={clsx('w-6 text-right text-[11px] font-semibold', selected ? 'text-accent-primary' : 'text-text-secondary')}>{row.score}</span>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-surface-primary">
+      <div className="flex min-h-0 flex-1">
+        {renderTopicList()}
+        {renderTopicDetail()}
+      </div>
+
+      {showHistory && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-6 py-6" onClick={() => setShowHistory(false)}>
+          <div className="flex max-h-[75vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-border bg-surface-primary shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <div>
+                <h3 className="text-base font-semibold text-text-primary">选题历史</h3>
+                <p className="mt-0.5 text-xs text-text-tertiary">本地保存的灵感漫步记录</p>
+              </div>
+              <button type="button" onClick={() => setShowHistory(false)} className="flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-secondary hover:text-text-primary">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-2 custom-scrollbar">
+              {activeHistoryList.length === 0 ? (
+                <div className="px-4 py-10 text-center text-xs text-text-tertiary">暂无选题历史记录</div>
+              ) : (
+                activeHistoryList.map(record => (
+                  <button
+                    key={record.id}
+                    type="button"
+                    onClick={() => loadHistory(record)}
+                    className="group flex w-full items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left hover:bg-surface-secondary"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-text-primary">{getHistoryTitle(record)}</div>
+                      <div className="mt-0.5 text-xs text-text-tertiary">{formatDate(getHistoryCreatedAt(record))}</div>
+                    </div>
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => deleteHistory(record.id, e as unknown as React.MouseEvent)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          void deleteHistory(record.id, event as unknown as React.MouseEvent);
+                        }
+                      }}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-tertiary opacity-0 transition-opacity hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderSourceNode = (item: WanderItem | undefined, index: number, position: string) => {
+    if (!item) {
+      return (
+        <div className="flex flex-col items-center justify-center p-3 rounded-2xl border border-dashed border-black/[0.08] dark:border-white/[0.08] bg-white/40 dark:bg-black/20 backdrop-blur-md h-[76px] text-center animate-pulse shadow-sm">
+          <div className="w-5 h-5 rounded-full bg-black/[0.05] dark:bg-white/[0.05] flex items-center justify-center mb-1">
+            <span className="text-[9px] font-bold text-text-tertiary/40">?</span>
+          </div>
+          <div className="text-[9px] font-bold text-text-tertiary/40">等候素材...</div>
+        </div>
+      );
+    }
+
+    const isDocItem = (item.meta as Record<string, unknown> | undefined)?.sourceType === 'document';
+    const icon = item.type === 'video'
+      ? <Play className="w-3.5 h-3.5 text-red-500" />
+      : isDocItem
+        ? <FileText className="w-3.5 h-3.5 text-violet-500" />
+        : <FileText className="w-3.5 h-3.5 text-blue-500" />;
+
+    return (
+      <div className="animate-wander-node-glow flex flex-col rounded-2xl border border-black/[0.05] dark:border-white/[0.05] bg-white/85 dark:bg-surface-primary/85 backdrop-blur-md p-3 shadow-md hover:scale-[1.03] transition-transform select-none max-w-full">
+        <div className="flex items-center gap-1.5 mb-1 min-w-0">
+          <div className="p-1 rounded-lg bg-black/[0.03] dark:bg-white/[0.03] shrink-0">
+            {icon}
+          </div>
+          <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-primary/10 text-accent-primary font-black tracking-wider uppercase shrink-0">
+            Node {index + 1}
+          </span>
+        </div>
+        <div className="text-[11px] font-extrabold text-text-primary truncate" title={item.title}>
+          {item.title}
+        </div>
+        <div className="text-[9px] text-text-tertiary truncate mt-0.5">
+          {item.content || "暂无摘要"}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="h-full flex flex-col overflow-hidden">
       {phase === 'idle' ? (
         <div className="flex-1 flex flex-col items-center justify-center p-8 relative">
             {/* 饰品背景 */}
@@ -1207,166 +2083,142 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                 <div className="absolute top-1/4 left-1/3 w-32 h-32 bg-blue-500/5 rounded-full blur-[60px]" />
             </div>
 
-            <div className="relative flex flex-col items-center max-w-lg text-center animate-in fade-in zoom-in-95 duration-700">
+            <div className="relative flex flex-col items-center w-full max-w-3xl text-center animate-in fade-in zoom-in-95 duration-700">
                 <div className="relative mb-10">
                     <div className="absolute inset-0 bg-accent-primary/10 rounded-[32px] blur-2xl animate-pulse" />
                     <div className="relative flex h-24 w-24 items-center justify-center rounded-[32px] bg-white shadow-[0_24px_48px_-12px_rgba(0,0,0,0.12)] border border-white/60">
-                        {selectionMode === 'manual'
-                            ? <Shuffle className="w-10 h-10 text-accent-primary" />
-                            : <Dices className="w-10 h-10 text-accent-primary" />}
+                        {selectionMode === 'manual' ? <Shuffle className="w-10 h-10 text-accent-primary" /> : <Dices className="w-10 h-10 text-accent-primary" />}
                     </div>
-                </div>
-
-                <div className="mb-6 inline-flex rounded-xl bg-black/[0.04] p-0.5">
-                  {[
-                    ['random', '随机选题'] as const,
-                    ['manual', '按方向选题'] as const,
-                  ].map(([mode, label]) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setSelectionMode(mode)}
-                      className={clsx(
-                        'h-8 rounded-lg px-4 text-[12px] font-black transition-all',
-                        selectionMode === mode
-                          ? 'bg-white text-text-primary shadow-sm'
-                          : 'text-text-tertiary hover:text-text-primary'
-                      )}
-                    >
-                      {label}
-                    </button>
-                  ))}
                 </div>
 
                 <h2 className="text-2xl font-extrabold tracking-tight text-text-primary mb-4">
-                    {selectionMode === 'manual' ? '按方向选题' : '开启一次随机选题'}
+                  {selectionMode === 'manual' ? '按方向选题' : '开启一次随机选题'}
                 </h2>
                 {selectionMode === 'manual' ? (
-                  <div className="mb-8 w-full max-w-2xl space-y-4 text-left">
-                    <div className="mx-auto flex w-fit rounded-xl bg-black/[0.04] p-0.5">
-                      {[
-                        ['topic', '输入主题'] as const,
-                        ['anchor', '选择锚点'] as const,
-                      ].map(([mode, label]) => (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => handleGuidedSourceModeChange(mode)}
-                          className={clsx(
-                            'h-8 rounded-lg px-4 text-[12px] font-black transition-all',
-                            guidedSourceMode === mode
-                              ? 'bg-white text-text-primary shadow-sm'
-                              : 'text-text-tertiary hover:text-text-primary'
-                          )}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
+                  <div className="w-full max-w-2xl mb-8 space-y-4 text-left">
+                      <div className="mx-auto flex w-fit rounded-xl bg-black/[0.04] p-0.5">
+                        {[
+                          ['topic', '输入主题'] as const,
+                          ['anchor', '选择锚点'] as const,
+                        ].map(([mode, label]) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => handleGuidedSourceModeChange(mode)}
+                            className={clsx(
+                              'h-8 rounded-lg px-4 text-[12px] font-black transition-all',
+                              guidedSourceMode === mode
+                                ? 'bg-white text-text-primary shadow-sm'
+                                : 'text-text-tertiary hover:text-text-primary'
+                            )}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
 
-                    {guidedSourceMode === 'topic' ? (
-                      <label className="block">
-                        <span className="mb-1.5 block text-[11px] font-black uppercase tracking-widest text-text-tertiary">主题</span>
-                        <input
-                          value={guidedTopic}
-                          onFocus={() => {
-                            if (guidedSourceMode !== 'topic') handleGuidedSourceModeChange('topic');
-                          }}
-                          onChange={(event) => {
-                            setGuidedSourceMode('topic');
-                            setSelectedAnchor(null);
-                            setAnchorQuery('');
-                            setAnchorResults([]);
-                            setGuidedTopic(event.target.value);
-                          }}
-                          placeholder="比如：轻断食反弹"
-                          className="h-11 w-full rounded-xl border border-black/[0.06] bg-white px-3 text-[14px] font-bold text-text-primary outline-none transition focus:border-accent-primary/40 focus:ring-2 focus:ring-accent-primary/10"
-                        />
-                      </label>
-                    ) : (
-                      <div className="space-y-3">
+                      {guidedSourceMode === 'topic' ? (
                         <label className="block">
-                          <span className="mb-1.5 block text-[11px] font-black uppercase tracking-widest text-text-tertiary">锚点笔记</span>
-                          <div className="relative">
-                            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary/60" />
-                            <input
-                              value={anchorQuery}
-                              onFocus={() => {
-                                if (guidedSourceMode !== 'anchor') handleGuidedSourceModeChange('anchor');
-                              }}
-                              onChange={(event) => {
-                                setGuidedSourceMode('anchor');
-                                setGuidedTopic('');
-                                setAnchorQuery(event.target.value);
-                              }}
-                              placeholder="搜索知识库"
-                              className="h-11 w-full rounded-xl border border-black/[0.06] bg-white pl-9 pr-3 text-[14px] font-bold text-text-primary outline-none transition focus:border-accent-primary/40 focus:ring-2 focus:ring-accent-primary/10"
-                            />
-                          </div>
+                          <span className="mb-1.5 block text-[11px] font-black uppercase tracking-widest text-text-tertiary">主题</span>
+                          <input
+                            value={guidedTopic}
+                            onFocus={() => {
+                              if (guidedSourceMode !== 'topic') handleGuidedSourceModeChange('topic');
+                            }}
+                            onChange={(event) => {
+                              setGuidedSourceMode('topic');
+                              setSelectedAnchor(null);
+                              setAnchorQuery('');
+                              setAnchorResults([]);
+                              setGuidedTopic(event.target.value);
+                            }}
+                            placeholder="比如：轻断食反弹"
+                            className="h-11 w-full rounded-xl border border-black/[0.06] bg-white px-3 text-[14px] font-bold text-text-primary outline-none transition focus:border-accent-primary/40 focus:ring-2 focus:ring-accent-primary/10"
+                          />
                         </label>
-
-                        <div className="rounded-2xl border border-black/[0.05] bg-white/80 p-2 shadow-sm">
-                          {selectedAnchor && (
-                            <div className="mb-2 flex items-center justify-between gap-3 rounded-xl bg-accent-primary/5 px-3 py-2">
-                              <div className="min-w-0">
-                                <div className="text-[11px] font-black uppercase tracking-widest text-accent-primary">已选锚点</div>
-                                <div className="truncate text-[13px] font-extrabold text-text-primary">{selectedAnchor.title}</div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => setSelectedAnchor(null)}
-                                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-tertiary hover:bg-black/[0.05] hover:text-text-primary"
-                                aria-label="移除锚点"
-                              >
-                                <X className="h-4 w-4" />
-                              </button>
+                      ) : (
+                        <div className="space-y-3">
+                          <label className="block">
+                            <span className="mb-1.5 block text-[11px] font-black uppercase tracking-widest text-text-tertiary">锚点笔记</span>
+                            <div className="relative">
+                              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary/60" />
+                              <input
+                                value={anchorQuery}
+                                onFocus={() => {
+                                  if (guidedSourceMode !== 'anchor') handleGuidedSourceModeChange('anchor');
+                                }}
+                                onChange={(event) => {
+                                  setGuidedSourceMode('anchor');
+                                  setGuidedTopic('');
+                                  setAnchorQuery(event.target.value);
+                                }}
+                                placeholder="搜索知识库"
+                                className="h-11 w-full rounded-xl border border-black/[0.06] bg-white pl-9 pr-3 text-[14px] font-bold text-text-primary outline-none transition focus:border-accent-primary/40 focus:ring-2 focus:ring-accent-primary/10"
+                              />
                             </div>
-                          )}
-                          <div className="max-h-72 overflow-y-auto custom-scrollbar">
-                            {anchorLoading ? (
-                              <div className="px-3 py-8 text-center text-[12px] font-bold text-text-tertiary">加载知识库...</div>
-                            ) : anchorResults.length > 0 ? (
-                              anchorResults.map((item) => {
-                                const selected = selectedAnchor?.id === item.id;
-                                return (
-                                  <button
-                                    key={item.id}
-                                    type="button"
-                                    onClick={() => setSelectedAnchor(selected ? null : item)}
-                                    className={clsx(
-                                      'flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition',
-                                      selected ? 'bg-accent-primary/5' : 'hover:bg-black/[0.03]'
-                                    )}
-                                  >
-                                    <div className="mt-0.5 shrink-0 text-accent-primary">
-                                      {selected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4 text-text-tertiary/60" />}
-                                    </div>
-                                    <div className="min-w-0 flex-1">
-                                      <div className="truncate text-[13px] font-extrabold text-text-primary">{item.title}</div>
-                                      <div className="mt-0.5 line-clamp-2 text-[11px] font-bold leading-relaxed text-text-tertiary">{item.content || '暂无摘要'}</div>
-                                    </div>
-                                  </button>
-                                );
-                              })
-                            ) : (
-                              <div className="px-3 py-8 text-center text-[12px] font-bold text-text-tertiary">
-                                {anchorQuery.trim() ? '没有匹配的笔记' : '暂无可选知识库内容'}
+                          </label>
+
+                          <div className="rounded-2xl border border-black/[0.05] bg-white/80 p-2 shadow-sm">
+                            {selectedAnchor && (
+                              <div className="mb-2 flex items-center justify-between gap-3 rounded-xl bg-accent-primary/5 px-3 py-2">
+                                <div className="min-w-0">
+                                  <div className="text-[11px] font-black uppercase tracking-widest text-accent-primary">已选锚点</div>
+                                  <div className="truncate text-[13px] font-extrabold text-text-primary">{selectedAnchor.title}</div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedAnchor(null)}
+                                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-tertiary hover:bg-black/[0.05] hover:text-text-primary"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
                               </div>
                             )}
+                            <div className="max-h-72 overflow-y-auto custom-scrollbar">
+                              {anchorLoading ? (
+                                <div className="px-3 py-8 text-center text-[12px] font-bold text-text-tertiary">加载知识库...</div>
+                              ) : anchorResults.length > 0 ? (
+                                anchorResults.map((item) => {
+                                  const selected = selectedAnchor?.id === item.id;
+                                  return (
+                                    <button
+                                      key={item.id}
+                                      type="button"
+                                      onClick={() => setSelectedAnchor(selected ? null : item)}
+                                      className={clsx(
+                                        'flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition',
+                                        selected ? 'bg-accent-primary/5' : 'hover:bg-black/[0.03]'
+                                      )}
+                                    >
+                                      <div className="mt-0.5 shrink-0 text-accent-primary">
+                                        {selected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4 text-text-tertiary/60" />}
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <div className="truncate text-[13px] font-extrabold text-text-primary">{item.title}</div>
+                                        <div className="mt-0.5 line-clamp-2 text-[11px] font-bold leading-relaxed text-text-tertiary">{item.content || '暂无摘要'}</div>
+                                      </div>
+                                    </button>
+                                  );
+                                })
+                              ) : (
+                                <div className="px-3 py-8 text-center text-[12px] font-bold text-text-tertiary">
+                                  {anchorQuery.trim() ? '没有匹配的笔记' : '暂无可选知识库内容'}
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    )}
+                      )}
                   </div>
                 ) : (
-                  <p className="text-[15px] leading-relaxed text-text-tertiary font-medium mb-10 px-8">
+                  <p className="text-[15px] leading-relaxed text-text-tertiary font-medium mb-10 px-8 max-w-lg">
                       系统将从您的知识库中随机抽取内容，
                       寻找它们之间的隐秘关联，激发前所未有的创作灵感。
                   </p>
                 )}
 
                 <button
-                    onClick={startWander}
+                    onClick={() => { void startWander(); }}
                     disabled={selectionMode === 'manual' && !hasGuidedInput}
                     className="group px-8 py-3 bg-text-primary hover:bg-text-primary/90 text-white rounded-[20px] text-[15px] font-extrabold transition-all flex items-center gap-3 shadow-[0_20px_40px_-10px_rgba(0,0,0,0.2)] active:scale-95 disabled:opacity-40"
                 >
@@ -1380,20 +2232,109 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
           <div className="flex-1 overflow-y-auto px-6 py-10 custom-scrollbar">
             <div className="max-w-4xl mx-auto space-y-10">
               {loading && (
-                <div className="flex flex-col items-center justify-center min-h-[60vh] py-10 animate-in fade-in zoom-in-[0.98] duration-1000">
-                  <WanderLoadingDice className="mb-10" size={76} />
+                <div className="flex flex-col items-center justify-center min-h-[60vh] py-4 animate-in fade-in zoom-in-[0.98] duration-1000">
 
-                  <div className="w-full max-w-xl space-y-6">
-                    <div className="text-center space-y-2">
-                        <h3 className="text-lg font-extrabold tracking-tight text-text-primary uppercase tracking-[0.2em]">Deep Thinking</h3>
-                        <p className="text-[13px] font-bold text-text-tertiary/60 uppercase">Searching for Hidden Connections</p>
+                  {/* The Quantum Synaptic Network Map (Expanded & Transparent) */}
+                  <div className="relative w-full max-w-3xl aspect-[1.8] flex items-center justify-center mb-8 select-none">
+                    {/* Background Grid Accent */}
+                    <div className="absolute inset-0 opacity-[0.015] dark:opacity-[0.03] bg-[linear-gradient(rgba(0,0,0,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(0,0,0,0.1)_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none" />
+
+                    {/* SVG Connections with Animated Particles */}
+                    <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 720 400">
+                      <defs>
+                        <filter id="glow-effect" x="-20%" y="-20%" width="140%" height="140%">
+                          <feGaussianBlur stdDeviation="3.5" result="blur" />
+                          <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                        </filter>
+                      </defs>
+
+                      {/* Concentric Rotating Quantum Orbits */}
+                      <circle cx="360" cy="200" r="75" fill="none" stroke="rgb(var(--color-accent-primary) / 0.15)" strokeWidth="1" strokeDasharray="4, 12" style={{ transformOrigin: '360px 200px', animation: 'spin 35s linear infinite' }} />
+                      <circle cx="360" cy="200" r="135" fill="none" stroke="rgb(var(--color-accent-primary) / 0.1)" strokeWidth="1.2" strokeDasharray="6, 18" style={{ transformOrigin: '360px 200px', animation: 'spin 25s linear infinite reverse' }} />
+                      <circle cx="360" cy="200" r="190" fill="none" stroke="rgb(var(--color-accent-primary) / 0.05)" strokeWidth="1.5" strokeDasharray="8, 24" style={{ transformOrigin: '360px 200px', animation: 'spin 45s linear infinite' }} />
+
+                      {/* Twinkling Quantum Particles */}
+                      <circle cx="160" cy="90" r="1.5" className="fill-accent-primary animate-pulse" style={{ animationDelay: '0.2s', animationDuration: '3s' }} />
+                      <circle cx="560" cy="80" r="2" className="fill-accent-primary/60 animate-pulse" style={{ animationDelay: '1.4s', animationDuration: '4s' }} />
+                      <circle cx="240" cy="280" r="1.2" className="fill-accent-primary/80 animate-pulse" style={{ animationDelay: '0.7s', animationDuration: '2.5s' }} />
+                      <circle cx="480" cy="290" r="1.8" className="fill-accent-primary animate-pulse" style={{ animationDelay: '2.1s', animationDuration: '3.5s' }} />
+                      <circle cx="90" cy="180" r="1" className="fill-accent-primary/50 animate-pulse" style={{ animationDelay: '1.1s', animationDuration: '5s' }} />
+                      <circle cx="630" cy="170" r="1.5" className="fill-accent-primary/70 animate-pulse" style={{ animationDelay: '0.5s', animationDuration: '3.2s' }} />
+
+                      {/* Connections from three orbits to center (360, 200) */}
+                      {/* Node 1: Top Center */}
+                      <line x1="360" y1="64" x2="360" y2="150" stroke="rgb(var(--color-accent-primary) / 0.18)" strokeWidth="2.5" />
+                      <line x1="360" y1="64" x2="360" y2="150" stroke="rgb(var(--color-accent-primary) / 0.8)" strokeWidth="1.5" className="animate-wander-dash" filter="url(#glow-effect)" />
+
+                      {/* Node 2: Bottom Left */}
+                      <line x1="110" y1="310" x2="310" y2="230" stroke="rgb(var(--color-accent-primary) / 0.18)" strokeWidth="2.5" />
+                      <line x1="110" y1="310" x2="310" y2="230" stroke="rgb(var(--color-accent-primary) / 0.8)" strokeWidth="1.5" className="animate-wander-dash" filter="url(#glow-effect)" />
+
+                      {/* Node 3: Bottom Right */}
+                      <line x1="610" y1="310" x2="410" y2="230" stroke="rgb(var(--color-accent-primary) / 0.18)" strokeWidth="2.5" />
+                      <line x1="610" y1="310" x2="410" y2="230" stroke="rgb(var(--color-accent-primary) / 0.8)" strokeWidth="1.5" className="animate-wander-dash" filter="url(#glow-effect)" />
+                    </svg>
+
+                    {/* Central Glowing Pulses */}
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-accent-primary/10 rounded-full blur-3xl pointer-events-none animate-pulse" />
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-40 h-40 bg-accent-primary/5 rounded-full blur-2xl pointer-events-none animate-pulse" style={{ animationDelay: '1s' }} />
+
+                    {/* Central Quantum Dice */}
+                    <div className="relative z-10 flex flex-col items-center select-none scale-[0.92] transition-transform duration-500">
+                      <WanderLoadingDice size={82} />
+                      <div className="mt-2.5 text-[9px] font-black tracking-[0.25em] text-accent-primary/80 uppercase animate-pulse">
+                        Brain Nucleus
+                      </div>
                     </div>
 
-                    <div className="rounded-3xl border border-white/60 bg-white/40 p-1 shadow-[0_20px_40px_-12px_rgba(0,0,0,0.08)] backdrop-blur-xl">
-                      <div className="bg-white/80 rounded-[22px] px-6 py-5 border border-black/[0.02]">
-                        <div className="text-[10px] font-black text-accent-primary/60 uppercase tracking-widest mb-2">Live Status</div>
+                    {/* Orbiting Source Nodes with Float Animations */}
+                    {/* Node 1: Top Center */}
+                    <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 w-[170px]">
+                      <div className="animate-float-1">
+                        {renderSourceNode(items[0], 0, "Top")}
+                      </div>
+                    </div>
+
+                    {/* Node 2: Bottom Left */}
+                    <div className="absolute bottom-2 left-4 z-20 w-[170px]">
+                      <div className="animate-float-2">
+                        {renderSourceNode(items[1], 1, "Left")}
+                      </div>
+                    </div>
+
+                    {/* Node 3: Bottom Right */}
+                    <div className="absolute bottom-2 right-4 z-20 w-[170px]">
+                      <div className="animate-float-3">
+                        {renderSourceNode(items[2], 2, "Right")}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="w-full max-w-lg space-y-4">
+                    <div className="text-center space-y-0.5">
+                        <h3 className="text-sm font-black tracking-[0.2em] text-text-primary uppercase">Deep Thinking</h3>
+                        <p className="text-[10px] font-bold text-text-tertiary/60 uppercase tracking-wider">Searching for Hidden Connections</p>
+                    </div>
+
+                    {/* High-tech Live Status Console (Smaller & Sleeker) */}
+                    <div className="relative rounded-2xl border border-white/30 dark:border-white/5 bg-white/30 dark:bg-black/10 p-0.5 shadow-sm backdrop-blur-lg overflow-hidden">
+                      <div className="absolute inset-0 opacity-[0.015] dark:opacity-[0.03] bg-[linear-gradient(rgba(0,0,0,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(0,0,0,0.1)_1px,transparent_1px)] bg-[size:12px_12px]" />
+
+                      <div className="relative bg-white/50 dark:bg-surface-primary/50 rounded-[14px] px-4 py-2.5 border border-black/[0.01]">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="text-[9px] font-black text-accent-primary uppercase tracking-[0.12em]">
+                            Live Brainstorm Stream
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="relative flex h-1.5 w-1.5">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                            </span>
+                            <span className="text-[8px] font-black uppercase text-emerald-500/80 tracking-wider">ACTIVE</span>
+                          </div>
+                        </div>
                         <div
-                            className="text-[15px] font-bold text-text-primary leading-relaxed h-12"
+                            className="text-[12px] font-mono font-bold text-text-primary leading-relaxed h-9"
                             style={{
                             display: '-webkit-box',
                             WebkitLineClamp: 2,
@@ -1402,44 +2343,70 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                             }}
                         >
                             {liveStatus || '正在初始化量子灵感引擎...'}
+                            <span className="inline-block w-1.5 h-3 ml-1 bg-accent-primary animate-terminal-cursor" />
                         </div>
                       </div>
                     </div>
 
+                    {/* Checklist Steps (Smaller & Sleeker) */}
                     {progressCards.length > 0 && (
-                      <div className="grid gap-2.5">
-                        {progressCards.map((card) => (
-                          <div key={card.phase} className={clsx(
-                            "rounded-2xl border px-5 py-4 transition-all duration-500 flex items-center justify-between gap-4",
-                            card.status === 'running' ? "bg-white border-accent-primary/20 shadow-lg ring-1 ring-accent-primary/5" : "bg-black/[0.02] border-transparent"
-                          )}>
-                            <div className="min-w-0 flex items-center gap-4">
+                      <div className="grid gap-1.5">
+                        {progressCards.map((card) => {
+                          const isRunning = card.status === 'running';
+                          const isCompleted = card.status === 'completed';
+                          return (
+                            <div
+                              key={card.phase}
+                              className={clsx(
+                                "relative overflow-hidden rounded-xl border px-3.5 py-2.5 transition-all duration-500 flex items-center justify-between gap-3",
+                                isRunning
+                                  ? "bg-white dark:bg-surface-primary border-accent-primary/20 dark:border-accent-primary/30 shadow-[0_4px_20px_rgb(var(--color-accent-primary)/0.06)] ring-1 ring-accent-primary/5"
+                                  : "bg-black/[0.01] dark:bg-white/[0.005] border-black/[0.02] dark:border-white/[0.02]"
+                              )}
+                            >
+                              {isRunning && (
+                                <div className="absolute inset-0 pointer-events-none animate-step-shimmer opacity-30" />
+                              )}
+
+                              <div className="relative z-10 min-w-0 flex items-center gap-3">
                                 <div className={clsx(
-                                    "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-colors",
-                                    card.status === 'completed' ? "bg-emerald-500 text-white" : card.status === 'running' ? "bg-accent-primary text-white" : "bg-black/[0.05] text-text-tertiary"
+                                    "w-6 h-6 rounded-lg flex items-center justify-center shrink-0 transition-all duration-300 shadow-sm",
+                                    isCompleted
+                                      ? "bg-emerald-500 dark:bg-emerald-600 text-white shadow-emerald-500/10"
+                                      : isRunning
+                                        ? "bg-accent-primary text-white shadow-accent-primary/15 scale-102"
+                                        : "bg-black/[0.03] dark:bg-white/[0.03] text-text-tertiary"
                                 )}>
-                                    {card.status === 'completed' ? <X className="w-4 h-4 rotate-45" /> : <div className="text-[11px] font-black">{card.stepIndex || '•'}</div>}
+                                    {isCompleted ? (
+                                      <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                                    ) : (
+                                      <span className="text-[10px] font-black">{card.stepIndex || '•'}</span>
+                                    )}
                                 </div>
                                 <div className="min-w-0">
-                                    <div className={clsx("text-[13px] font-extrabold tracking-tight", card.status === 'running' ? "text-text-primary" : "text-text-tertiary")}>
+                                    <div className={clsx(
+                                      "text-[11.5px] font-extrabold tracking-tight transition-colors",
+                                      isRunning ? "text-text-primary" : "text-text-tertiary/60"
+                                    )}>
                                         {card.title}
                                     </div>
-                                    {card.status === 'running' && (
-                                        <div className="mt-0.5 text-[11px] font-bold text-text-tertiary truncate max-w-[300px]">
+                                    {isRunning && (
+                                        <div className="mt-0.5 text-[9.5px] font-bold text-text-tertiary truncate max-w-[280px] animate-pulse">
                                             {card.detail}
                                         </div>
                                     )}
                                 </div>
+                              </div>
+                              {isRunning && (
+                                  <div className="relative z-10 flex gap-0.5 bg-accent-primary/5 px-1.5 py-1 rounded border border-accent-primary/10 shrink-0">
+                                      <div className="w-1 h-1 rounded-full bg-accent-primary animate-bounce [animation-delay:-0.3s]" />
+                                      <div className="w-1 h-1 rounded-full bg-accent-primary animate-bounce [animation-delay:-0.15s]" />
+                                      <div className="w-1 h-1 rounded-full bg-accent-primary animate-bounce" />
+                                  </div>
+                              )}
                             </div>
-                            {card.status === 'running' && (
-                                <div className="flex gap-1">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-accent-primary animate-bounce [animation-delay:-0.3s]" />
-                                    <div className="w-1.5 h-1.5 rounded-full bg-accent-primary animate-bounce [animation-delay:-0.15s]" />
-                                    <div className="w-1.5 h-1.5 rounded-full bg-accent-primary animate-bounce" />
-                                </div>
-                            )}
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -1448,6 +2415,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
 
               {showFinal && parsedResult && (
                 <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+                  {guidedWarning && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] font-bold text-amber-700">
+                      {guidedWarning}
+                    </div>
+                  )}
                   {Array.isArray(parsedResult.options) && parsedResult.options.length > 1 && (
                     <div className="space-y-4">
                       <div className="text-[12px] font-black text-text-tertiary uppercase tracking-widest px-1">灵感候选方案 ({parsedResult.options.length})</div>
@@ -1458,7 +2430,14 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                             <button
                               key={`${option.topic.title}-${index}`}
                               type="button"
-                              onClick={() => setSelectedOptionIndex(index)}
+                              onClick={() => {
+                                setSelectedOptionIndex(index);
+                                trackTopicEvent('topic_option_selected', {
+                                  sourceMode: activeSourceMode,
+                                  optionIndex: index,
+                                  optionCount: parsedResult.options?.length || 0,
+                                });
+                              }}
                               className={clsx(
                                 'text-left rounded-2xl border p-4 transition-all duration-300 relative group active:scale-[0.98]',
                                 selected
@@ -1496,20 +2475,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                                     <div className="text-[15px] font-black text-text-primary tracking-tight">灵感选题</div>
                                     <div className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest">Selected Inspiration Result</div>
                                 </div>
-                                <span className="rounded-lg border border-border bg-surface-secondary px-2 py-1 text-[10px] font-black text-text-tertiary">
-                                    {currentTopicSourceLabel}
-                                </span>
                             </div>
                             <div className="flex items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => void abandonCurrentTopic()}
-                                    disabled={!currentHistoryId || loading}
-                                    className="flex h-10 items-center gap-2 px-4 border border-border text-text-secondary text-[13px] font-extrabold rounded-xl hover:bg-red-50 hover:border-red-100 hover:text-red-600 transition-all active:scale-95 disabled:opacity-40"
-                                >
-                                    <X className="w-4 h-4" />
-                                    放弃
-                                </button>
                                 <button
                                     onClick={startCreateInRedClaw}
                                     disabled={!canStartCreate}
@@ -1678,42 +2645,22 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                     <h3 className="text-[17px] font-black text-text-primary tracking-tight">灵感历史</h3>
                     <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest mt-0.5">Wander Inspiration Vault</p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const nextValue = !showAbandonedTopics;
-                      setShowAbandonedTopics(nextValue);
-                      void loadHistoryList({ includeAbandoned: nextValue });
-                    }}
-                    className="flex h-9 items-center gap-1.5 rounded-xl bg-black/[0.04] px-3 text-[11px] font-bold text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-95"
-                  >
-                    {showAbandonedTopics ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    {showAbandonedTopics ? '隐藏已放弃' : '展示已放弃'}
-                  </button>
-                  <button onClick={() => setShowHistory(false)} className="flex h-9 w-9 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90">
+                <button onClick={() => setShowHistory(false)} className="flex h-9 w-9 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90">
                     <X className="w-4.5 h-4.5" />
-                  </button>
-                </div>
+                </button>
             </div>
             <div className="overflow-y-auto flex-1 p-3 space-y-1.5 custom-scrollbar">
-              {visibleHistoryList.length === 0 ? (
+              {historyList.length === 0 ? (
                 <div className="p-12 text-center">
                     <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-black/[0.02] text-text-tertiary/20 mx-auto mb-4">
                         <History className="w-8 h-8" />
                     </div>
-                    <p className="text-[13px] font-bold text-text-tertiary/60">{showAbandonedTopics ? '暂无漫步历史记录' : '暂无待处理选题'}</p>
+                    <p className="text-[13px] font-bold text-text-tertiary/60">暂无选题历史记录</p>
                 </div>
               ) : (
-                visibleHistoryList.map(record => {
-                  const parsedHistoryResult = normalizeWanderResultPayload(record.result);
-                  const recordItems = normalizeWanderItemsPayload(record.items);
-                  const title = parsedHistoryResult?.options?.[resolveSelectedOptionIndex(parsedHistoryResult)]?.topic.title
-                    || parsedHistoryResult?.topic.title
-                    || getHistoryTitle(record);
-                  const sourceLabel = topicSourceLabel(parsedHistoryResult, recordItems);
+                historyList.map(record => {
+                  const title = getHistoryTitle(record);
                   const isActive = currentHistoryId === record.id;
-                  const abandoned = isAbandonedHistoryRecord(record);
                   return (
                     <div
                       key={record.id}
@@ -1724,21 +2671,17 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                         "px-5 py-4 cursor-pointer rounded-2xl transition-all flex items-center justify-between group relative overflow-hidden",
                         isActive
                             ? "bg-accent-primary/5 ring-1 ring-accent-primary/10"
-                            : abandoned
-                              ? "opacity-60 hover:bg-black/[0.02] border border-transparent"
-                              : "hover:bg-black/[0.02] border border-transparent"
+                            : "hover:bg-black/[0.02] border border-transparent"
                       )}
                     >
                       <div className="flex-1 min-w-0">
-                        <div className={clsx("text-[14px] font-extrabold truncate mb-1 tracking-tight", isActive ? "text-accent-primary" : abandoned ? "text-text-secondary" : "text-text-primary")}>
+                        <div className={clsx("text-[14px] font-extrabold truncate mb-1 tracking-tight", isActive ? "text-accent-primary" : "text-text-primary")}>
                           {title}
                         </div>
                         <div className="text-[10px] font-bold text-text-tertiary/60 uppercase tracking-tighter flex items-center gap-2">
                           <span>{formatDate(getHistoryCreatedAt(record))}</span>
-                          <span className="text-text-tertiary font-black">{sourceLabel}</span>
                           {isActive && <span className="w-1 h-1 rounded-full bg-accent-primary" />}
                           {isActive && <span className="text-accent-primary font-black">CURRENT</span>}
-                          {abandoned && <span className="text-text-tertiary font-black">已放弃</span>}
                         </div>
                       </div>
                       <button

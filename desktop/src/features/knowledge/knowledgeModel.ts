@@ -78,7 +78,6 @@ export interface Note { type?: string; sourceUrl?: string;
     visualSearchPath?: string;
     visualSearchPage?: number;
     visualSearchThumbnailPath?: string;
-    visualBlocks?: VisualSemanticBlock[];
 }
 
 export interface YouTubeVideo {

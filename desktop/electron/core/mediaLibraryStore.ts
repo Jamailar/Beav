@@ -98,6 +98,12 @@ function extByMime(mimeType: string): string {
   if (lower.includes('jpeg') || lower.includes('jpg')) return 'jpg';
   if (lower.includes('webp')) return 'webp';
   if (lower.includes('gif')) return 'gif';
+  if (lower.includes('mpeg') || lower.includes('mp3')) return 'mp3';
+  if (lower.includes('wav')) return 'wav';
+  if (lower.includes('ogg') || lower.includes('opus')) return 'ogg';
+  if (lower.includes('aac')) return 'aac';
+  if (lower.includes('flac')) return 'flac';
+  if (lower.includes('audio/mp4') || lower.includes('m4a')) return 'm4a';
   if (lower.includes('mp4')) return 'mp4';
   if (lower.includes('webm')) return 'webm';
   if (lower.includes('quicktime') || lower.includes('mov')) return 'mov';

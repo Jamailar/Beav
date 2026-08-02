@@ -1,25 +1,11 @@
 import type { AuthoringTaskHints } from '../../utils/redclawAuthoring';
 
-export type ViewType =
-  | 'skills'
-  | 'knowledge'
-  | 'settings'
-  | 'archives'
-  | 'wander'
-  | 'redclaw'
-  | 'media-library'
-  | 'cover-studio'
-  | 'generation-studio'
-  | 'subjects'
-  | 'automation'
-  | 'approval';
-
-export type AppShellViewType = ViewType;
+export type ViewType = 'skills' | 'knowledge' | 'settings' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'automation' | 'approval';
 export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'team-workbench' | 'members';
 
 export type SettingsNavigationTarget = {
-  tab?: 'general' | 'ai' | 'team' | 'platforms' | 'skills' | 'tools' | 'profile' | 'memory' | 'remote' | 'mcp' | 'experimental';
+  tab?: 'general' | 'ai' | 'platforms' | 'tools' | 'profile' | 'remote' | 'experimental';
   aiModelSubTab?: 'custom' | 'login';
   nonce: number;
 };
@@ -30,20 +16,45 @@ export type RedClawNavigationAction = {
   nonce: number;
 };
 
-export interface GenerationIntent {
-  mode: 'image' | 'video' | 'cover';
-  source: 'standalone' | 'generation_studio' | 'media-library' | 'manuscripts' | 'cover-studio' | 'cover_studio' | 'tool' | 'redclaw';
-  sourceTitle?: string;
-  bindTarget?: {
-    manuscriptPath?: string;
-    projectId?: string;
-  };
-  preset?: {
-    aspectRatio?: string;
-    resolution?: '720p' | '1080p';
-    durationSeconds?: number;
-  };
-}
+export type AppIntent =
+  | {
+      type: 'settings.open';
+      tab?: SettingsNavigationTarget['tab'];
+      aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
+    }
+  | {
+      type: 'redclaw.open';
+      action?: RedClawNavigationAction['action'];
+      sessionId?: string;
+    }
+  | {
+      type: 'approval.open';
+      docketId?: string;
+    }
+  | {
+      type: 'view.open';
+      view: ViewType;
+    }
+  | {
+      type: 'generation.open';
+      intent: GenerationIntent;
+    }
+  | {
+      type: 'manuscript.open';
+      manuscriptPath: string;
+    };
+
+export type LegacyNavigateEventDetail = {
+  view?: ViewType;
+  settingsTab?: SettingsNavigationTarget['tab'];
+  aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
+  redclawAction?: RedClawNavigationAction['action'];
+  teamSessionId?: string;
+  sessionId?: string;
+  docketId?: string;
+};
+
+export type AppNavigateEventDetail = AppIntent | LegacyNavigateEventDetail;
 
 export interface PendingChatMessage {
   content: string;
@@ -82,8 +93,8 @@ export interface PendingChatMessage {
       cover?: string;
     }>;
   } | {
-    type: 'uploaded-file';
     attachmentId?: string;
+    type: 'uploaded-file';
     name: string;
     ext?: string;
     size?: number;
@@ -140,6 +151,21 @@ export interface PendingChatMessage {
   }>;
 }
 
+export interface GenerationIntent {
+  mode: 'image' | 'video' | 'audio' | 'cover' | 'digital-human';
+  source: 'standalone' | 'media-library' | 'manuscripts' | 'cover-studio';
+  sourceTitle?: string;
+  bindTarget?: {
+    manuscriptPath?: string;
+    projectId?: string;
+  };
+  preset?: {
+    aspectRatio?: string;
+    resolution?: '720p' | '1080p';
+    durationSeconds?: number;
+  };
+}
+
 export type StartupMigrationState = {
   status?: string;
   needsDbImport?: boolean;
@@ -156,52 +182,3 @@ export type StartupMigrationState = {
   importedCounts?: Record<string, number> | null;
   projectUpgradeCounts?: Record<string, number> | null;
 };
-
-export type AppIntent =
-  | {
-      type: 'settings.open';
-      tab?: SettingsNavigationTarget['tab'];
-      aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
-    }
-  | {
-      type: 'redclaw.open';
-      action?: RedClawNavigationAction['action'];
-      sessionId?: string;
-    }
-  | {
-      type: 'approval.open';
-      requestId?: string;
-      docketId?: string;
-      escalationId?: string;
-    }
-  | {
-      type: 'view.open';
-      view: ViewType;
-      skillsAction?: 'open-market';
-    }
-  | {
-      type: 'generation.open';
-      intent: GenerationIntent;
-    }
-  | {
-      type: 'manuscript.open';
-      manuscriptPath: string;
-    };
-
-export type LegacyNavigateEventDetail = {
-  view?: ViewType;
-  settingsTab?: SettingsNavigationTarget['tab'];
-  aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
-  skillsAction?: 'open-market';
-  redclawAction?: RedClawNavigationAction['action'];
-  action?: RedClawNavigationAction['action'] | 'open-market';
-  teamSessionId?: string;
-  sessionId?: string;
-  requestId?: string;
-  docketId?: string;
-  escalationId?: string;
-  intent?: GenerationIntent;
-  manuscriptPath?: string;
-};
-
-export type AppNavigateEventDetail = AppIntent | LegacyNavigateEventDetail;

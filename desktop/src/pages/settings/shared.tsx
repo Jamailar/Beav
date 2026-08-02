@@ -1,5 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Eye, EyeOff, FileText, Image as ImageIcon, Video, AudioLines } from 'lucide-react';
 import clsx from 'clsx';
 import { APP_BRAND } from '../../config/brand';
@@ -264,7 +263,7 @@ export interface RuntimeToolResultItem {
 export type RuntimePerfBenchmarkMode =
   | 'redclaw'
   | 'knowledge'
-  | 'chatroom'
+  | 'team'
   | 'advisor-discussion'
   | 'background-maintenance'
   | 'diagnostics';
@@ -320,25 +319,9 @@ export interface OfficialModelInfo {
   id: string;
   capability?: string;
   capabilities?: ModelCapability[];
-  inputCapabilities?: ModelInputCapability[];
-  input_capabilities?: ModelInputCapability[];
-  inputModalities?: ModelInputCapability[];
-  input_modalities?: ModelInputCapability[];
-  modalities?: ModelInputCapability[];
   apiType?: string;
   ownedBy?: string;
 }
-
-type RawAiModelDescriptor = string | {
-  id?: string;
-  capability?: ModelCapability | string | null | undefined;
-  capabilities?: Array<ModelCapability | string | null | undefined>;
-  inputCapabilities?: Array<ModelInputCapability | string | null | undefined>;
-  input_capabilities?: Array<ModelInputCapability | string | null | undefined>;
-  inputModalities?: Array<ModelInputCapability | string | null | undefined>;
-  input_modalities?: Array<ModelInputCapability | string | null | undefined>;
-  modalities?: Array<ModelInputCapability | string | null | undefined>;
-};
 
 export interface AiModelDescriptor {
   id: string;
@@ -347,11 +330,16 @@ export interface AiModelDescriptor {
 }
 
 export const normalizeAiModelDescriptors = (
-  models: Array<RawAiModelDescriptor | null | undefined>,
+  models: Array<
+    | string
+    | null
+    | undefined
+    | { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> }
+  >,
 ): AiModelDescriptor[] => {
   const merged = new Map<string, AiModelDescriptor>();
   for (const raw of models) {
-    const descriptor = toAiModelDescriptor(raw as RawAiModelDescriptor);
+    const descriptor = toAiModelDescriptor(raw as string | { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> });
     if (!descriptor) continue;
     const previous = merged.get(descriptor.id);
     merged.set(descriptor.id, {
@@ -413,16 +401,6 @@ const normalizeModelInputCapabilities = (values: Array<ModelInputCapability | st
   return allowed.filter((item) => normalized.has(item));
 };
 
-const modelInputCapabilitiesFromMetadata = (model: Exclude<RawAiModelDescriptor, string>): ModelInputCapability[] => {
-  return normalizeModelInputCapabilities([
-    ...(Array.isArray(model.inputCapabilities) ? model.inputCapabilities : []),
-    ...(Array.isArray(model.input_capabilities) ? model.input_capabilities : []),
-    ...(Array.isArray(model.inputModalities) ? model.inputModalities : []),
-    ...(Array.isArray(model.input_modalities) ? model.input_modalities : []),
-    ...(Array.isArray(model.modalities) ? model.modalities : []),
-  ]);
-};
-
 export type AiProtocol = 'openai' | 'anthropic' | 'gemini';
 
 export const IMAGE_PROVIDER_TEMPLATE_OPTIONS = [
@@ -472,81 +450,6 @@ export const inferImageTemplateByProvider = (provider: string, currentTemplate =
     return 'openai-images';
   }
   return 'openai-images';
-};
-
-export const resolveImageModelFetchProtocol = (template: string): AiProtocol => {
-  const normalized = String(template || '').trim();
-  if (normalized === 'gemini-openai-images' || normalized === 'gemini-imagen-native' || normalized === 'gemini-generate-content') {
-    return 'gemini';
-  }
-  return 'openai';
-};
-
-export const resolveImageModelFetchPresetId = (provider: string, template: string, endpoint: string): string | undefined => {
-  const normalizedProvider = String(provider || '').trim().toLowerCase();
-  const normalizedTemplate = String(template || '').trim().toLowerCase();
-  const normalizedEndpoint = String(endpoint || '').trim().toLowerCase();
-  const merged = `${normalizedProvider} ${normalizedTemplate} ${normalizedEndpoint}`;
-
-  if (merged.includes('buts')) return 'buts';
-  if (
-    normalizedTemplate === 'dashscope-wan-native' ||
-    merged.includes('dashscope') ||
-    merged.includes('bailian') ||
-    merged.includes('wan')
-  ) {
-    return 'dashscope';
-  }
-  if (
-    normalizedTemplate === 'ark-seedream-native' ||
-    merged.includes('ark') ||
-    merged.includes('volc') ||
-    merged.includes('seedream') ||
-    merged.includes('doubao') ||
-    merged.includes('jimeng')
-  ) {
-    return 'ark';
-  }
-  if (
-    normalizedTemplate === 'gemini-openai-images' ||
-    normalizedTemplate === 'gemini-imagen-native' ||
-    normalizedTemplate === 'gemini-generate-content' ||
-    merged.includes('gemini') ||
-    merged.includes('generativelanguage.googleapis.com')
-  ) {
-    return 'gemini';
-  }
-  if (merged.includes('openrouter')) return 'openrouter';
-  if (merged.includes('deepseek')) return 'deepseek';
-  if (merged.includes('minimax')) return 'minimax-cn';
-  if (merged.includes('api.openai.com') || normalizedTemplate === 'openai-images') return 'openai';
-  return undefined;
-};
-
-export const normalizeImageModelFetchBaseURL = (baseURL: string, template: string): string => {
-  const normalizedBase = String(baseURL || '').trim().replace(/\/+$/, '');
-  if (!normalizedBase) return '';
-  if (template === 'gemini-openai-images' && /generativelanguage\.googleapis\.com/i.test(normalizedBase)) {
-    return normalizedBase.replace(/\/openai(?:\/.*)?$/i, '');
-  }
-  if (template === 'dashscope-wan-native') {
-    const stripped = normalizedBase
-      .replace(/\/compatible-mode\/v\d+(\.\d+)?(?:\/.*)?$/i, '')
-      .replace(/\/api\/v1(?:\/.*)?$/i, '')
-      .replace(/\/v1(?:\/.*)?$/i, '');
-    return `${stripped}/compatible-mode/v1`;
-  }
-  return normalizedBase;
-};
-
-export const isLikelyLocalEndpoint = (baseURL: string): boolean => {
-  const normalized = String(baseURL || '').toLowerCase();
-  return (
-    normalized.includes('127.0.0.1') ||
-    normalized.includes('localhost') ||
-    normalized.includes('0.0.0.0') ||
-    normalized.includes('::1')
-  );
 };
 
 export const AI_PRESET_LOGO_BY_ID: Record<string, string> = {
@@ -684,100 +587,12 @@ export interface AiPresetGroup {
   items: AiSourcePreset[];
 }
 
-interface DropdownPosition {
-  top: number;
-  left: number;
-  width: number;
-  maxHeight: number;
-}
-
-const useDropdownPosition = (
-  open: boolean,
-  rootRef: RefObject<HTMLElement>,
-): DropdownPosition | null => {
-  const [position, setPosition] = useState<DropdownPosition | null>(null);
-
-  useLayoutEffect(() => {
-    if (!open || typeof window === 'undefined') {
-      setPosition(null);
-      return;
-    }
-
-    const updatePosition = () => {
-      const root = rootRef.current;
-      if (!root) return;
-      const rect = root.getBoundingClientRect();
-      const viewportPadding = 12;
-      const gap = 4;
-      const availableBelow = window.innerHeight - rect.bottom - viewportPadding;
-      const availableAbove = rect.top - viewportPadding;
-      const placeAbove = availableBelow < 180 && availableAbove > availableBelow;
-      const availableHeight = Math.max(120, placeAbove ? availableAbove : availableBelow);
-      const maxHeight = Math.min(320, availableHeight - gap);
-      const left = Math.min(
-        Math.max(viewportPadding, rect.left),
-        Math.max(viewportPadding, window.innerWidth - rect.width - viewportPadding),
-      );
-      setPosition({
-        top: placeAbove
-          ? Math.max(viewportPadding, rect.top - maxHeight - gap)
-          : Math.min(window.innerHeight - viewportPadding, rect.bottom + gap),
-        left,
-        width: rect.width,
-        maxHeight,
-      });
-    };
-
-    updatePosition();
-    window.addEventListener('resize', updatePosition);
-    window.addEventListener('scroll', updatePosition, true);
-    return () => {
-      window.removeEventListener('resize', updatePosition);
-      window.removeEventListener('scroll', updatePosition, true);
-    };
-  }, [open, rootRef]);
-
-  return position;
-};
-
-const SelectDropdownLayer = ({
-  open,
-  rootRef,
-  menuRef,
-  children,
-}: {
-  open: boolean;
-  rootRef: RefObject<HTMLElement>;
-  menuRef: RefObject<HTMLDivElement>;
-  children: ReactNode;
-}) => {
-  const position = useDropdownPosition(open, rootRef);
-  if (!open || !position || typeof document === 'undefined') return null;
-
-  return createPortal(
-    <div
-      ref={menuRef}
-      className="fixed z-[1000] overflow-auto rounded-lg border border-border bg-surface-primary shadow-xl"
-      style={{
-        top: position.top,
-        left: position.left,
-        width: position.width,
-        maxHeight: position.maxHeight,
-      }}
-    >
-      {children}
-    </div>,
-    document.body,
-  );
-};
-
 export interface CreateAiSourceDraft {
   presetId: string;
   name: string;
   baseURL: string;
   apiKey: string;
   protocol: AiProtocol;
-  setAsDefault: boolean;
 }
 
 export const AiPresetSelect = ({
@@ -793,7 +608,6 @@ export const AiPresetSelect = ({
 }) => {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
   const presets = useMemo(() => groups.flatMap((group) => group.items), [groups]);
   const selectedPreset = useMemo(() => {
     return presets.find((item) => item.id === value) || findAiPresetById(value) || presets[0] || null;
@@ -802,11 +616,8 @@ export const AiPresetSelect = ({
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (
-        !rootRef.current?.contains(target)
-        && !menuRef.current?.contains(target)
-      ) {
+      if (!rootRef.current) return;
+      if (!rootRef.current.contains(event.target as Node)) {
         setOpen(false);
       }
     };
@@ -837,38 +648,40 @@ export const AiPresetSelect = ({
         <ChevronDown className={clsx('w-4 h-4 text-text-tertiary transition-transform', open && 'rotate-180')} />
       </button>
 
-      <SelectDropdownLayer open={open} rootRef={rootRef} menuRef={menuRef}>
-        {groups.map((group) => (
-          <div key={group.id} className="border-b border-border/60 last:border-b-0">
-            <div className="px-3 py-1.5 text-[11px] font-medium text-text-tertiary bg-surface-secondary/20">
-              {group.label}
+      {open && (
+        <div className="absolute z-[120] mt-1 w-full max-h-80 overflow-auto rounded-lg border border-border bg-surface-primary shadow-xl">
+          {groups.map((group) => (
+            <div key={group.id} className="border-b border-border/60 last:border-b-0">
+              <div className="px-3 py-1.5 text-[11px] font-medium text-text-tertiary bg-surface-secondary/20">
+                {group.label}
+              </div>
+              {group.items.map((presetOption) => {
+                const active = presetOption.id === value;
+                return (
+                  <button
+                    key={presetOption.id}
+                    type="button"
+                    onClick={() => {
+                      onChange(presetOption.id);
+                      setOpen(false);
+                    }}
+                    className={clsx(
+                      'w-full px-3 py-2 text-left text-sm transition-colors flex items-center justify-between gap-2',
+                      active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/40 text-text-secondary'
+                    )}
+                  >
+                    <span className="min-w-0 flex items-center gap-2">
+                      <AiPresetLogo presetId={presetOption.id} label={presetOption.label} />
+                      <span className="truncate">{presetOption.label}</span>
+                    </span>
+                    <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
+                  </button>
+                );
+              })}
             </div>
-            {group.items.map((presetOption) => {
-              const active = presetOption.id === value;
-              return (
-                <button
-                  key={presetOption.id}
-                  type="button"
-                  onClick={() => {
-                    onChange(presetOption.id);
-                    setOpen(false);
-                  }}
-                  className={clsx(
-                    'w-full px-3 py-2 text-left text-sm transition-colors flex items-center justify-between gap-2',
-                    active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/40 text-text-secondary'
-                  )}
-                >
-                  <span className="min-w-0 flex items-center gap-2">
-                    <AiPresetLogo presetId={presetOption.id} label={presetOption.label} />
-                    <span className="truncate">{presetOption.label}</span>
-                  </span>
-                  <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
-                </button>
-              );
-            })}
-          </div>
-        ))}
-      </SelectDropdownLayer>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
@@ -886,7 +699,6 @@ export const AiSourceSelect = ({
 }) => {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
   const selectedSource = useMemo(() => {
     return sources.find((item) => item.id === value) || sources[0] || null;
   }, [sources, value]);
@@ -894,11 +706,8 @@ export const AiSourceSelect = ({
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (
-        !rootRef.current?.contains(target)
-        && !menuRef.current?.contains(target)
-      ) {
+      if (!rootRef.current) return;
+      if (!rootRef.current.contains(event.target as Node)) {
         setOpen(false);
       }
     };
@@ -933,31 +742,33 @@ export const AiSourceSelect = ({
         <ChevronDown className={clsx('w-4 h-4 text-text-tertiary transition-transform', open && 'rotate-180')} />
       </button>
 
-      <SelectDropdownLayer open={open} rootRef={rootRef} menuRef={menuRef}>
-        {sources.map((source) => {
-          const active = source.id === value;
-          return (
-            <button
-              key={source.id}
-              type="button"
-              onClick={() => {
-                onChange(source.id);
-                setOpen(false);
-              }}
-              className={clsx(
-                'w-full px-3 py-2 text-left text-sm transition-colors flex items-center justify-between gap-2',
-                active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/40 text-text-secondary'
-              )}
-            >
-              <span className="min-w-0 flex items-center gap-2">
-                <AiSourceLogo source={source} />
-                <span className="truncate">{source.name || '未命名供应商'}</span>
-              </span>
-              <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
-            </button>
-          );
-        })}
-      </SelectDropdownLayer>
+      {open && (
+        <div className="absolute z-[120] mt-1 w-full max-h-80 overflow-auto rounded-lg border border-border bg-surface-primary shadow-xl">
+          {sources.map((source) => {
+            const active = source.id === value;
+            return (
+              <button
+                key={source.id}
+                type="button"
+                onClick={() => {
+                  onChange(source.id);
+                  setOpen(false);
+                }}
+                className={clsx(
+                  'w-full px-3 py-2 text-left text-sm transition-colors flex items-center justify-between gap-2',
+                  active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/40 text-text-secondary'
+                )}
+              >
+                <span className="min-w-0 flex items-center gap-2">
+                  <AiSourceLogo source={source} />
+                  <span className="truncate">{source.name || '未命名供应商'}</span>
+                </span>
+                <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };
@@ -997,7 +808,6 @@ export const AiModelSelect = ({
 }) => {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
   const selectedOption = useMemo(() => {
     return options.find((item) => item.id === value) || null;
   }, [options, value]);
@@ -1039,11 +849,8 @@ export const AiModelSelect = ({
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (
-        !rootRef.current?.contains(target)
-        && !menuRef.current?.contains(target)
-      ) {
+      if (!rootRef.current) return;
+      if (!rootRef.current.contains(event.target as Node)) {
         setOpen(false);
       }
     };
@@ -1092,48 +899,50 @@ export const AiModelSelect = ({
         <ChevronDown className={clsx('w-4 h-4 text-text-tertiary transition-transform', open && 'rotate-180')} />
       </button>
 
-      <SelectDropdownLayer open={open && !disabled} rootRef={rootRef} menuRef={menuRef}>
-        {!options.length ? (
-          <div className="px-3 py-2 text-sm text-text-tertiary">{placeholder}</div>
-        ) : (
-          options.map((option) => {
-            const active = option.id === value;
-            return (
-              <button
-                key={option.id}
-                type="button"
-                onClick={() => {
-                  onChange(option.id);
-                  setOpen(false);
-                }}
-                className={clsx(
-                  'w-full px-3 py-2 text-left text-sm transition-colors flex items-center justify-between gap-2',
-                  active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/40 text-text-secondary'
-                )}
-              >
-                <span className="min-w-0 flex items-center gap-2 flex-wrap">
-                  <span className="truncate">{option.label || option.id}</span>
-                  {resolveBadges(option).map((badge) => (
-                    <span
-                      key={`${option.id}-${badge.text}`}
-                      className={clsx(
-                        'px-1.5 py-0.5 rounded text-[10px] leading-none whitespace-nowrap font-medium',
-                        badge.className || 'text-text-tertiary'
-                      )}
-                    >
-                      {badge.text}
-                    </span>
-                  ))}
-                </span>
-                <span className="flex items-center gap-2 pl-2">
-                  {renderInputIcons(option)}
-                  <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
-                </span>
-              </button>
-            );
-          })
-        )}
-      </SelectDropdownLayer>
+      {open && !disabled && (
+        <div className="absolute z-[120] mt-1 w-full max-h-80 overflow-auto rounded-lg border border-border bg-surface-primary shadow-xl">
+          {!options.length ? (
+            <div className="px-3 py-2 text-sm text-text-tertiary">{placeholder}</div>
+          ) : (
+            options.map((option) => {
+              const active = option.id === value;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => {
+                    onChange(option.id);
+                    setOpen(false);
+                  }}
+                  className={clsx(
+                    'w-full px-3 py-2 text-left text-sm transition-colors flex items-center justify-between gap-2',
+                    active ? 'bg-accent-primary/10 text-text-primary' : 'hover:bg-surface-secondary/40 text-text-secondary'
+                  )}
+                >
+                  <span className="min-w-0 flex items-center gap-2 flex-wrap">
+                    <span className="truncate">{option.label || option.id}</span>
+                    {resolveBadges(option).map((badge) => (
+                      <span
+                        key={`${option.id}-${badge.text}`}
+                        className={clsx(
+                          'px-1.5 py-0.5 rounded text-[10px] leading-none whitespace-nowrap font-medium',
+                          badge.className || 'text-text-tertiary'
+                        )}
+                      >
+                        {badge.text}
+                      </span>
+                    ))}
+                  </span>
+                  <span className="flex items-center gap-2 pl-2">
+                    {renderInputIcons(option)}
+                    <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -1157,18 +966,6 @@ export const resolveDefaultImageEndpoint = (provider: string, template: string):
     return IMAGE_TEMPLATE_DEFAULT_ENDPOINTS[normalizedTemplate];
   }
   return IMAGE_TEMPLATE_DEFAULT_ENDPOINTS['openai-images'];
-};
-
-export const isImageTemplateRemoteModelFetchEnabled = (template: string): boolean => {
-  const normalized = String(template || '').trim();
-  return (
-    normalized === 'openai-images' ||
-    normalized === 'gemini-openai-images' ||
-    normalized === 'gemini-imagen-native' ||
-    normalized === 'gemini-generate-content' ||
-    normalized === 'dashscope-wan-native' ||
-    normalized === 'ark-seedream-native'
-  );
 };
 
 export const IMAGE_ASPECT_RATIO_OPTIONS = [
@@ -1313,7 +1110,6 @@ export const createAiSourceDraftFromPreset = (presetId: string = DEFAULT_AI_PRES
     baseURL: preset?.baseURL || '',
     apiKey: '',
     protocol: preset?.protocol || 'openai',
-    setAsDefault: false,
   };
 };
 
@@ -1339,7 +1135,7 @@ export const parseAiSources = (raw: string | undefined): AiSourceConfig[] => {
         );
         const modelsMeta = normalizeAiModelDescriptors(
           Array.isArray(item.modelsMeta)
-            ? item.modelsMeta.map((value) => (value && typeof value === 'object' ? value as RawAiModelDescriptor : null))
+            ? item.modelsMeta.map((value) => (value && typeof value === 'object' ? value as { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> } : null))
             : [],
         );
         const models = Array.isArray(item.models)
@@ -1640,7 +1436,7 @@ export const filterOfficialModelsByCapability = (
 };
 
 export const toAiModelDescriptor = (
-  model: RawAiModelDescriptor,
+  model: string | { id?: string; capability?: ModelCapability | string | null | undefined; capabilities?: Array<ModelCapability | string | null | undefined> },
 ): AiModelDescriptor | null => {
   if (typeof model === 'string') {
     const id = model.trim();
@@ -1666,10 +1462,7 @@ export const toAiModelDescriptor = (
   return {
     id,
     capabilities: enforceModelCapabilityPolicy(id, forcedCapabilities.length > 0 ? forcedCapabilities : capabilities),
-    inputCapabilities: normalizeModelInputCapabilities([
-      ...getModelInputCapabilities(id),
-      ...modelInputCapabilitiesFromMetadata(model),
-    ]),
+    inputCapabilities: getModelInputCapabilities(id),
   };
 };
 

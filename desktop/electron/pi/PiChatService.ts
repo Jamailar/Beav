@@ -55,6 +55,7 @@ import { logDebugEvent } from '../core/debugLogger';
 import { loadPrompt, renderPrompt } from '../prompts/runtime';
 import { getAgentRuntime, getTaskGraphRuntime, type PreparedRuntimeExecution, type RuntimeMode } from '../core/ai';
 import type { RuntimeEvent, RuntimeMessageContentPart } from '../core/runtimeTypes';
+import { getSessionRuntimeStore } from '../core/sessionRuntimeStore';
 
 interface SessionMetadata {
   associatedFilePath?: string;
@@ -193,6 +194,45 @@ interface ChatAttachmentRuntimeOptions {
   userInputContent?: string | RuntimeMessageContentPart[];
 }
 
+type PersistedRuntimeEvent = {
+  eventType: string;
+  payload: Record<string, unknown>;
+};
+
+function toPersistedRuntimeEvent(channel: string, data: unknown): PersistedRuntimeEvent | null {
+  const payload = data && typeof data === 'object' && !Array.isArray(data)
+    ? data as Record<string, unknown>
+    : { value: data };
+  switch (channel) {
+    case 'chat:thought-start':
+      return { eventType: 'runtime:stream-start', payload: { ...payload, stream: 'thought', messagePhase: 'thought' } };
+    case 'chat:thought-delta':
+      return { eventType: 'runtime:text-delta', payload: { ...payload, stream: 'thought', messagePhase: 'thought' } };
+    case 'chat:response-chunk':
+      return { eventType: 'runtime:text-delta', payload: { ...payload, stream: 'response', messagePhase: 'final_answer' } };
+    case 'chat:tool-start':
+      return { eventType: 'runtime:tool-start', payload };
+    case 'chat:tool-update':
+      return { eventType: 'runtime:tool-update', payload };
+    case 'chat:tool-end':
+      return { eventType: 'runtime:tool-end', payload };
+    case 'chat:response-end':
+      return { eventType: 'runtime:done', payload };
+    case 'chat:error':
+      return {
+        eventType: 'runtime:checkpoint',
+        payload: { checkpointType: 'chat.error', payload },
+      };
+    case 'chat:skill-activated':
+      return {
+        eventType: 'runtime:checkpoint',
+        payload: { checkpointType: 'chat.skill_activated', payload },
+      };
+    default:
+      return null;
+  }
+}
+
 const DEFAULT_REDCLAW_AUTO_COMPACT_TOKENS = 256000;
 const DEFAULT_MODEL_CONTEXT_WINDOW_FALLBACK = 64000;
 const TOOL_GUARD_MAX_TOTAL_CALLS = 100;
@@ -313,6 +353,40 @@ export class PiChatService {
   }
 
   private sendToUI(channel: string, data: unknown) {
+    const persistedEvent = toPersistedRuntimeEvent(channel, data);
+    if (persistedEvent) {
+      const runtimeEvent = getSessionRuntimeStore().appendRuntimeEvent({
+        category: 'runtime',
+        eventType: persistedEvent.eventType,
+        sessionId: this.sessionId,
+        taskId: this.activeRuntimeExecution?.task.id,
+        payload: persistedEvent.payload,
+      });
+      const runtimeEventEnvelope = {
+        eventType: runtimeEvent.eventType,
+        sessionId: runtimeEvent.sessionId,
+        taskId: runtimeEvent.taskId,
+        runtimeId: runtimeEvent.runtimeId,
+        parentRuntimeId: runtimeEvent.parentRuntimeId,
+        payload: runtimeEvent.payload,
+        timestamp: runtimeEvent.createdAt,
+      };
+      if (this.eventSink) {
+        try {
+          this.eventSink('runtime:event', runtimeEventEnvelope);
+        } catch (error) {
+          console.error('[PiChatService] Failed to send runtime event sink:', error);
+        }
+      }
+      if (this.window && !this.window.isDestroyed()) {
+        try {
+          this.window.webContents.send('runtime:event', runtimeEventEnvelope);
+        } catch (error) {
+          console.error('[PiChatService] Failed to send runtime event:', error);
+        }
+      }
+    }
+
     if (this.eventSink) {
       try {
         this.eventSink(channel, data);

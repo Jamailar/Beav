@@ -1,0 +1,4 @@
+interface:
+  display_name: "TTS Director"
+  short_description: "Design expressive TTS segments"
+  default_prompt: "Use $tts-director to turn this script into expressive TTS segments."

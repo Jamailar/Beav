@@ -1,6 +1,6 @@
 {
   "name": "red-convert-desktop",
-  "version": "1.9.0",
+  "version": "2.5.0",
   "engines": {
     "node": ">=22 <23"
   },

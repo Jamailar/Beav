@@ -7,6 +7,9 @@ import ts from 'typescript';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const archiveRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(archiveRoot, '..', '..');
+const baselineRoot = process.env.RED_BOX_PARITY_BASELINE?.trim()
+  ? path.resolve(process.env.RED_BOX_PARITY_BASELINE)
+  : path.join(repoRoot, 'desktop');
 
 function parseSource(filePath) {
   return ts.createSourceFile(
@@ -148,7 +151,7 @@ async function listBridgeDomains(dir) {
     .sort();
 }
 
-const formalDir = path.join(repoRoot, 'desktop', 'src', 'bridge', 'domains');
+const formalDir = path.join(baselineRoot, 'src', 'bridge', 'domains');
 const archiveDir = path.join(archiveRoot, 'src', 'bridge', 'domains');
 
 const [formalDomains, archiveDomains] = await Promise.all([
@@ -167,7 +170,7 @@ if (missingDomains.length > 0) {
   process.exit(1);
 }
 
-const formalIpcRenderer = path.join(repoRoot, 'desktop', 'src', 'bridge', 'ipcRenderer.ts');
+const formalIpcRenderer = path.join(baselineRoot, 'src', 'bridge', 'ipcRenderer.ts');
 const archiveIpcRenderer = path.join(archiveRoot, 'src', 'bridge', 'ipcRenderer.ts');
 const formalPaths = collectIpcRendererPaths(formalIpcRenderer);
 const archivePaths = collectIpcRendererPaths(archiveIpcRenderer);

@@ -18,15 +18,25 @@ export function isUncLocalPath(value: string): boolean {
     return String(value || '').trim().startsWith('\\\\');
 }
 
+function decodeEncodedLocalPathSource(value: string): string {
+    const raw = String(value || '').trim();
+    if (!/%(?:2f|5c|3a)/i.test(raw)) return raw;
+    const decoded = safeDecodeUriComponent(raw);
+    if (/^[a-zA-Z]:[\\/]/.test(decoded) || /^[\\/]/.test(decoded)) {
+        return decoded;
+    }
+    return raw;
+}
+
 export function isLikelyAbsoluteLocalPath(value: string): boolean {
     const raw = String(value || '').trim();
     if (!raw) return false;
     if (isWindowsAbsoluteLocalPath(raw) || isUncLocalPath(raw)) return true;
-    return raw.startsWith('/');
+    return raw.startsWith('/') || raw.startsWith('\\');
 }
 
 export function isFileUrl(value: string): boolean {
-    return /^file:\/\//i.test(String(value || '').trim());
+    return /^file:/i.test(String(value || '').trim());
 }
 
 export function isLegacyLocalFileUrl(value: string): boolean {
@@ -40,7 +50,11 @@ export function isRedboxAssetUrl(value: string): boolean {
 export function isLocalAssetSource(value: string): boolean {
     const raw = String(value || '').trim();
     if (!raw) return false;
-    return isRedboxAssetUrl(raw) || isLegacyLocalFileUrl(raw) || isFileUrl(raw) || isLikelyAbsoluteLocalPath(raw);
+    if (isRedboxAssetUrl(raw) || isLegacyLocalFileUrl(raw) || isFileUrl(raw) || isLikelyAbsoluteLocalPath(raw)) {
+        return true;
+    }
+    const decoded = decodeEncodedLocalPathSource(raw);
+    return decoded !== raw && isLikelyAbsoluteLocalPath(decoded);
 }
 
 function normalizeAssetPathForUrl(pathValue: string): string {
@@ -60,14 +74,18 @@ function normalizeUriForParsing(raw: string): string {
         .replace(/^local-file:\/\/([a-zA-Z]:[\\/])/i, 'local-file:///$1')
         .replace(/^local-file:\/([a-zA-Z]:[\\/])/i, 'local-file:///$1')
         .replace(/^local-file:([a-zA-Z]:[\\/])/i, 'local-file:///$1')
+        .replace(/^file:\/\/([a-zA-Z]:[\\/])/i, 'file:///$1')
+        .replace(/^file:\/([a-zA-Z]:[\\/])/i, 'file:///$1')
+        .replace(/^file:([a-zA-Z]:[\\/])/i, 'file:///$1')
         .replace(/\\/g, '/');
 }
 
 export function extractLocalAssetPathCandidate(value: string): string {
     const raw = String(value || '').trim();
     if (!raw) return '';
-    if (isLikelyAbsoluteLocalPath(raw)) {
-        return normalizeAssetPathForUrl(raw);
+    const localPathSource = decodeEncodedLocalPathSource(raw);
+    if (isLikelyAbsoluteLocalPath(localPathSource)) {
+        return normalizeAssetPathForUrl(localPathSource);
     }
 
     if (isRedboxAssetUrl(raw) || isLegacyLocalFileUrl(raw) || isFileUrl(raw)) {

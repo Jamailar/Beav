@@ -252,6 +252,27 @@ const initDb = () => {
     CREATE INDEX IF NOT EXISTS idx_session_tool_results_call
       ON session_tool_results(session_id, call_id);
 
+    CREATE TABLE IF NOT EXISTS runtime_events (
+      id TEXT PRIMARY KEY,
+      category TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      session_id TEXT,
+      runtime_id TEXT,
+      parent_runtime_id TEXT,
+      source_task_id TEXT,
+      task_id TEXT,
+      tool_call_id TEXT,
+      project_id TEXT,
+      payload_json TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_events_session_created
+      ON runtime_events(session_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_runtime_events_category_type
+      ON runtime_events(category, event_type, created_at ASC);
+
     CREATE TABLE IF NOT EXISTS knowledge_vectors (
       id TEXT PRIMARY KEY,
       source_id TEXT NOT NULL,
@@ -1421,6 +1442,21 @@ export interface SessionToolResultRecord {
   updated_at: number;
 }
 
+export interface RuntimeEventRecord {
+  id: string;
+  category: string;
+  event_type: string;
+  session_id?: string | null;
+  runtime_id?: string | null;
+  parent_runtime_id?: string | null;
+  source_task_id?: string | null;
+  task_id?: string | null;
+  tool_call_id?: string | null;
+  project_id?: string | null;
+  payload_json?: string | null;
+  created_at: number;
+}
+
 export type AgentTaskStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 export type AgentTaskNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 
@@ -1694,15 +1730,21 @@ export const parseAgentTaskTraceRecord = (record: AgentTaskTraceRecord) => ({
 /**
  * 创建新的聊天会话
  */
-export const createChatSession = (id: string, title?: string, metadata?: Record<string, any>): ChatSession => {
-  const now = Date.now();
+export const createChatSession = (
+  id: string,
+  title?: string,
+  metadata?: Record<string, any>,
+  timestamps?: { created_at?: number; updated_at?: number },
+): ChatSession => {
+  const now = timestamps?.created_at ?? Date.now();
+  const updatedAt = timestamps?.updated_at ?? now;
   const metadataStr = metadata ? JSON.stringify(metadata) : null;
   const stmt = db.prepare(`
     INSERT INTO chat_sessions (id, title, created_at, updated_at, metadata)
     VALUES (@id, @title, @created_at, @updated_at, @metadata)
   `);
-  stmt.run({ id, title: title || 'New Chat', created_at: now, updated_at: now, metadata: metadataStr });
-  return { id, title: title || 'New Chat', created_at: now, updated_at: now, metadata: metadataStr || undefined };
+  stmt.run({ id, title: title || 'New Chat', created_at: now, updated_at: updatedAt, metadata: metadataStr });
+  return { id, title: title || 'New Chat', created_at: now, updated_at: updatedAt, metadata: metadataStr || undefined };
 };
 
 /**
@@ -1802,6 +1844,14 @@ export const updateChatSessionTitle = (id: string, title: string): void => {
  * 删除聊天会话（级联删除消息）
  */
 export const deleteChatSession = (id: string): void => {
+  db.prepare('DELETE FROM runtime_events WHERE session_id = ?').run(id);
+  db.prepare('DELETE FROM session_tool_results WHERE session_id = ?').run(id);
+  db.prepare('DELETE FROM session_checkpoints WHERE session_id = ?').run(id);
+  db.prepare('DELETE FROM session_transcript_records WHERE session_id = ?').run(id);
+  db.prepare('DELETE FROM acp_artifacts WHERE session_id = ?').run(id);
+  db.prepare('DELETE FROM acp_run_events WHERE session_id = ?').run(id);
+  db.prepare('DELETE FROM acp_runs WHERE session_id = ?').run(id);
+  db.prepare('DELETE FROM chat_messages WHERE session_id = ?').run(id);
   const stmt = db.prepare('DELETE FROM chat_sessions WHERE id = ?');
   stmt.run(id);
 };
@@ -1809,7 +1859,7 @@ export const deleteChatSession = (id: string): void => {
 /**
  * 添加聊天消息
  */
-export const addChatMessage = (message: Omit<ChatMessage, 'timestamp'> & { display_content?: string; attachment?: string; metadata?: string }): void => {
+export const addChatMessage = (message: Omit<ChatMessage, 'timestamp'> & { display_content?: string; attachment?: string; metadata?: string; timestamp?: number }): void => {
 	  const stmt = db.prepare(`
 	    INSERT INTO chat_messages (id, session_id, role, content, tool_calls, tool_call_id, display_content, attachment, metadata, timestamp)
 	    VALUES (@id, @session_id, @role, @content, @tool_calls, @tool_call_id, @display_content, @attachment, @metadata, @timestamp)
@@ -1825,7 +1875,7 @@ export const addChatMessage = (message: Omit<ChatMessage, 'timestamp'> & { displ
 	    display_content: message.display_content ?? null,
 	    attachment: message.attachment ?? null,
 	    metadata: message.metadata ?? null,
-	    timestamp: Date.now(),
+	    timestamp: message.timestamp ?? Date.now(),
 	  });
 
   // 更新会话的 updated_at
@@ -2037,6 +2087,134 @@ export const listSessionToolResults = (sessionId: string, limit?: number): Sessi
     WHERE session_id = ?
     ORDER BY created_at DESC
   `).all(sessionId) as SessionToolResultRecord[];
+};
+
+const MAX_RUNTIME_EVENTS = 1000;
+const MAX_RUNTIME_EVENT_PAYLOAD_CHARS = 2000;
+
+const sanitizeRuntimeEventPayload = (value: unknown): string | null => {
+  if (value === undefined) return null;
+  let serialized: string;
+  if (typeof value === 'string') {
+    serialized = value;
+  } else {
+    try {
+      serialized = JSON.stringify(value);
+    } catch {
+      serialized = JSON.stringify({ error: 'json-stringify-failed' });
+    }
+  }
+  if (serialized.length <= MAX_RUNTIME_EVENT_PAYLOAD_CHARS) return serialized;
+  return JSON.stringify({
+    truncated: true,
+    summary: serialized.slice(0, MAX_RUNTIME_EVENT_PAYLOAD_CHARS),
+  });
+};
+
+export const addRuntimeEvent = (
+  record: Omit<RuntimeEventRecord, 'created_at'> & { created_at?: number },
+): RuntimeEventRecord => {
+  const createdAt = record.created_at ?? Date.now();
+  const payloadJson = record.payload_json === undefined
+    ? null
+    : sanitizeRuntimeEventPayload(record.payload_json);
+  db.prepare(`
+    INSERT INTO runtime_events (
+      id, category, event_type, session_id, runtime_id, parent_runtime_id,
+      source_task_id, task_id, tool_call_id, project_id, payload_json, created_at
+    ) VALUES (
+      @id, @category, @event_type, @session_id, @runtime_id, @parent_runtime_id,
+      @source_task_id, @task_id, @tool_call_id, @project_id, @payload_json, @created_at
+    )
+  `).run({
+    id: record.id,
+    category: record.category,
+    event_type: record.event_type,
+    session_id: record.session_id ?? null,
+    runtime_id: record.runtime_id ?? null,
+    parent_runtime_id: record.parent_runtime_id ?? null,
+    source_task_id: record.source_task_id ?? null,
+    task_id: record.task_id ?? null,
+    tool_call_id: record.tool_call_id ?? null,
+    project_id: record.project_id ?? null,
+    payload_json: payloadJson,
+    created_at: createdAt,
+  });
+  db.prepare(`
+    DELETE FROM runtime_events
+    WHERE id IN (
+      SELECT id FROM runtime_events
+      ORDER BY created_at DESC, id DESC
+      LIMIT -1 OFFSET ?
+    )
+  `).run(MAX_RUNTIME_EVENTS);
+  return {
+    ...record,
+    session_id: record.session_id ?? null,
+    runtime_id: record.runtime_id ?? null,
+    parent_runtime_id: record.parent_runtime_id ?? null,
+    source_task_id: record.source_task_id ?? null,
+    task_id: record.task_id ?? null,
+    tool_call_id: record.tool_call_id ?? null,
+    project_id: record.project_id ?? null,
+    payload_json: payloadJson,
+    created_at: createdAt,
+  };
+};
+
+export const listRuntimeEventSessionIds = (sessionId: string, includeChildSessions = false): string[] => {
+  const normalized = String(sessionId || '').trim();
+  if (!normalized) return [];
+  const sessions = getChatSessions();
+  const ids = new Set<string>([normalized]);
+  if (!includeChildSessions) return Array.from(ids);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const session of sessions) {
+      if (ids.has(session.id) || !session.metadata) continue;
+      try {
+        const metadata = JSON.parse(session.metadata) as Record<string, unknown>;
+        const parentId = String(metadata.parentSessionId || metadata.parent_session_id || '').trim();
+        if (parentId && ids.has(parentId)) {
+          ids.add(session.id);
+          changed = true;
+        }
+      } catch {
+        // Ignore malformed historical session metadata.
+      }
+    }
+  }
+  return Array.from(ids);
+};
+
+export const listRuntimeEvents = (params: {
+  sessionIds: string[];
+  category?: string;
+  eventType?: string;
+  limit?: number;
+}): RuntimeEventRecord[] => {
+  const sessionIds = Array.from(new Set(params.sessionIds.map((value) => String(value || '').trim()).filter(Boolean)));
+  if (sessionIds.length === 0) return [];
+  const placeholders = sessionIds.map(() => '?').join(', ');
+  const where: string[] = [`session_id IN (${placeholders})`];
+  const values: Array<string | number> = [...sessionIds];
+  if (params.category) {
+    where.push('category = ?');
+    values.push(params.category);
+  }
+  if (params.eventType) {
+    where.push('event_type = ?');
+    values.push(params.eventType);
+  }
+  const safeLimit = Math.max(1, Math.min(1000, Math.floor(Number(params.limit || 500))));
+  values.push(safeLimit);
+  return db.prepare(`
+    SELECT * FROM runtime_events
+    WHERE ${where.join(' AND ')}
+    ORDER BY created_at ASC, id ASC
+    LIMIT ?
+  `).all(...values) as RuntimeEventRecord[];
 };
 
 export const cloneChatSession = (sourceSessionId: string, nextSessionId: string, title?: string): ChatSession => {

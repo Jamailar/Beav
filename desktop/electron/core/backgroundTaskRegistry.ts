@@ -58,6 +58,8 @@ export interface BackgroundTaskRecord {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  archivedAt?: string;
+  archiveReason?: string;
   turns: BackgroundTaskProgressTurn[];
 }
 
@@ -131,7 +133,7 @@ export class BackgroundTaskRegistry extends EventEmitter {
     await this.ensureLoaded();
     return Array.from(this.tasks.values()).sort(
       (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-    );
+    ).filter((task) => !task.archivedAt);
   }
 
   async getTask(taskId: string): Promise<BackgroundTaskRecord | null> {
@@ -406,6 +408,21 @@ export class BackgroundTaskRegistry extends EventEmitter {
         summary: '后台任务已取消。',
       });
     }
+    this.emitUpdate(task);
+    return task;
+  }
+
+  async archiveTask(taskId: string, reason = 'user-archived'): Promise<BackgroundTaskRecord | null> {
+    await this.ensureLoaded();
+    const task = this.tasks.get(taskId);
+    if (!task) return null;
+    if (task.status === 'running') {
+      throw new Error('running background task cannot be archived; cancel it first');
+    }
+    task.archivedAt = nowIso();
+    task.archiveReason = reason;
+    task.updatedAt = nowIso();
+    await this.persist();
     this.emitUpdate(task);
     return task;
   }

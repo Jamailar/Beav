@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { subscribeAppUpdateAvailable } from '../../bridge/appEvents';
+import { subscribeAppUpdateAvailable, subscribeAppUpdateInstallProgress } from '../../bridge/appEvents';
+import { SHOW_CURRENT_RELEASE_NOTES_EVENT, currentReleaseNotesMarkdown } from '../../utils/currentReleaseNotes';
 import { appAlert } from '../../utils/appDialogs';
-import { SHOW_CURRENT_RELEASE_NOTES_EVENT } from '../../utils/currentReleaseNotes';
 
 export interface AppUpdateNoticePayload {
   currentVersion: string;
@@ -38,6 +38,8 @@ export interface AppUpdateInstallState {
   error: string;
 }
 
+const UPDATE_NOTICE_SHOWN_VERSION_STORAGE_KEY = 'redbox:update-notice-shown-version:v1';
+
 const initialInstallState: AppUpdateInstallState = {
   status: 'idle',
   version: '',
@@ -45,8 +47,6 @@ const initialInstallState: AppUpdateInstallState = {
   contentLength: null,
   error: '',
 };
-
-const UPDATE_NOTICE_SHOWN_VERSION_STORAGE_KEY = 'redbox:update-notice-shown-version:v1';
 
 function shouldShowAppUpdateNotice(payload: AppUpdateNoticePayload): boolean {
   if (payload.mode === 'current') return true;
@@ -66,56 +66,52 @@ function markAppUpdateNoticeShown(payload: AppUpdateNoticePayload): void {
   try {
     window.localStorage.setItem(UPDATE_NOTICE_SHOWN_VERSION_STORAGE_KEY, latestVersion);
   } catch {
-    // Storage failures should not break the shell.
+    // Ignore storage failures; update checks should never break the shell.
   }
 }
 
-export function useAppUpdateNotice(openDownloadFailedLabel = '打开下载页面失败') {
+export function useAppUpdateNotice(openDownloadFailedLabel: string) {
   const [updateNotice, setUpdateNotice] = useState<AppUpdateNoticePayload | null>(null);
-  const [lastInstallableNotice, setLastInstallableNotice] = useState<AppUpdateNoticePayload | null>(null);
-  const [hasInstallableUpdate, setHasInstallableUpdate] = useState(false);
   const [isOpeningReleasePage, setIsOpeningReleasePage] = useState(false);
+  const [installState, setInstallState] = useState<AppUpdateInstallState>(initialInstallState);
 
   useEffect(() => {
     const handleUpdateNotice = (_event: unknown, payload: AppUpdateNoticePayload) => {
       if (!payload || !payload.latestVersion) return;
-      if (payload.mode !== 'current') {
-        setHasInstallableUpdate(true);
-        setLastInstallableNotice(payload);
-      }
       if (!shouldShowAppUpdateNotice(payload)) return;
       markAppUpdateNoticeShown(payload);
+      setInstallState(initialInstallState);
       setUpdateNotice(payload);
+    };
+    const handleInstallProgress = (_event: unknown, payload: AppUpdateInstallProgressPayload) => {
+      if (!payload?.status) return;
+      setInstallState((current) => ({
+        status: payload.status || current.status,
+        version: String(payload.version || current.version || ''),
+        downloaded: Number(payload.downloaded ?? current.downloaded) || 0,
+        contentLength: typeof payload.contentLength === 'number' ? payload.contentLength : current.contentLength,
+        error: String(payload.error || ''),
+      }));
     };
     const handleCurrentReleaseNotes = (event: Event) => {
       const detail = event instanceof CustomEvent
         ? event.detail as { version?: unknown } | null
         : null;
       const version = String(detail?.version || '').trim() || '2.0.0';
-      void window.ipcRenderer.getAppReleaseNotes(version).then((result) => {
-        if (!result?.success) {
-          void appAlert(result?.error || '读取更新日志失败');
-          return;
-        }
-        setUpdateNotice({
-          currentVersion: version,
-          latestVersion: String(result.version || version),
-          htmlUrl: String(result.htmlUrl || ''),
-          name: String(result.name || `RedBox v${result.version || version}`),
-          publishedAt: String(result.publishedAt || ''),
-          body: String(result.body || ''),
-          mode: 'current',
-        });
-      }).catch((error) => {
-        console.error('Failed to load current release notes:', error);
-        void appAlert('读取更新日志失败');
+      setUpdateNotice({
+        currentVersion: version,
+        latestVersion: version,
+        htmlUrl: '',
+        name: `RedBox v${version}`,
+        publishedAt: '2026-05-14',
+        body: currentReleaseNotesMarkdown(),
+        mode: 'current',
       });
+      setInstallState(initialInstallState);
     };
     const updateCheckTimer = window.setTimeout(() => {
       void window.ipcRenderer.checkAppUpdate(false).then((result) => {
         if (result?.hasUpdate && result.notice) {
-          setHasInstallableUpdate(true);
-          setLastInstallableNotice(result.notice);
           if (!shouldShowAppUpdateNotice(result.notice)) return;
           markAppUpdateNoticeShown(result.notice);
           setUpdateNotice(result.notice);
@@ -125,16 +121,19 @@ export function useAppUpdateNotice(openDownloadFailedLabel = '打开下载页面
       });
     }, 1800);
     const unsubscribeAppUpdateAvailable = subscribeAppUpdateAvailable(handleUpdateNotice);
+    const unsubscribeAppUpdateInstallProgress = subscribeAppUpdateInstallProgress(handleInstallProgress);
     window.addEventListener(SHOW_CURRENT_RELEASE_NOTES_EVENT, handleCurrentReleaseNotes);
     return () => {
       window.clearTimeout(updateCheckTimer);
       unsubscribeAppUpdateAvailable();
+      unsubscribeAppUpdateInstallProgress();
       window.removeEventListener(SHOW_CURRENT_RELEASE_NOTES_EVENT, handleCurrentReleaseNotes);
     };
   }, []);
 
   const closeUpdateNotice = useCallback(() => {
     setUpdateNotice(null);
+    setInstallState(initialInstallState);
   }, []);
 
   useEffect(() => {
@@ -171,49 +170,46 @@ export function useAppUpdateNotice(openDownloadFailedLabel = '打开下载页面
     }
   }, [isOpeningReleasePage, openDownloadFailedLabel, updateNotice?.htmlUrl]);
 
-  const checkForUpdateNow = useCallback(async () => {
-    try {
-      const result = await window.ipcRenderer.checkAppUpdate(true);
-      if (result?.hasUpdate && result.notice) {
-        setHasInstallableUpdate(true);
-        setLastInstallableNotice(result.notice);
-        setUpdateNotice(result.notice);
-        markAppUpdateNoticeShown(result.notice);
-        return true;
-      }
-      setHasInstallableUpdate(false);
-      setLastInstallableNotice(null);
-      if (result && !result.success) {
-        console.warn('[AppUpdate] manual check failed:', result.message);
-      }
-    } catch (error) {
-      console.warn('[AppUpdate] manual check failed:', error);
-    }
-    return false;
-  }, []);
-
-  const openInstallableUpdateNotice = useCallback(async () => {
-    if (lastInstallableNotice) {
-      setUpdateNotice(lastInstallableNotice);
-      return true;
-    }
-    return checkForUpdateNow();
-  }, [checkForUpdateNow, lastInstallableNotice]);
+  const isInstallingUpdate = ['checking', 'downloading', 'installing'].includes(installState.status);
 
   const installUpdate = useCallback(async () => {
-    await openReleasePage();
-  }, [openReleasePage]);
+    if (!updateNotice || updateNotice.mode === 'current' || isInstallingUpdate) return;
+    setInstallState({
+      ...initialInstallState,
+      status: 'checking',
+      version: updateNotice.latestVersion,
+    });
+    try {
+      const result = await window.ipcRenderer.installAppUpdate();
+      if (!result?.success) {
+        const error = result?.error || openDownloadFailedLabel;
+        setInstallState((current) => ({
+          ...current,
+          status: 'failed',
+          error,
+        }));
+        void appAlert(error);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : openDownloadFailedLabel;
+      console.error('Failed to install update:', error);
+      setInstallState((current) => ({
+        ...current,
+        status: 'failed',
+        error: message,
+      }));
+      void appAlert(message);
+    }
+  }, [isInstallingUpdate, openDownloadFailedLabel, updateNotice]);
 
   return {
     updateNotice,
-    hasInstallableUpdate,
-    closeUpdateNotice,
     updatePublishedDateLabel,
     isOpeningReleasePage,
-    installState: initialInstallState,
-    isInstallingUpdate: false,
-    openInstallableUpdateNotice,
+    installState,
+    isInstallingUpdate,
     openReleasePage,
     installUpdate,
+    closeUpdateNotice,
   };
 }

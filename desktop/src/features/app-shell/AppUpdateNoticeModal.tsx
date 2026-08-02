@@ -1,4 +1,4 @@
-import { Download, ExternalLink, X } from 'lucide-react';
+import { Download, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import { useI18n } from '../../i18n';
@@ -16,6 +16,13 @@ interface AppUpdateNoticeModalProps {
   closeNotice: () => void;
 }
 
+function formatUpdateProgress(state: AppUpdateInstallState): string {
+  if (state.status !== 'downloading') return '';
+  if (!state.contentLength || state.contentLength <= 0) return '';
+  const percent = Math.max(0, Math.min(100, Math.round((state.downloaded / state.contentLength) * 100)));
+  return `${percent}%`;
+}
+
 export function AppUpdateNoticeModal({
   notice,
   publishedDateLabel,
@@ -27,17 +34,22 @@ export function AppUpdateNoticeModal({
   closeNotice,
 }: AppUpdateNoticeModalProps) {
   const { t } = useI18n();
-  const canOpenReleasePage = Boolean(notice.htmlUrl);
-  const isCurrentReleaseNotes = notice.mode === 'current';
-  const titleLabel = isCurrentReleaseNotes ? t('layout.currentReleaseNotes') : t('layout.newVersionFound');
-  const closeLabel = isCurrentReleaseNotes ? t('layout.close') : t('layout.later');
-  const releaseActionLabel = isCurrentReleaseNotes ? t('layout.openRelease') : t('layout.openDownloadPage');
-  const actionDisabled = isOpeningReleasePage || isInstallingUpdate || !canOpenReleasePage;
-  const installStatusLabel = !isCurrentReleaseNotes && installState.status !== 'idle'
-    ? installState.status === 'failed'
-      ? t('layout.updateFailed')
-      : t('layout.electronManualInstallHint')
-    : '';
+  const updateProgress = formatUpdateProgress(installState);
+  const installStatusLabel = notice.mode === 'current'
+    ? ''
+    : installState.status === 'checking'
+      ? t('layout.updateChecking')
+      : installState.status === 'downloading'
+        ? updateProgress
+          ? t('layout.updateDownloadingProgress', { progress: updateProgress })
+          : t('layout.updateDownloading')
+        : installState.status === 'installing'
+          ? t('layout.updateInstalling')
+          : installState.status === 'installed'
+            ? t('layout.updateInstalled')
+            : installState.status === 'failed'
+              ? t('layout.updateFailed')
+              : '';
 
   return (
     <div
@@ -55,7 +67,6 @@ export function AppUpdateNoticeModal({
             onClick={closeNotice}
             className="h-9 w-9 rounded-lg border border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center"
             title={t('layout.close')}
-            aria-label={t('layout.close')}
           >
             <X className="w-5 h-5" />
           </button>
@@ -68,48 +79,45 @@ export function AppUpdateNoticeModal({
                 <Download className="w-6 h-6" />
               </div>
               <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="text-3xl font-semibold text-text-primary leading-tight">{titleLabel}</div>
-                  {!isCurrentReleaseNotes ? (
-                    <span className="inline-flex h-6 items-center rounded-full border border-border bg-surface-secondary px-2.5 text-xs font-medium text-text-secondary">
-                      {t('layout.manualInstall')}
-                    </span>
-                  ) : null}
+                <div className="text-3xl font-semibold text-text-primary leading-tight">
+                  {notice.mode === 'current' ? t('layout.currentReleaseNotes') : t('layout.newVersionFound')}
                 </div>
-                <div className="text-xl text-text-secondary mt-1">
-                  {isCurrentReleaseNotes ? `v${notice.latestVersion}` : `→ ${notice.latestVersion}`}
-                </div>
+                <div className="text-xl text-text-secondary mt-1">→ {notice.latestVersion}</div>
                 <div className="text-xs text-text-tertiary mt-2">
                   {t('layout.currentVersion', { version: notice.currentVersion })}
                   {publishedDateLabel ? ` · ${t('layout.publishedAt', { date: publishedDateLabel })}` : ''}
                 </div>
-                {!isCurrentReleaseNotes ? (
-                  <div className="text-xs text-text-tertiary mt-2">
-                    {installStatusLabel || t('layout.electronManualInstallHint')}
-                  </div>
-                ) : null}
+                {installStatusLabel && (
+                  <div className="text-xs text-text-tertiary mt-2">{installStatusLabel}</div>
+                )}
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={closeNotice}
-                className="h-11 px-4 rounded-lg border border-border text-text-secondary text-sm font-medium hover:bg-surface-secondary transition-colors whitespace-nowrap"
-              >
-                {closeLabel}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  void (isCurrentReleaseNotes ? openReleasePage() : installUpdate());
-                }}
-                disabled={actionDisabled}
-                className="h-11 px-5 rounded-lg bg-accent-primary text-white text-sm font-medium hover:bg-accent-hover disabled:opacity-60 transition-colors whitespace-nowrap inline-flex items-center gap-2"
-              >
-                <ExternalLink className="w-4 h-4" />
-                {isOpeningReleasePage ? t('layout.opening') : releaseActionLabel}
-              </button>
-            </div>
+            {notice.mode !== 'current' && (
+              <div className="flex items-center gap-2">
+                {installState.status === 'failed' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void openReleasePage();
+                    }}
+                    disabled={isOpeningReleasePage}
+                    className="h-11 px-4 rounded-lg border border-border text-text-secondary text-sm font-medium hover:bg-surface-secondary disabled:opacity-60 transition-colors whitespace-nowrap"
+                  >
+                    {isOpeningReleasePage ? t('layout.opening') : t('layout.openDownloadPage')}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    void installUpdate();
+                  }}
+                  disabled={isInstallingUpdate}
+                  className="h-11 px-5 rounded-lg bg-accent-primary text-white text-sm font-medium hover:bg-accent-hover disabled:opacity-60 transition-colors whitespace-nowrap"
+                >
+                  {isInstallingUpdate ? t('layout.updating') : t('layout.installUpdate')}
+                </button>
+              </div>
+            )}
           </div>
         </div>
 

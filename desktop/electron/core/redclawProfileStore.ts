@@ -590,3 +590,58 @@ export async function ensureRedClawOnboardingCompletedWithDefaults(): Promise<bo
 
   return true;
 }
+
+export async function startRedClawStyleDefinition(forceRestart = false): Promise<RedClawOnboardingState> {
+  await ensureRedClawProfileFiles();
+  const state = await loadOnboardingState();
+  if (forceRestart || state.completedAt) {
+    state.startedAt = nowIso();
+    state.updatedAt = nowIso();
+    state.askedFirstQuestion = false;
+    state.stepIndex = 0;
+    state.answers = {};
+    delete state.completedAt;
+    await saveOnboardingState(state);
+    await ensureFile(getFilePath(BOOTSTRAP_FILE), buildDefaultBootstrapTemplate());
+  }
+  return state;
+}
+
+export async function saveRedClawInitializationProgress(
+  stepIndex: number,
+  answers: Record<string, unknown>,
+): Promise<RedClawOnboardingState> {
+  await ensureRedClawProfileFiles();
+  const state = await loadOnboardingState();
+  const normalizedAnswers = Object.fromEntries(
+    Object.entries(answers || {})
+      .map(([key, value]) => [key, normalizeAnswer(String(value || ''))])
+      .filter(([, value]) => Boolean(value)),
+  );
+  state.askedFirstQuestion = true;
+  state.startedAt = state.startedAt || nowIso();
+  state.stepIndex = Math.max(0, Math.min(ONBOARDING_STEPS.length, Math.floor(Number(stepIndex) || 0)));
+  state.answers = { ...state.answers, ...normalizedAnswers };
+  await saveOnboardingState(state);
+  return state;
+}
+
+export async function completeRedClawInitialization(answers: Record<string, unknown>): Promise<RedClawOnboardingState> {
+  const state = await saveRedClawInitializationProgress(ONBOARDING_STEPS.length, answers);
+  state.askedFirstQuestion = true;
+  state.stepIndex = ONBOARDING_STEPS.length;
+  await finalizeOnboarding(state);
+  return state;
+}
+
+export async function completeRedClawStyleDefinition(payload: Record<string, unknown>): Promise<RedClawProfilePromptBundle> {
+  await ensureRedClawProfileFiles();
+  const creatorProfile = String(payload.creatorProfile || payload.creatorProfileMarkdown || '').trim();
+  const soul = String(payload.soul || payload.soulMarkdown || '').trim();
+  if (creatorProfile) await updateRedClawProfileDocument('creator_profile', creatorProfile);
+  if (soul) await updateRedClawProfileDocument('soul', soul);
+  if (payload.answers && typeof payload.answers === 'object') {
+    await completeRedClawInitialization(payload.answers as Record<string, unknown>);
+  }
+  return loadRedClawProfilePromptBundle();
+}
