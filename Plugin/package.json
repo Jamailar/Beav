@@ -1,7 +1,7 @@
 {
   "name": "beav",
   "private": true,
-  "version": "2.6.18",
+  "version": "2.6.19",
   "type": "module",
   "engines": {
     "node": ">=22 <23"
@@ -11,13 +11,14 @@
     "build": "node scripts/sync-manifest-version.mjs && node scripts/build.mjs",
     "verify": "node scripts/verify-build.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "pnpm build && pnpm verify && pnpm typecheck && pnpm test:desktop-bridge-client && pnpm test:site-research",
+    "check": "pnpm build && pnpm verify && pnpm typecheck && pnpm test:desktop-bridge-client && pnpm test:site-research && pnpm test:generic-capture",
     "install:native-host": "node install-native-host.mjs",
     "diagnose:browser-control": "node scripts/diagnose-browser-control.mjs",
     "test:browser-control-faults": "node scripts/test-browser-control-faults.mjs",
     "test:browser-control-binding": "node scripts/test-browser-control-binding.mjs",
     "test:desktop-bridge-client": "node scripts/test-desktop-bridge-client.mjs",
     "test:site-research": "node --test scripts/test-site-research-runtime.mjs",
+    "test:generic-capture": "node --test scripts/test-generic-capture.mjs",
     "smoke:browser-control": "node scripts/smoke-browser-control-e2e.mjs",
     "mcp:server": "node mcp-server.mjs",
     "agent:call": "node agent-client.mjs",
@@ -25,6 +26,11 @@
   },
   "devDependencies": {
     "esbuild": "^0.28.1",
+    "linkedom": "0.18.12",
     "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "defuddle": "0.19.2",
+    "dompurify": "3.4.12"
   }
 }

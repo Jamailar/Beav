@@ -1,5 +1,10 @@
 import './browserControlBackground.js';
 import { getNativeStatus, requestNativeHost } from './background/nativeTransport.js';
+import { genericCaptureCoordinator, clearGenericCaptureCache } from './background/genericCaptureCoordinator.js';
+import {
+  buildKnowledgeEntryFromCaptureDocument,
+  buildKnowledgeEntryFromPagePayload,
+} from './capture/knowledgeEntryMapper.js';
 
 const NATIVE_KNOWLEDGE_ENDPOINT = Object.freeze({
   baseUrl: 'native://beav',
@@ -179,11 +184,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   pageStateCache.delete(tabId);
+  clearGenericCaptureCache(tabId);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'loading' || typeof changeInfo.url === 'string') {
     pageStateCache.delete(tabId);
+    clearGenericCaptureCache(tabId);
   }
 });
 
@@ -2444,17 +2451,6 @@ function keepPersistableMediaAsset(value) {
   return raw;
 }
 
-function replaceRichHtmlTokens(html, replacements) {
-  let output = String(html || '');
-  for (const item of Array.isArray(replacements) ? replacements : []) {
-    const token = normalizeText(item?.token);
-    const url = normalizeText(item?.url);
-    if (!token || !url) continue;
-    output = output.split(token).join(url);
-  }
-  return output;
-}
-
 function extractDomainFromUrl(value) {
   const raw = normalizeText(value);
   if (!raw) return '';
@@ -2657,50 +2653,16 @@ function buildSelectionEntry(payload) {
 }
 
 function buildPageLinkEntry(payload) {
-  const sourceUrl = normalizeText(payload?.url);
-  const sourceDomain = extractDomainFromUrl(sourceUrl);
-  const title = normalizeText(payload?.title) || '网页收藏';
-  const richHtmlDocument = replaceRichHtmlTokens(
-    payload?.richHtmlDocument,
-    payload?.richHtmlImageMap,
-  );
-  const kind = normalizeText(payload?.captureKind)
-    || (payload?.type === 'link-article' ? 'link-article' : 'webpage');
-  const text = normalizeText(payload?.text)
-    || normalizeText(payload?.excerpt)
-    || sourceUrl;
+  return buildKnowledgeEntryFromPagePayload(payload, pageLinkEntryHelpers());
+}
 
-  if (!sourceUrl) {
-    throw new Error('当前页面缺少可保存的链接地址');
-  }
-
+function pageLinkEntryHelpers() {
   return {
-    kind,
-    source: createKnowledgeSourceInput({
-      sourceUrl,
-      externalId: `page-${hashString(sourceUrl)}`,
-    }),
-    content: {
-      title,
-      author: normalizeText(payload?.author),
-      authorProfileUrl: normalizeText(payload?.authorProfileUrl) || undefined,
-      text,
-      excerpt: truncateText(payload?.excerpt || text, 180),
-      html: richHtmlDocument || undefined,
-      description: truncateText(text, 500),
-      siteName: normalizeText(payload?.siteName) || sourceDomain || undefined,
-      tags: Array.isArray(payload?.tags) ? payload.tags.filter(Boolean) : [],
-    },
-    assets: {
-      coverUrl: normalizeText(payload?.coverUrl) || undefined,
-      imageUrls: Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [],
-    },
-    options: {
-      dedupeKey: undefined,
-      allowUpdate: true,
-      summarize: false,
-      transcribe: false,
-    },
+    normalizeText,
+    truncateText,
+    hashString,
+    extractDomainFromUrl,
+    createKnowledgeSourceInput,
   };
 }
 
@@ -4177,11 +4139,31 @@ async function saveCurrentPageFromTab(tabId) {
 }
 
 async function saveCurrentPageLinkFromTab(tabId) {
-  const payload = await runExtraction(tabId, extractCurrentPageLinkPayload, { world: 'MAIN' });
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('当前页面内容提取失败，请刷新页面后重试');
+  const genericResult = await genericCaptureCoordinator.extract(tabId);
+  let entry;
+  if (genericResult.capture) {
+    entry = buildKnowledgeEntryFromCaptureDocument(genericResult.capture, pageLinkEntryHelpers());
+    pluginLog('generic-capture', {
+      tabId,
+      engine: genericResult.capture.engine,
+      status: genericResult.capture.status,
+      reason: genericResult.reason,
+    });
+  } else {
+    // This remains the established path for WeChat and every generic page that
+    // cannot safely produce enough readable content with Defuddle.
+    const payload = await runExtraction(tabId, extractCurrentPageLinkPayload, { world: 'MAIN' });
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('当前页面内容提取失败，请刷新页面后重试');
+    }
+    entry = buildPageLinkEntry(payload);
+    pluginLog('generic-capture-fallback', {
+      tabId,
+      reason: genericResult.reason,
+      error: genericResult.error || '',
+    });
   }
-  const response = await postKnowledgeEntry(buildPageLinkEntry(payload));
+  const response = await postKnowledgeEntry(entry);
   return {
     success: true,
     mode: 'page-link',

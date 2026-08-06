@@ -11,6 +11,7 @@ const scriptEntries = [
   'background.js',
   'browserControlContent.js',
   'captureRuntime.js',
+  'genericCaptureContent.js',
   'pageObserver.js',
   'pageRouteBridge.js',
   'popup.js',
@@ -21,6 +22,7 @@ const scriptEntries = [
 
 const copiedFiles = [
   'manifest.json',
+  'THIRD_PARTY_NOTICES.txt',
   'popup.css',
   'popup.html',
   'settings.css',

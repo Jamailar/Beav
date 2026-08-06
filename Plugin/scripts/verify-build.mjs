@@ -186,6 +186,8 @@ for (const file of collectDynamicScriptFiles(dynamicContentInjectionSource)) {
   await assertOutputFile(file);
 }
 await assertOutputFile('browserControlContent.js');
+await assertOutputFile('genericCaptureContent.js');
+await assertOutputFile('THIRD_PARTY_NOTICES.txt');
 await assertOutputFile('images/cursor-chat.png');
 
 for (const permission of ['debugger', 'nativeMessaging', 'webNavigation', 'tabGroups']) {
@@ -255,6 +257,16 @@ for (const contractText of ['allTextContents', 'isEnabled', 'textContent', 'retu
   );
 }
 
+const builtGenericCaptureContent = await readText(path.join(outputDir, 'genericCaptureContent.js'));
+for (const contractText of ['redbox:generic-capture', 'Defuddle', 'DOMPurify', 'blocked-or-login-page']) {
+  assert(
+    builtGenericCaptureContent.includes(contractText),
+    `Built genericCaptureContent should preserve generic extraction contract: ${contractText}`,
+  );
+}
+assert(builtBackground.includes('generic-capture-fallback'), 'Built background must retain the generic-capture legacy fallback');
+assert(builtBackground.includes('mp.weixin.qq.com'), 'Built background must retain WeChat legacy-capture protection');
+
 const browserClientPath = path.join(pluginRoot, 'scripts/browser-client.mjs');
 await exists(browserClientPath);
 const browserClientModule = await import(`${browserClientPath}?verify=${Date.now()}`);
@@ -264,4 +276,4 @@ for (const docName of ['browser-runtime.md', 'browser-playwright.md', 'browser-t
   assert(doc.includes('browser'), `${docName} should describe browser runtime behavior`);
 }
 
-console.log('Verified built extension manifest, page assets, dynamic scripts, browser-control contracts, browser-client runtime, and key content-script contracts.');
+console.log('Verified built extension manifest, page assets, dynamic scripts, browser-control contracts, generic-capture fallback contracts, browser-client runtime, and key content-script contracts.');
