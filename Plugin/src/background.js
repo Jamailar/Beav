@@ -1,5 +1,6 @@
 import './browserControlBackground.js';
-import { getNativeStatus, requestNativeHost } from './background/nativeTransport.js';
+import { getNativeStatus, requestNativeHost, shouldReportNativeConnectionFailure } from './background/nativeTransport.js';
+import { reportPluginError } from './background/diagnostics.js';
 import { genericCaptureCoordinator, clearGenericCaptureCache } from './background/genericCaptureCoordinator.js';
 import {
   buildKnowledgeEntryFromCaptureDocument,
@@ -40,6 +41,33 @@ const MENU_SELECTION_ID = 'redbox-save-selection';
 const MENU_LINK_ID = 'redbox-save-link';
 const MENU_IMAGE_ID = 'redbox-save-image';
 const MENU_VIDEO_ID = 'redbox-save-video';
+const PLUGIN_CAPTURE_MESSAGE_TYPES = new Set([
+  'save-xhs',
+  'xhs:download-current-note',
+  'xhs:download-current-note-zip',
+  'xhs:collect-current-comments',
+  'xhs:collect-current-blogger',
+  'xhs:collect-blogger-notes',
+  'account:bind-current-platform',
+  'xhs:collect-note-links',
+  'xhs:collect-visible-note-links',
+  'xhs:collect-keyword',
+  'xhs:export-current-note-json',
+  'save-douyin',
+  'save-youtube',
+  'save-zhihu-answer',
+  'save-zhihu-article',
+  'save-bilibili',
+  'save-kuaishou',
+  'save-tiktok',
+  'save-reddit',
+  'save-x',
+  'save-instagram',
+  'save-selection',
+  'save-page-auto',
+  'save-page-link',
+  'save-drag-image',
+]);
 const DEFAULT_PLUGIN_SETTINGS = {
   xhsIntervalMinSeconds: 3,
   xhsIntervalMaxSeconds: 6,
@@ -96,6 +124,16 @@ function pluginWarn(scope, details) {
 
 function pluginError(scope, details) {
   console.error(`[redbox-plugin][${scope}]`, details);
+}
+
+function isPluginCaptureMessageType(type) {
+  return PLUGIN_CAPTURE_MESSAGE_TYPES.has(String(type || ''));
+}
+
+function queuePluginDiagnostic(error, options = {}) {
+  void reportPluginError(error, options).catch((reportError) => {
+    console.warn('[redbox-plugin][diagnostics] report failed', reportError);
+  });
 }
 
 function pluginDebug(scope, details) {
@@ -223,6 +261,19 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       tabId: Number(tab?.id || 0) || null,
       error: describeError(error),
     });
+    queuePluginDiagnostic(error, {
+      category: 'plugin.capture',
+      event: 'plugin.capture.failed',
+      operation: 'context-menu.capture',
+      trigger: 'plugin_capture_error',
+      code: error?.code || 'CAPTURE_FAILED',
+      phase: error?.phase || 'capture',
+      sourceOrigin: tab?.url || '',
+      fields: {
+        menuItemId: String(info?.menuItemId || ''),
+        tabId: Number(tab?.id || 0) || null,
+      },
+    });
   });
 });
 
@@ -231,6 +282,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   void (async () => {
     try {
       const result = await handleMessage(message, sender);
+      if (result?.success === false && isPluginCaptureMessageType(message?.type)) {
+        queuePluginDiagnostic(result.error || '采集操作失败', {
+          category: 'plugin.capture',
+          event: 'plugin.capture.failed',
+          operation: `message:${String(message?.type || 'unknown')}`,
+          trigger: 'plugin_capture_error',
+          code: result.code || 'CAPTURE_FAILED',
+          phase: result.phase || 'capture',
+          sourceOrigin: sender?.tab?.url || message?.url || '',
+          fields: {
+            messageType: String(message?.type || 'unknown'),
+            tabId: Number(message?.tabId || sender?.tab?.id || 0) || null,
+            returnedFailure: true,
+          },
+        });
+      }
       sendResponse(result);
     } catch (error) {
       pluginError('runtime-message', {
@@ -238,6 +305,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         tabId: Number(message?.tabId || sender?.tab?.id || 0) || null,
         error: describeError(error),
       });
+      if (isPluginCaptureMessageType(message?.type)) {
+        queuePluginDiagnostic(error, {
+          category: 'plugin.capture',
+          event: 'plugin.capture.failed',
+          operation: `message:${String(message?.type || 'unknown')}`,
+          trigger: 'plugin_capture_error',
+          code: error?.code || 'CAPTURE_FAILED',
+          phase: error?.phase || 'capture',
+          sourceOrigin: sender?.tab?.url || message?.url || '',
+          fields: {
+            messageType: String(message?.type || 'unknown'),
+            tabId: Number(message?.tabId || sender?.tab?.id || 0) || null,
+          },
+        });
+      }
       sendResponse({
         success: false,
         error: error instanceof Error ? error.message : String(error),
@@ -1850,6 +1932,25 @@ async function runNextXhsTask() {
       result,
     });
     const logStatus = classifyXhsTaskResult(result);
+    if (logStatus === 'partial') {
+      queuePluginDiagnostic(result?.error || '采集任务部分失败', {
+        category: 'plugin.capture',
+        event: 'plugin.capture.partial_failure',
+        operation: `task:${String(task.type || 'unknown')}`,
+        trigger: 'plugin_capture_error',
+        code: 'CAPTURE_PARTIAL_FAILURE',
+        retryable: true,
+        sourceOrigin: await resolveTaskSourceOrigin(task),
+        fields: {
+          taskType: String(task.type || 'unknown'),
+          taskId: String(task.id || ''),
+          tabId: Number(task.tabId || 0) || null,
+          savedCount: Number(task.savedCount || result?.count || 0),
+          failedCount: Number(result?.failed || 0),
+          progress: task.progress || null,
+        },
+      });
+    }
     task.status = logStatus === 'success' ? 'completed' : logStatus;
     task.summary = summarizeXhsTaskResult(result);
     task.completedAt = new Date().toISOString();
@@ -1879,6 +1980,24 @@ async function runNextXhsTask() {
       savedCount,
       progress: task.progress || null,
     });
+    if (!cancelled) {
+      queuePluginDiagnostic(error, {
+        category: 'plugin.capture',
+        event: 'plugin.capture.failed',
+        operation: `task:${String(task.type || 'unknown')}`,
+        trigger: 'plugin_capture_error',
+        code: error?.code || 'CAPTURE_FAILED',
+        phase: error?.phase || 'capture',
+        sourceOrigin: await resolveTaskSourceOrigin(task),
+        fields: {
+          taskType: String(task.type || 'unknown'),
+          taskId: String(task.id || ''),
+          tabId: Number(task.tabId || 0) || null,
+          savedCount,
+          progress: task.progress || null,
+        },
+      });
+    }
     task.status = cancelled ? 'cancelled' : 'failed';
     task.error = message;
     task.summary = cancelled ? `采集已取消，已保存 ${savedCount} 条` : '';
@@ -1901,6 +2020,12 @@ async function runNextXhsTask() {
     publishXhsTaskQueueState();
     void runNextXhsTask();
   }
+}
+
+async function resolveTaskSourceOrigin(task) {
+  if (!task?.tabId) return task?.sourceOrigin || '';
+  const tab = await chrome.tabs.get(Number(task.tabId)).catch(() => null);
+  return tab?.url || task.sourceOrigin || '';
 }
 
 function sanitizeCaptureCheckpoint(entry) {
@@ -2206,6 +2331,21 @@ async function checkDesktopServer(forceRefresh = false) {
       retryable: error?.retryable === true,
       details: error?.details || error?.data || null,
     });
+    if (shouldReportNativeConnectionFailure(error, getNativeStatus())) {
+      queuePluginDiagnostic(error, {
+        category: 'plugin.connection',
+        event: 'plugin.connection.failed',
+        operation: 'desktop-health',
+        trigger: 'plugin_connection_error',
+        code: error?.code || 'NATIVE_REQUEST_FAILED',
+        phase: error?.phase || 'native_messaging',
+        retryable: error?.retryable === true,
+        fields: {
+          forceRefresh: forceRefresh === true,
+          details: error?.details || error?.data || null,
+        },
+      });
+    }
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
@@ -2220,13 +2360,18 @@ async function requestDesktopHealth() {
     : null;
   if (!bridge?.connected) {
     const error = new Error('Beav desktop bridge is not connected');
-    error.code = 'APP_BRIDGE_UNAVAILABLE';
+    error.code = bridge?.availability === 'bridge_error'
+      ? bridge.errorCode || 'DESKTOP_BRIDGE_ERROR'
+      : 'APP_BRIDGE_UNAVAILABLE';
     error.phase = 'bridge';
     error.retryable = true;
     error.details = {
       nativeHostReachable: host?.nativeConnected === true,
       bridgeConnected: bridge?.connected === true,
+      availability: bridge?.availability || 'app_not_running',
+      bridgeErrorCode: bridge?.errorCode || '',
       appVersion: bridge?.appVersion || '',
+      nativeState: getNativeStatus().state,
     };
     throw error;
   }

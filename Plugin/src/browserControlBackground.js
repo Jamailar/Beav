@@ -17,7 +17,8 @@ import { configureDynamicContentInjectionTelemetry, ensureContentScript, sendCon
 import { acceptFileChooser, configureFileChooserTelemetry, getFileChooserSnapshot, handleFileChooserCdpEvent, handleFileChooserDomEvent, setInputFiles, waitForFileChooser } from './background/fileChooserRuntime.js';
 import { listPageFrames } from './background/frameRuntime.js';
 import { CLIENT_HEARTBEAT_ALARM, TARGET_CLIENT_HEARTBEAT_ALARM, configureLifecycleGuard, ensureLifecycleInstallState, getBrowserClientHeartbeatState, getLifecycleStatus, handleLifecycleAlarm, maybeReloadForPendingUpdate, recordBrowserClientHeartbeat, recordLifecycleCleanupResult, registerLifecycleUpdateListener, restorePendingUpdate, startClientHeartbeat } from './background/lifecycleGuard.js';
-import { NATIVE_HOST_DEFAULT, NATIVE_RECONNECT_ALARM, configureNativeTransport, connectNativeTransport as connectNativeTransportRaw, disconnectNativeTransport, getNativeStatus, postNativeMessage, refreshNativeStatus, requestNativeHost as requestNativeHostRaw, restoreNativeStatus, sendNativeNotification } from './background/nativeTransport.js';
+import { NATIVE_HOST_DEFAULT, NATIVE_RECONNECT_ALARM, configureNativeTransport, connectNativeTransport as connectNativeTransportRaw, disconnectNativeTransport, getNativeStatus, postNativeMessage, refreshNativeStatus, requestNativeHost as requestNativeHostRaw, restoreNativeStatus, sendNativeNotification, shouldReportNativeConnectionFailure } from './background/nativeTransport.js';
+import { PLUGIN_DIAGNOSTICS_RETRY_ALARM, drainPluginDiagnostics, reportPluginError } from './background/diagnostics.js';
 import { CONTENT_PAGE_ASSETS_TYPE, bundlePageAssets, readPageAssetInventory } from './background/pageAssetRuntime.js';
 import { exportPage } from './background/pageExportRuntime.js';
 import { evaluatePageScript } from './background/pageScriptRuntime.js';
@@ -547,7 +548,33 @@ configureLifecycleGuard({
 configureNativeTransport({
   onMessage: handleNativeMessage,
   onStatusChange: (status) => {
+    const previousStatus = nativeStatus;
     nativeStatus = status;
+    if (status?.state === 'connected') {
+      return;
+    }
+    if (shouldReportNativeConnectionFailure(status?.error ? new Error(status.error) : null, status, previousStatus)) {
+      queuePluginDiagnostic(status?.error || new Error(`Native transport ${status?.state || 'failed'}`), {
+        category: 'plugin.connection',
+        event: 'plugin.connection.failed',
+        operation: 'native-transport',
+        trigger: 'plugin_connection_error',
+        code: status?.state === 'upgrade_required'
+          ? 'NATIVE_HOST_UPGRADE_REQUIRED'
+          : status?.state === 'bridge_error'
+            ? status?.handshake?.desktopBridge?.errorCode || 'DESKTOP_BRIDGE_ERROR'
+          : 'NATIVE_TRANSPORT_DISCONNECTED',
+        phase: 'native_transport',
+        fields: {
+          previousState: previousStatus?.state || 'unknown',
+          state: status?.state || 'unknown',
+          availability: status?.handshake?.desktopBridge?.availability || '',
+          bridgeErrorCode: status?.handshake?.desktopBridge?.errorCode || '',
+          reconnectAttempt: Number(status?.reconnectAttempt || 0),
+          retryable: status?.state === 'reconnecting' || status?.state === 'disconnected',
+        },
+      });
+    }
   },
   onTelemetry: (event) => browserEventBridge.publishNativeTransportEvent(event),
   getRegistration: async () => {
@@ -570,10 +597,19 @@ function detectBrowserFamily() {
   return 'unknown';
 }
 
+function queuePluginDiagnostic(error, options = {}) {
+  void reportPluginError(error, options).catch((reportError) => {
+    console.warn('[redbox-plugin][diagnostics] report failed', reportError);
+  });
+}
+
 registerLifecycleUpdateListener();
 registerSidePanelStatus();
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm?.name === PLUGIN_DIAGNOSTICS_RETRY_ALARM) {
+    void drainPluginDiagnostics().catch(() => {});
+  }
   if (alarm?.name === NATIVE_RECONNECT_ALARM) {
     void connectNativeTransport({ silent: true }).catch(() => {});
   }
@@ -1212,6 +1248,30 @@ async function clickUrl(url, options = {}) {
 }
 
 async function captureTabById(tabId, options = {}) {
+  try {
+    return await captureTabByIdInternal(tabId, options);
+  } catch (error) {
+    const tab = await chrome.tabs.get(Number(tabId)).catch(() => null);
+    queuePluginDiagnostic(error, {
+      category: 'plugin.capture',
+      event: 'plugin.capture.failed',
+      operation: 'capture.tab',
+      trigger: 'plugin_capture_error',
+      code: error?.code || 'CAPTURE_FAILED',
+      phase: error?.phase || 'capture',
+      sourceOrigin: tab?.url || options.sourceOrigin || '',
+      fields: {
+        tabId: Number(tabId) || null,
+        store: options.store !== false,
+        aiExtractionRequested: Boolean(options.aiInstruction),
+        scrollRequested: Boolean(options.options?.scroll),
+      },
+    });
+    throw error;
+  }
+}
+
+async function captureTabByIdInternal(tabId, options = {}) {
   const tab = await chrome.tabs.get(Number(tabId));
   if (!tab?.id || !isHttpUrl(tab.url)) {
     throw new Error('Tab is not capturable');
@@ -2093,6 +2153,7 @@ async function runBrowserAction(action, context = {}) {
       startedAt,
       completedAt: new Date().toISOString(),
     };
+    reportBrowserActionFailure(error, normalized, terminalBrowserError);
     return terminalResponse;
   } finally {
     if (activeRequest?.requestId && activeRequest.replayed !== true && activeRequest.duplicateActive !== true) {
@@ -2114,6 +2175,48 @@ async function runBrowserAction(action, context = {}) {
       await maybeReloadForPendingUpdate().catch(() => {});
     }
   }
+}
+
+function reportBrowserActionFailure(error, action = {}, browserError = {}) {
+  const actionType = String(action?.type || 'unknown');
+  const captureAction = isCaptureActionType(actionType);
+  const connectionError = isBrowserConnectionError(error, browserError);
+  if (!captureAction && connectionError && !shouldReportNativeConnectionFailure(error, getNativeStatus())) return;
+  if (!captureAction && !connectionError) return;
+  queuePluginDiagnostic(error, {
+    category: captureAction ? 'plugin.capture' : 'plugin.connection',
+    event: captureAction ? 'plugin.capture.failed' : 'plugin.connection.failed',
+    operation: captureAction ? 'capture.tab' : actionType,
+    trigger: captureAction ? 'plugin_capture_error' : 'plugin_connection_error',
+    code: browserError?.code || error?.code || (captureAction ? 'CAPTURE_FAILED' : 'BROWSER_ACTION_FAILED'),
+    phase: error?.phase || (captureAction ? 'capture' : 'browser_action'),
+    sourceOrigin: action?.origin || action?.url || '',
+    fields: {
+      actionType,
+      browserErrorCode: browserError?.code || 'BROWSER_ACTION_FAILED',
+      retryable: browserError?.retryable === true,
+      userActionRequired: browserError?.userActionRequired === true,
+      tabId: Number.isInteger(Number(action?.tabId)) ? Number(action.tabId) : null,
+      targetPresent: Boolean(action?.targetId),
+    },
+  });
+}
+
+function isCaptureActionType(actionType) {
+  return actionType === 'research.run'
+    || actionType === 'page.read'
+    || actionType === 'page.frames'
+    || actionType === 'page.domSnapshot'
+    || actionType.startsWith('capture.')
+    || actionType.startsWith('extract.')
+    || actionType.includes('research');
+}
+
+function isBrowserConnectionError(error, browserError = {}) {
+  const code = String(browserError?.code || error?.code || '').toUpperCase();
+  const message = describeErrorMessage(error).toLowerCase();
+  return /TIMEOUT|DISCONNECT|CONNECTION|PROTOCOL|BRIDGE|NATIVE|TARGET|CDP/.test(code)
+    || /native host|desktop bridge|browser instance|cdp|connection|disconnected|timed out|timeout|protocol/.test(message);
 }
 
 function buildBrowserActionError(error, action = {}, session = {}, activeRequest = null) {

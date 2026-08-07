@@ -10,6 +10,7 @@ import {
   assertNativeHostVersionCompatibility,
   classifyDesktopBridgeHandshake,
   normalizeProductVersion,
+  shouldReportNativeConnectionFailure,
 } from '../src/background/nativeTransport.js';
 
 const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'redbox-browser-faults-'));
@@ -36,6 +37,7 @@ try {
       'native_host_patch_update_compatible',
       'native_host_minor_mismatch_rejected',
       'old_app_requires_upgrade',
+      'bridge_error_is_reportable_but_app_not_running_is_suppressed',
     ],
   }, null, 2));
 } finally {
@@ -72,8 +74,55 @@ function testDesktopBridgeHandshakeClassification() {
     'app_not_running',
   );
   assert.equal(
+    classifyDesktopBridgeHandshake({
+      desktopBridge: {
+        connected: false,
+        availability: 'bridge_error',
+        errorCode: 'DESKTOP_BRIDGE_PROTOCOL_MISMATCH',
+      },
+    }),
+    'bridge_error',
+  );
+  assert.equal(
     classifyDesktopBridgeHandshake({ desktopBridge: { connected: true } }),
     'connected',
+  );
+  assert.equal(
+    shouldReportNativeConnectionFailure(
+      new Error('Beav desktop app is not connected'),
+      { state: 'app_not_running' },
+    ),
+    false,
+  );
+  assert.equal(
+    shouldReportNativeConnectionFailure(
+      new Error('Beav desktop app is not connected'),
+      { state: 'app_not_running' },
+      { state: 'connected' },
+    ),
+    false,
+  );
+  assert.equal(
+    shouldReportNativeConnectionFailure(
+      new Error('Native host is unavailable'),
+      { state: 'disconnected' },
+    ),
+    false,
+  );
+  assert.equal(
+    shouldReportNativeConnectionFailure(
+      new Error('Native host disconnected'),
+      { state: 'disconnected' },
+      { state: 'connected' },
+    ),
+    true,
+  );
+  assert.equal(
+    shouldReportNativeConnectionFailure(
+      Object.assign(new Error('Bridge protocol mismatch'), { code: 'DESKTOP_BRIDGE_PROTOCOL_MISMATCH' }),
+      { state: 'upgrade_required' },
+    ),
+    true,
   );
 }
 

@@ -166,7 +166,9 @@ export async function connectNativeTransport(options = {}) {
   const desktopBridgeConnected = connectionState === 'connected';
   const connectionError = connectionState === 'upgrade_required'
     ? '当前 Beav 版本不支持 Desktop Bridge，请升级 Beav'
-    : (desktopBridgeConnected ? '' : 'Beav desktop app is not connected');
+    : connectionState === 'bridge_error'
+      ? `Beav Desktop Bridge handshake failed: ${handshake?.desktopBridge?.errorCode || 'unknown'}`
+      : (desktopBridgeConnected ? '' : 'Beav desktop app is not connected');
   recordNativeTelemetry(connectionState, {
     hostName,
     handshake: true,
@@ -209,7 +211,36 @@ export function classifyDesktopBridgeHandshake(handshake = {}) {
   if (!handshake?.desktopBridge || typeof handshake.desktopBridge !== 'object') {
     return 'upgrade_required';
   }
+  if (handshake.desktopBridge.availability === 'bridge_error') {
+    return 'bridge_error';
+  }
   return handshake.desktopBridge.connected === true ? 'connected' : 'app_not_running';
+}
+
+export function shouldReportNativeConnectionFailure(error = null, status = nativeStatus, previousStatus = null) {
+  const currentState = String(status?.state || '').trim().toLowerCase();
+  const previousState = String(previousStatus?.state || '').trim().toLowerCase();
+  const availability = String(status?.handshake?.desktopBridge?.availability || '').trim().toLowerCase();
+  const code = String(error?.code || error?.data?.code || '').trim().toUpperCase();
+
+  if (
+    currentState === 'app_not_running'
+    || (availability === 'app_not_running' && currentState !== 'connected')
+    || (code === 'APP_NOT_RUNNING' && currentState !== 'connected')
+    || (code === 'APP_BRIDGE_UNAVAILABLE' && currentState !== 'connected')
+  ) {
+    return false;
+  }
+  if (
+    currentState === 'upgrade_required'
+    || currentState === 'bridge_error'
+    || (availability === 'bridge_error'
+      && (currentState === 'connected' || currentState === 'bridge_error' || previousState === 'connected'))
+    || /UPGRADE|PROTOCOL_MISMATCH|AUTHENTICATION_FAILED|VERSION_STALE/.test(code)
+  ) {
+    return true;
+  }
+  return currentState === 'connected' || previousState === 'connected';
 }
 
 export function normalizeProductVersion(value = '') {
@@ -398,7 +429,9 @@ async function runNativeReconnectAttempt(hostName = '') {
         handshake,
         error: connectionState === 'upgrade_required'
           ? '当前 Beav 版本不支持 Desktop Bridge，请升级 Beav'
-          : 'Beav desktop app is not connected',
+          : connectionState === 'bridge_error'
+            ? `Beav Desktop Bridge handshake failed: ${handshake?.desktopBridge?.errorCode || 'unknown'}`
+            : 'Beav desktop app is not connected',
         nextRetryMs: NATIVE_RECONNECT_DELAY_MS,
       });
     } catch (error) {
