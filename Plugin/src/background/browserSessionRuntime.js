@@ -1,4 +1,4 @@
-import { getStoredMap, setStoredMap } from './storage.js';
+import { getStoredMap, mutateBrowserControlState } from './storage.js';
 
 export const BROWSER_SESSIONS_KEY = 'xwowBrowserDataAiSessions';
 export const BROWSER_SESSION_EVENTS_KEY = 'xwowBrowserDataAiSessionEvents';
@@ -29,11 +29,12 @@ export async function createBrowserSession(owner = 'manual_repair', metadata = {
     status: 'active',
   };
   session.currentTurnId = session.turnId;
-  const sessions = await getStoredMap(BROWSER_SESSIONS_KEY);
-  sessions[session.sessionId] = session;
-  await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
+  const mutation = await mutateBrowserSessions((sessions) => {
+    sessions[session.sessionId] = session;
+    return { session };
+  });
   const sessionEvent = await recordBrowserSessionEvent('session.created', session, { metadata });
-  return { success: true, session, sessionEvent };
+  return { success: true, session, sessionEvent, stateRevision: mutation.stateRevision };
 }
 
 export async function ensureBrowserSession(sessionId, owner = 'manual_repair', metadata = {}, options = {}) {
@@ -66,10 +67,24 @@ export async function ensureBrowserSession(sessionId, owner = 'manual_repair', m
     status: 'active',
     restoredFromEndedSession: Boolean(existing),
   };
-  sessions[id] = session;
-  await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
+  const mutation = await mutateBrowserSessions((nextSessions) => {
+    const current = normalizeSessionRuntimeState(nextSessions[id]);
+    if (current?.status === 'active') {
+      return { session: current, racedWithActiveSession: true };
+    }
+    nextSessions[id] = session;
+    return { session };
+  });
+  if (mutation.racedWithActiveSession) {
+    const current = mutation.session;
+    const nextTurnId = String(options.turnId || current.currentTurnId || current.turnId || '');
+    if (nextTurnId && current.currentTurnId !== nextTurnId) {
+      return await beginBrowserSessionTurn(id, nextTurnId, options.reason || 'session_ensured');
+    }
+    return { success: true, session: current, sessionEvent: null, created: false, stateRevision: mutation.stateRevision };
+  }
   const sessionEvent = await recordBrowserSessionEvent(existing ? 'session.restored' : 'session.created', session, { metadata, reason: options.reason || 'session_ensured' });
-  return { success: true, session, sessionEvent, created: true };
+  return { success: true, session, sessionEvent, created: true, stateRevision: mutation.stateRevision };
 }
 
 export async function getBrowserSession(sessionId) {
@@ -86,203 +101,228 @@ export async function listBrowserSessions() {
 
 export async function nameBrowserSession(sessionId, name) {
   if (!sessionId) throw new Error('nameSession requires sessionId');
-  const sessions = await getStoredMap(BROWSER_SESSIONS_KEY);
-  const session = normalizeSessionRuntimeState(sessions[sessionId]);
-  if (!session) throw new Error(`session not found: ${sessionId}`);
-  session.name = String(name || '').slice(0, 120);
-  session.updatedAt = new Date().toISOString();
-  sessions[sessionId] = session;
-  await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
+  const mutation = await mutateBrowserSessions((sessions) => {
+    const session = normalizeSessionRuntimeState(sessions[sessionId]);
+    if (!session) throw new Error(`session not found: ${sessionId}`);
+    session.name = String(name || '').slice(0, 120);
+    session.updatedAt = new Date().toISOString();
+    sessions[sessionId] = session;
+    return { session };
+  });
+  const session = mutation.session;
   const sessionEvent = await recordBrowserSessionEvent('session.named', session, { name: session.name });
-  return { success: true, session, sessionEvent };
+  return { success: true, session, sessionEvent, stateRevision: mutation.stateRevision };
 }
 
 export async function markTurnEnded(sessionId, turnId) {
   if (!sessionId) throw new Error('turnEnded requires sessionId');
-  const sessions = await getStoredMap(BROWSER_SESSIONS_KEY);
-  const session = normalizeSessionRuntimeState(sessions[sessionId]);
-  if (!session) throw new Error(`session not found: ${sessionId}`);
-  session.lastTurnEndedAt = new Date().toISOString();
-  session.lastTurnId = String(turnId || session.turnId || '');
-  if (!session.lastTurnId || session.currentTurnId === session.lastTurnId || session.turnId === session.lastTurnId) {
-    session.currentTurnId = null;
-    session.activeRequests = {};
-    session.activeRequestCount = 0;
-  }
-  sessions[sessionId] = session;
-  await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
+  const mutation = await mutateBrowserSessions((sessions) => {
+    const session = normalizeSessionRuntimeState(sessions[sessionId]);
+    if (!session) throw new Error(`session not found: ${sessionId}`);
+    session.lastTurnEndedAt = new Date().toISOString();
+    session.lastTurnId = String(turnId || session.turnId || '');
+    if (!session.lastTurnId || session.currentTurnId === session.lastTurnId || session.turnId === session.lastTurnId) {
+      session.currentTurnId = null;
+      session.activeRequests = {};
+      session.activeRequestCount = 0;
+    }
+    session.updatedAt = session.lastTurnEndedAt;
+    sessions[sessionId] = session;
+    return { session };
+  });
+  const session = mutation.session;
   const sessionEvent = await recordBrowserSessionEvent('turn.ended', session, { turnId: session.lastTurnId });
-  return { success: true, session, sessionEvent };
+  return { success: true, session, sessionEvent, stateRevision: mutation.stateRevision };
 }
 
 export async function beginBrowserSessionTurn(sessionId, turnId, reason = 'browser_action') {
   if (!sessionId) throw new Error('beginTurn requires sessionId');
   const nextTurnId = String(turnId || `turn-${Date.now().toString(36)}`);
   if (!nextTurnId) throw new Error('beginTurn requires turnId');
-  const sessions = await getStoredMap(BROWSER_SESSIONS_KEY);
-  const session = normalizeSessionRuntimeState(sessions[sessionId]);
-  if (!session) throw new Error(`session not found: ${sessionId}`);
-  if (session.status !== 'active') throw new Error(`session is not active: ${sessionId}`);
-  const alreadyCurrentTurn = session.currentTurnId === nextTurnId;
-  session.turnId = nextTurnId;
-  session.currentTurnId = nextTurnId;
-  session.lastTurnStartedAt = new Date().toISOString();
-  session.lastTurnStartReason = String(reason || 'browser_action');
-  session.updatedAt = session.lastTurnStartedAt;
-  sessions[sessionId] = session;
-  await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
+  const mutation = await mutateBrowserSessions((sessions) => {
+    const session = normalizeSessionRuntimeState(sessions[sessionId]);
+    if (!session) throw new Error(`session not found: ${sessionId}`);
+    if (session.status !== 'active') throw new Error(`session is not active: ${sessionId}`);
+    const alreadyCurrentTurn = session.currentTurnId === nextTurnId;
+    session.turnId = nextTurnId;
+    session.currentTurnId = nextTurnId;
+    session.lastTurnStartedAt = new Date().toISOString();
+    session.lastTurnStartReason = String(reason || 'browser_action');
+    session.updatedAt = session.lastTurnStartedAt;
+    sessions[sessionId] = session;
+    return { session, alreadyCurrentTurn };
+  });
+  const session = mutation.session;
+  const alreadyCurrentTurn = mutation.alreadyCurrentTurn;
   if (alreadyCurrentTurn) return { success: true, session, sessionEvent: null, alreadyCurrentTurn: true };
   const sessionEvent = await recordBrowserSessionEvent('turn.started', session, { turnId: nextTurnId, reason });
-  return { success: true, session, sessionEvent, alreadyCurrentTurn: false };
+  return { success: true, session, sessionEvent, alreadyCurrentTurn: false, stateRevision: mutation.stateRevision };
 }
 
 export async function startBrowserSessionRequest(sessionId, request = {}) {
   if (!sessionId) throw new Error('startRequest requires sessionId');
-  const sessions = await getStoredMap(BROWSER_SESSIONS_KEY);
-  const session = normalizeSessionRuntimeState(sessions[sessionId]);
-  if (!session) throw new Error(`session not found: ${sessionId}`);
-  if (session.status !== 'active') throw new Error(`session is not active: ${sessionId}`);
-  if (!session.currentTurnId) {
-    session.currentTurnId = String(request.turnId || `turn-${Date.now().toString(36)}`);
-    session.turnId = session.currentTurnId;
-  } else if (request.turnId && session.currentTurnId !== String(request.turnId)) {
-    session.currentTurnId = String(request.turnId);
-    session.turnId = session.currentTurnId;
-  }
   const requestId = String(request.requestId || `browser-request-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`);
-  if (session.activeRequests[requestId]) {
-    return {
-      success: false,
-      duplicateActive: true,
+  const mutation = await mutateBrowserSessions((sessions) => {
+    const session = normalizeSessionRuntimeState(sessions[sessionId]);
+    if (!session) throw new Error(`session not found: ${sessionId}`);
+    if (session.status !== 'active') throw new Error(`session is not active: ${sessionId}`);
+    if (!session.currentTurnId) {
+      session.currentTurnId = String(request.turnId || `turn-${Date.now().toString(36)}`);
+      session.turnId = session.currentTurnId;
+    } else if (request.turnId && session.currentTurnId !== String(request.turnId)) {
+      session.currentTurnId = String(request.turnId);
+      session.turnId = session.currentTurnId;
+    }
+    if (session.activeRequests[requestId]) {
+      return {
+        success: false,
+        duplicateActive: true,
+        requestId,
+        session,
+        activeRequest: session.activeRequests[requestId],
+      };
+    }
+    const replay = session.recentRequests?.[requestId];
+    if (replay?.terminal === true) {
+      return {
+        success: true,
+        replayed: true,
+        requestId,
+        session,
+        response: replay.response || null,
+        responsePersisted: replay.responsePersisted === true,
+        terminalState: replay.terminalState || '',
+      };
+    }
+    const startedAt = new Date().toISOString();
+    session.activeRequests[requestId] = {
       requestId,
-      session,
-      activeRequest: session.activeRequests[requestId],
+      action: String(request.action || ''),
+      tabId: normalizeTabId(request.tabId),
+      startedAt,
     };
-  }
-  const replay = session.recentRequests?.[requestId];
-  if (replay?.terminal === true) {
-    const sessionEvent = await recordBrowserSessionEvent('request.replayed', session, {
+    session.activeRequestCount = Object.keys(session.activeRequests).length;
+    session.lastRequestStartedAt = startedAt;
+    session.updatedAt = startedAt;
+    if (session.activeRequests[requestId].tabId) {
+      session.activeTabId = session.activeRequests[requestId].tabId;
+      session.ownedTabIds = addOwnedTabId(session.ownedTabIds, session.activeRequests[requestId].tabId);
+    }
+    sessions[sessionId] = session;
+    return { success: true, requestId, session };
+  });
+  const result = mutation.result;
+  if (result.duplicateActive === true) return { ...result, stateRevision: mutation.stateRevision };
+  if (result.replayed === true) {
+    const sessionEvent = await recordBrowserSessionEvent('request.replayed', result.session, {
       requestId,
-      action: replay.action || String(request.action || ''),
-      terminalState: replay.terminalState || '',
-      responsePersisted: replay.responsePersisted === true,
+      action: result.session.recentRequests?.[requestId]?.action || String(request.action || ''),
+      terminalState: result.terminalState || '',
+      responsePersisted: result.responsePersisted === true,
     });
-    return {
-      success: true,
-      replayed: true,
-      requestId,
-      session,
-      response: replay.response || null,
-      responsePersisted: replay.responsePersisted === true,
-      terminalState: replay.terminalState || '',
-      sessionEvent,
-    };
+    return { ...result, sessionEvent, stateRevision: mutation.stateRevision };
   }
-  const startedAt = new Date().toISOString();
-  session.activeRequests[requestId] = {
-    requestId,
-    action: String(request.action || ''),
-    tabId: normalizeTabId(request.tabId),
-    startedAt,
-  };
-  session.activeRequestCount = Object.keys(session.activeRequests).length;
-  session.lastRequestStartedAt = startedAt;
-  session.updatedAt = startedAt;
-  if (session.activeRequests[requestId].tabId) {
-    session.activeTabId = session.activeRequests[requestId].tabId;
-    session.ownedTabIds = addOwnedTabId(session.ownedTabIds, session.activeRequests[requestId].tabId);
-  }
-  sessions[sessionId] = session;
-  await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
+  const session = result.session;
   const sessionEvent = await recordBrowserSessionEvent('request.started', session, {
     requestId,
     action: session.activeRequests[requestId].action,
     tabId: session.activeRequests[requestId].tabId,
   });
-  return { success: true, requestId, session, sessionEvent };
+  return { success: true, requestId, session, sessionEvent, stateRevision: mutation.stateRevision };
 }
 
 export async function finishBrowserSessionRequest(sessionId, requestId, result = {}) {
   if (!sessionId) return { success: false, error: 'Missing sessionId' };
-  const sessions = await getStoredMap(BROWSER_SESSIONS_KEY);
-  const session = normalizeSessionRuntimeState(sessions[sessionId]);
-  if (!session) return { success: true, finished: false };
-  const id = String(requestId || '');
-  const activeRequest = id ? session.activeRequests[id] : null;
-  if (id && session.activeRequests[id]) {
-    session.activeRequests[id] = {
-      ...session.activeRequests[id],
-      finishedAt: new Date().toISOString(),
-      status: result.success === false ? 'failed' : 'completed',
-      error: result.error || '',
-    };
-    delete session.activeRequests[id];
-  } else if (!id) {
-    const [oldestId] = Object.keys(session.activeRequests);
-    if (oldestId) delete session.activeRequests[oldestId];
-  }
-  if (id && activeRequest && result.persistResult !== false) {
-    const persistedResponse = persistableBrowserResponse(result.response);
-    session.recentRequests[id] = {
-      requestId: id,
-      action: activeRequest.action || '',
-      tabId: activeRequest.tabId || null,
-      startedAt: activeRequest.startedAt || '',
-      finishedAt: new Date().toISOString(),
-      terminal: true,
-      terminalState: result.cancelled === true ? 'cancelled' : result.success === false ? 'failed' : 'completed',
-      error: result.error || '',
-      browserError: result.browserError || null,
-      response: persistedResponse.response,
-      responsePersisted: persistedResponse.persisted,
-    };
-    session.recentRequests = retainRecentRequests(session.recentRequests);
-  }
-  session.activeRequestCount = Object.keys(session.activeRequests).length;
-  session.lastRequestFinishedAt = new Date().toISOString();
-  session.updatedAt = session.lastRequestFinishedAt;
-  sessions[sessionId] = session;
-  await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
+  const mutation = await mutateBrowserSessions((sessions) => {
+    const session = normalizeSessionRuntimeState(sessions[sessionId]);
+    if (!session) return { success: true, finished: false };
+    const id = String(requestId || '');
+    const activeRequest = id ? session.activeRequests[id] : null;
+    if (id && session.activeRequests[id]) {
+      session.activeRequests[id] = {
+        ...session.activeRequests[id],
+        finishedAt: new Date().toISOString(),
+        status: result.success === false ? 'failed' : 'completed',
+        error: result.error || '',
+      };
+      delete session.activeRequests[id];
+    } else if (!id) {
+      const [oldestId] = Object.keys(session.activeRequests);
+      if (oldestId) delete session.activeRequests[oldestId];
+    }
+    if (id && activeRequest && result.persistResult !== false) {
+      const persistedResponse = persistableBrowserResponse(result.response);
+      session.recentRequests[id] = {
+        requestId: id,
+        action: activeRequest.action || '',
+        tabId: activeRequest.tabId || null,
+        startedAt: activeRequest.startedAt || '',
+        finishedAt: new Date().toISOString(),
+        terminal: true,
+        terminalState: result.cancelled === true ? 'cancelled' : result.success === false ? 'failed' : 'completed',
+        error: result.error || '',
+        browserError: result.browserError || null,
+        response: persistedResponse.response,
+        responsePersisted: persistedResponse.persisted,
+      };
+      session.recentRequests = retainRecentRequests(session.recentRequests);
+    }
+    session.activeRequestCount = Object.keys(session.activeRequests).length;
+    session.lastRequestFinishedAt = new Date().toISOString();
+    session.updatedAt = session.lastRequestFinishedAt;
+    sessions[sessionId] = session;
+    return { success: true, finished: true, session, id };
+  });
+  const outcome = mutation.result;
+  if (outcome.finished === false) return { ...outcome, stateRevision: mutation.stateRevision };
+  const session = outcome.session;
+  const id = outcome.id;
   const sessionEvent = await recordBrowserSessionEvent('request.finished', session, {
     requestId: id,
     status: result.success === false ? 'failed' : 'completed',
     error: result.error || '',
   });
-  return { success: true, finished: true, session, sessionEvent };
+  return { success: true, finished: true, session, sessionEvent, stateRevision: mutation.stateRevision };
 }
 
 export async function setBrowserSessionOwnedTab(sessionId, tabId, reason = 'tab_claimed') {
   const id = normalizeTabId(tabId);
   if (!sessionId || !id) return { success: false, updated: false };
-  const sessions = await getStoredMap(BROWSER_SESSIONS_KEY);
-  const session = normalizeSessionRuntimeState(sessions[sessionId]);
-  if (!session) return { success: false, updated: false };
-  const updatedAt = new Date().toISOString();
-  session.activeTabId = id;
-  session.ownedTabIds = addOwnedTabId(session.ownedTabIds, id);
-  session.lastOwnedTabUpdatedAt = updatedAt;
-  session.lastOwnedTabUpdateReason = String(reason || 'tab_claimed');
-  session.updatedAt = updatedAt;
-  sessions[sessionId] = session;
-  await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
+  const mutation = await mutateBrowserSessions((sessions) => {
+    const session = normalizeSessionRuntimeState(sessions[sessionId]);
+    if (!session) return { success: false, updated: false };
+    const updatedAt = new Date().toISOString();
+    session.activeTabId = id;
+    session.ownedTabIds = addOwnedTabId(session.ownedTabIds, id);
+    session.lastOwnedTabUpdatedAt = updatedAt;
+    session.lastOwnedTabUpdateReason = String(reason || 'tab_claimed');
+    session.updatedAt = updatedAt;
+    sessions[sessionId] = session;
+    return { success: true, updated: true, session };
+  });
+  if (mutation.updated !== true) return mutation;
+  const session = mutation.session;
   const sessionEvent = await recordBrowserSessionEvent('tab.owned', session, { tabId: id, reason });
-  return { success: true, updated: true, session, sessionEvent };
+  return { success: true, updated: true, session, sessionEvent, stateRevision: mutation.stateRevision };
 }
 
 export async function clearBrowserSessionOwnedTabs(sessionId, reason = 'release_tabs') {
   if (!sessionId) return { success: false, updated: false };
-  const sessions = await getStoredMap(BROWSER_SESSIONS_KEY);
-  const session = normalizeSessionRuntimeState(sessions[sessionId]);
-  if (!session) return { success: true, updated: false };
-  session.ownedTabIds = [];
-  session.activeTabId = null;
-  session.lastOwnedTabUpdatedAt = new Date().toISOString();
-  session.lastOwnedTabUpdateReason = String(reason || 'release_tabs');
-  session.updatedAt = session.lastOwnedTabUpdatedAt;
-  sessions[sessionId] = session;
-  await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
+  const mutation = await mutateBrowserSessions((sessions) => {
+    const session = normalizeSessionRuntimeState(sessions[sessionId]);
+    if (!session) return { success: true, updated: false };
+    session.ownedTabIds = [];
+    session.activeTabId = null;
+    session.lastOwnedTabUpdatedAt = new Date().toISOString();
+    session.lastOwnedTabUpdateReason = String(reason || 'release_tabs');
+    session.updatedAt = session.lastOwnedTabUpdatedAt;
+    sessions[sessionId] = session;
+    return { success: true, updated: true, session };
+  });
+  if (mutation.updated !== true) return mutation;
+  const session = mutation.session;
   const sessionEvent = await recordBrowserSessionEvent('tabs.released', session, { reason });
-  return { success: true, updated: true, session, sessionEvent };
+  return { success: true, updated: true, session, sessionEvent, stateRevision: mutation.stateRevision };
 }
 
 export function sessionHasActiveRequests(session) {
@@ -291,112 +331,119 @@ export function sessionHasActiveRequests(session) {
 
 export async function endBrowserSession(sessionId) {
   if (!sessionId) return { success: false, error: 'Missing sessionId' };
-  const sessions = await getStoredMap(BROWSER_SESSIONS_KEY);
-  const session = normalizeSessionRuntimeState(sessions[sessionId]);
-  if (!session) return { success: true, ended: false };
-  session.status = 'ended';
-  session.activeRequests = {};
-  session.activeRequestCount = 0;
-  session.endedAt = new Date().toISOString();
-  sessions[sessionId] = session;
-  await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
+  const mutation = await mutateBrowserSessions((sessions) => {
+    const session = normalizeSessionRuntimeState(sessions[sessionId]);
+    if (!session) return { success: true, ended: false };
+    session.status = 'ended';
+    session.activeRequests = {};
+    session.activeRequestCount = 0;
+    session.endedAt = new Date().toISOString();
+    session.updatedAt = session.endedAt;
+    sessions[sessionId] = session;
+    return { success: true, ended: true, session };
+  });
+  if (mutation.ended !== true) return mutation;
+  const session = mutation.session;
   const sessionEvent = await recordBrowserSessionEvent('session.ended', session, { reason: session.endedReason || '' });
-  return { success: true, ended: true, session, sessionEvent };
+  return { success: true, ended: true, session, sessionEvent, stateRevision: mutation.stateRevision };
 }
 
 export async function stopActiveBrowserSessions(reason = 'stop_active_sessions') {
-  const sessions = await getStoredMap(BROWSER_SESSIONS_KEY);
-  const stoppedSessions = [];
-  const endedAt = new Date().toISOString();
-  for (const [sessionId, session] of Object.entries(sessions)) {
-    if (session?.status !== 'active') continue;
-    const stoppedSession = {
-      ...normalizeSessionRuntimeState(session),
-      status: 'ended',
-      activeRequests: {},
-      activeRequestCount: 0,
-      endedAt,
-      endedReason: String(reason || 'stop_active_sessions'),
-    };
-    sessions[sessionId] = stoppedSession;
-    stoppedSessions.push(stoppedSession);
-  }
-  if (stoppedSessions.length) {
-    await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
-  }
+  const mutation = await mutateBrowserSessions((sessions) => {
+    const stoppedSessions = [];
+    const endedAt = new Date().toISOString();
+    for (const [sessionId, storedSession] of Object.entries(sessions)) {
+      if (storedSession?.status !== 'active') continue;
+      const stoppedSession = {
+        ...normalizeSessionRuntimeState(storedSession),
+        status: 'ended',
+        activeRequests: {},
+        activeRequestCount: 0,
+        endedAt,
+        endedReason: String(reason || 'stop_active_sessions'),
+      };
+      sessions[sessionId] = stoppedSession;
+      stoppedSessions.push(stoppedSession);
+    }
+    return { stoppedSessions };
+  });
+  const stoppedSessions = mutation.stoppedSessions || [];
   const sessionEvents = [];
   for (const session of stoppedSessions) {
     sessionEvents.push(await recordBrowserSessionEvent('session.stopped', session, { reason: session.endedReason || reason }));
   }
-  return { success: true, stoppedSessions, sessionEvents };
+  return { success: true, stoppedSessions, sessionEvents, stateRevision: mutation.stateRevision };
 }
 
 export async function reconcileInterruptedBrowserRequests(reason = 'extension_runtime_resumed') {
-  const sessions = await getStoredMap(BROWSER_SESSIONS_KEY);
-  const reconciledSessions = [];
-  const interruptedRequests = [];
-  const interruptedAt = new Date().toISOString();
-  for (const [sessionId, storedSession] of Object.entries(sessions)) {
-    const session = normalizeSessionRuntimeState(storedSession);
-    const activeRequests = Object.values(session?.activeRequests || {});
-    if (!session || session.status !== 'active' || !activeRequests.length) continue;
-    const interruptedTurnId = String(session.currentTurnId || session.turnId || '');
-    for (const request of activeRequests) {
-      const requestId = String(request.requestId || '');
-      if (!requestId) continue;
-      const browserError = {
-        code: 'BROWSER_ACTION_CANCELLED',
-        message: 'Browser action was interrupted when the extension runtime restarted',
-        retryable: false,
-        userActionRequired: false,
-        browserInstanceId: '',
-        callId: requestId,
-        details: { reason, sessionId, turnId: interruptedTurnId, action: request.action || '', tabId: request.tabId || null },
-      };
-      const response = {
-        success: false,
-        sessionId,
-        turnId: interruptedTurnId,
-        action: request.action || '',
-        requestId,
-        browserError,
-        error: browserError.message,
-        startedAt: request.startedAt || '',
-        completedAt: interruptedAt,
-      };
-      session.recentRequests[requestId] = {
-        requestId,
-        action: request.action || '',
-        tabId: request.tabId || null,
-        startedAt: request.startedAt || '',
-        finishedAt: interruptedAt,
-        terminal: true,
-        terminalState: 'cancelled',
-        error: browserError.message,
-        browserError,
-        response,
-        responsePersisted: true,
-      };
-      interruptedRequests.push({ sessionId, turnId: interruptedTurnId, requestId, action: request.action || '', tabId: request.tabId || null });
+  const mutation = await mutateBrowserSessions((sessions) => {
+    const reconciledSessions = [];
+    const interruptedRequests = [];
+    const interruptedAt = new Date().toISOString();
+    for (const [sessionId, storedSession] of Object.entries(sessions)) {
+      const session = normalizeSessionRuntimeState(storedSession);
+      const activeRequests = Object.values(session?.activeRequests || {});
+      if (!session || session.status !== 'active' || !activeRequests.length) continue;
+      const interruptedTurnId = String(session.currentTurnId || session.turnId || '');
+      for (const request of activeRequests) {
+        const requestId = String(request.requestId || '');
+        if (!requestId) continue;
+        const browserError = {
+          code: 'BROWSER_ACTION_CANCELLED',
+          message: 'Browser action was interrupted when the extension runtime restarted',
+          retryable: false,
+          userActionRequired: false,
+          browserInstanceId: '',
+          callId: requestId,
+          details: { reason, sessionId, turnId: interruptedTurnId, action: request.action || '', tabId: request.tabId || null },
+        };
+        const response = {
+          success: false,
+          sessionId,
+          turnId: interruptedTurnId,
+          action: request.action || '',
+          requestId,
+          browserError,
+          error: browserError.message,
+          startedAt: request.startedAt || '',
+          completedAt: interruptedAt,
+        };
+        session.recentRequests[requestId] = {
+          requestId,
+          action: request.action || '',
+          tabId: request.tabId || null,
+          startedAt: request.startedAt || '',
+          finishedAt: interruptedAt,
+          terminal: true,
+          terminalState: 'cancelled',
+          error: browserError.message,
+          browserError,
+          response,
+          responsePersisted: true,
+        };
+        interruptedRequests.push({ sessionId, turnId: interruptedTurnId, requestId, action: request.action || '', tabId: request.tabId || null });
+      }
+      session.activeRequests = {};
+      session.activeRequestCount = 0;
+      session.recentRequests = retainRecentRequests(session.recentRequests);
+      session.lastTurnId = interruptedTurnId;
+      session.lastTurnInterruptedAt = interruptedAt;
+      session.lastTurnInterruptReason = String(reason || 'extension_runtime_resumed');
+      session.currentTurnId = null;
+      session.updatedAt = interruptedAt;
+      sessions[sessionId] = session;
+      reconciledSessions.push({ ...session, interruptedTurnId });
     }
-    session.activeRequests = {};
-    session.activeRequestCount = 0;
-    session.recentRequests = retainRecentRequests(session.recentRequests);
-    session.lastTurnId = interruptedTurnId;
-    session.lastTurnInterruptedAt = interruptedAt;
-    session.lastTurnInterruptReason = String(reason || 'extension_runtime_resumed');
-    session.currentTurnId = null;
-    session.updatedAt = interruptedAt;
-    sessions[sessionId] = session;
-    reconciledSessions.push({ ...session, interruptedTurnId });
-  }
-  if (reconciledSessions.length) await setStoredMap(BROWSER_SESSIONS_KEY, sessions);
+    return { reconciledSessions, interruptedRequests };
+  });
+  const reconciledSessions = mutation.reconciledSessions || [];
+  const interruptedRequests = mutation.interruptedRequests || [];
   const sessionEvents = [];
   for (const request of interruptedRequests) {
-    const session = sessions[request.sessionId] || {};
+    const session = reconciledSessions.find((entry) => entry.sessionId === request.sessionId) || {};
     sessionEvents.push(await recordBrowserSessionEvent('request.interrupted', session, { ...request, reason }));
   }
-  return { success: true, reason, reconciledSessions, interruptedRequests, sessionEvents };
+  return { success: true, reason, reconciledSessions, interruptedRequests, sessionEvents, stateRevision: mutation.stateRevision };
 }
 
 export async function listBrowserSessionEvents(options = {}) {
@@ -422,12 +469,15 @@ export async function recordBrowserSessionEvent(eventType, session = {}, payload
     emittedAt: new Date().toISOString(),
     payload,
   };
-  const events = await getStoredMap(BROWSER_SESSION_EVENTS_KEY);
-  events[event.id] = event;
-  const retained = Object.values(events)
-    .sort((a, b) => String(b.emittedAt || '').localeCompare(String(a.emittedAt || '')))
-    .slice(0, MAX_BROWSER_SESSION_EVENTS);
-  await setStoredMap(BROWSER_SESSION_EVENTS_KEY, Object.fromEntries(retained.map((item) => [item.id, item])));
+  await mutateBrowserControlState([BROWSER_SESSION_EVENTS_KEY], (maps) => {
+    const events = maps[BROWSER_SESSION_EVENTS_KEY];
+    events[event.id] = event;
+    const retained = Object.values(events)
+      .sort((a, b) => String(b.emittedAt || '').localeCompare(String(a.emittedAt || '')))
+      .slice(0, MAX_BROWSER_SESSION_EVENTS);
+    maps[BROWSER_SESSION_EVENTS_KEY] = Object.fromEntries(retained.map((item) => [item.id, item]));
+    return { event };
+  });
   notifyBrowserSessionEventSubscribers(event);
   return event;
 }
@@ -452,6 +502,17 @@ function normalizeSessionRuntimeState(session) {
     activeRequests,
     activeRequestCount: Object.keys(activeRequests).length,
     recentRequests: normalizeRecentRequests(session.recentRequests),
+  };
+}
+
+async function mutateBrowserSessions(reducer) {
+  const mutation = await mutateBrowserControlState([BROWSER_SESSIONS_KEY], (maps, context) => (
+    reducer(maps[BROWSER_SESSIONS_KEY], context)
+  ));
+  return {
+    ...(mutation.result && typeof mutation.result === 'object' ? mutation.result : {}),
+    result: mutation.result,
+    stateRevision: mutation.stateRevision,
   };
 }
 

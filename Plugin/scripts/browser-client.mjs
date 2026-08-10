@@ -351,6 +351,9 @@ class BrowserFacade {
     this.capabilities = new CapabilityCollection(() => this.runtime.transport.listTools());
     this.tabs = new TabsFacade(runtime);
     this.user = new BrowserUserFacade(runtime);
+    this.viewport = new BrowserViewportFacade(runtime);
+    this.visibility = new BrowserVisibilityFacade(runtime);
+    this.notifications = new BrowserNotificationFacade(runtime);
   }
 
   async documentation() {
@@ -390,6 +393,24 @@ class BrowserUserFacade {
     const result = await this.runtime.callTool('history.search', normalizeLimitOptions(options));
     const data = unwrapActionData(result);
     return data?.history || data?.items || data?.entries || [];
+  }
+
+  async bookmarks(options = {}) {
+    const result = await this.runtime.callTool('bookmarks.list', normalizeLimitOptions(options));
+    const data = unwrapActionData(result);
+    return data?.bookmarks || data?.items || [];
+  }
+
+  async topSites(options = {}) {
+    const result = await this.runtime.callTool('topSites.list', normalizeLimitOptions(options));
+    const data = unwrapActionData(result);
+    return data?.topSites || data?.items || [];
+  }
+
+  async recentlyClosed(options = {}) {
+    const result = await this.runtime.callTool('sessions.recentlyClosed', normalizeLimitOptions(options));
+    const data = unwrapActionData(result);
+    return data?.sessions || data?.items || [];
   }
 }
 
@@ -436,6 +457,10 @@ class TabFacade {
     this.dom_cua = new DomCuaFacade(runtime, this.id);
     this.clipboard = new ClipboardFacade(runtime, this.id);
     this.dev = new DevFacade(runtime, this.id);
+    this.cdp = new CdpFacade(runtime, this.id);
+    this.assets = new PageAssetsFacade(runtime, this.id);
+    this.webmcp = new WebMcpFacade(runtime, this.id);
+    this.auth = new BrowserAuthFacade(runtime, this.id);
   }
 
   async goto(url, options = {}) {
@@ -456,6 +481,14 @@ class TabFacade {
 
   async close() {
     await this.runtime.callTool('tab.close', { tabId: asNumber(this.id) });
+  }
+
+  async focus(options = {}) {
+    return unwrapActionData(await this.runtime.callTool('tab.activate', { tabId: asNumber(this.id), ...options }));
+  }
+
+  async mark(mark, options = {}) {
+    return unwrapActionData(await this.runtime.callTool('tab.mark', { tabId: asNumber(this.id), mark, ...options }));
   }
 
   async url() {
@@ -483,27 +516,27 @@ class PlaywrightFacade {
   }
 
   locator(selector) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.scope, selector });
+    return new LocatorFacade(this.runtime, this.tabId, locatorTarget(this.scope, locatorLeaf('css', { selector })));
   }
 
   getByRole(role, options = {}) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.scope, role, name: options.name, exact: options.exact });
+    return new LocatorFacade(this.runtime, this.tabId, locatorTarget(this.scope, locatorLeaf('role', { role, name: options.name, exact: options.exact })));
   }
 
   getByText(text, options = {}) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.scope, text, exact: options.exact });
+    return new LocatorFacade(this.runtime, this.tabId, locatorTarget(this.scope, locatorLeaf('text', { text, exact: options.exact })));
   }
 
   getByLabel(label, options = {}) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.scope, label, exact: options.exact });
+    return new LocatorFacade(this.runtime, this.tabId, locatorTarget(this.scope, locatorLeaf('label', { label, exact: options.exact })));
   }
 
   getByPlaceholder(placeholder, options = {}) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.scope, placeholder, exact: options.exact });
+    return new LocatorFacade(this.runtime, this.tabId, locatorTarget(this.scope, locatorLeaf('placeholder', { placeholder, exact: options.exact })));
   }
 
   getByTestId(testId) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.scope, testId });
+    return new LocatorFacade(this.runtime, this.tabId, locatorTarget(this.scope, locatorLeaf('testId', { testId })));
   }
 
   frameLocator(frameSelector) {
@@ -555,47 +588,67 @@ class LocatorFacade {
   }
 
   locator(selector) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.target, selector });
+    return this.withAst(locatorWithin(this.locatorAst(), locatorLeaf('css', { selector })));
   }
 
   getByRole(role, options = {}) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.target, role, name: options.name, exact: options.exact });
+    return this.withAst(locatorWithin(this.locatorAst(), locatorLeaf('role', { role, name: options.name, exact: options.exact })));
   }
 
   getByText(text, options = {}) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.target, text, exact: options.exact });
+    return this.withAst(locatorWithin(this.locatorAst(), locatorLeaf('text', { text, exact: options.exact })));
   }
 
   getByLabel(label, options = {}) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.target, label, exact: options.exact });
+    return this.withAst(locatorWithin(this.locatorAst(), locatorLeaf('label', { label, exact: options.exact })));
   }
 
   getByPlaceholder(placeholder, options = {}) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.target, placeholder, exact: options.exact });
+    return this.withAst(locatorWithin(this.locatorAst(), locatorLeaf('placeholder', { placeholder, exact: options.exact })));
   }
 
   getByTestId(testId) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.target, testId });
+    return this.withAst(locatorWithin(this.locatorAst(), locatorLeaf('testId', { testId })));
   }
 
   filter(options = {}) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.target, ...options });
+    const has = locatorAstFrom(options.has);
+    const hasNot = locatorAstFrom(options.hasNot);
+    return this.withAst({
+      kind: 'filter',
+      base: this.locatorAst(),
+      ...(options.hasText != null ? { hasText: String(options.hasText) } : {}),
+      ...(options.hasNotText != null ? { hasNotText: String(options.hasNotText) } : {}),
+      ...(has ? { has } : {}),
+      ...(hasNot ? { hasNot } : {}),
+      ...(typeof options.visible === 'boolean' ? { visible: options.visible } : {}),
+    });
+  }
+
+  and(other) {
+    return this.withAst({ kind: 'and', items: [this.locatorAst(), requireLocatorAst(other, 'and')] });
+  }
+
+  or(other) {
+    return this.withAst({ kind: 'or', items: [this.locatorAst(), requireLocatorAst(other, 'or')] });
   }
 
   first() {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.target, first: true });
+    return this.withAst({ kind: 'first', base: this.locatorAst() });
   }
 
   last() {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.target, last: true });
+    return this.withAst({ kind: 'last', base: this.locatorAst() });
   }
 
   nth(index) {
-    return new LocatorFacade(this.runtime, this.tabId, { ...this.target, nth: index });
+    const normalizedIndex = Number(index);
+    if (!Number.isInteger(normalizedIndex) || normalizedIndex < 0) throw new Error('Locator nth requires a non-negative integer');
+    return this.withAst({ kind: 'nth', base: this.locatorAst(), index: normalizedIndex });
   }
 
   async all() {
-    const data = await this.query({ all: true });
+    const data = await this.query({ all: true, strict: false });
     const elements = Array.isArray(data?.elements) ? data.elements : [];
     return elements.map((element, index) => new LocatorFacade(this.runtime, this.tabId, {
       ...this.target,
@@ -605,12 +658,12 @@ class LocatorFacade {
   }
 
   async count(options = {}) {
-    const data = await this.query({ ...options, all: true, mode: 'count' });
+    const data = await this.query({ ...options, all: true, mode: 'count', strict: false });
     return countQueryResults(data);
   }
 
   async allTextContents(options = {}) {
-    const data = await this.query({ ...options, all: true, mode: 'all' });
+    const data = await this.query({ ...options, all: true, mode: 'all', strict: false });
     return textContentsFromQueryResults(data);
   }
 
@@ -683,12 +736,34 @@ class LocatorFacade {
     return {
       tabId: asNumber(this.tabId),
       ...this.target,
+      strict: this.target.strict !== false,
       ...dropUndefined(extra),
     };
   }
 
   async query(extra = {}) {
     return unwrapActionData(await this.runtime.callTool('page.queryElements', this.args(extra)));
+  }
+
+  locatorAst() {
+    return this.target.locatorAst || legacyLocatorAst(this.target);
+  }
+
+  withAst(locatorAst) {
+    return new LocatorFacade(this.runtime, this.tabId, {
+      ...this.target,
+      locatorAst,
+      selector: undefined,
+      role: undefined,
+      name: undefined,
+      text: undefined,
+      label: undefined,
+      placeholder: undefined,
+      testId: undefined,
+      first: undefined,
+      last: undefined,
+      nth: undefined,
+    });
   }
 }
 
@@ -791,6 +866,141 @@ class DevFacade {
   async logs(options = {}) {
     const data = unwrapActionData(await this.runtime.callTool('page.consoleLogs', { tabId: asNumber(this.tabId), ...options }));
     return data?.logs || data?.items || [];
+  }
+}
+
+class CdpFacade {
+  constructor(runtime, tabId) {
+    this.runtime = runtime;
+    this.tabId = tabId;
+  }
+
+  async call(method, params = {}, options = {}) {
+    return unwrapActionData(await this.runtime.callTool('tab_cdp_call', {
+      tab_id: asNumber(this.tabId),
+      method: String(method || ''),
+      params: isObject(params) ? params : {},
+      ...options,
+    }));
+  }
+
+  async events(options = {}) {
+    return unwrapActionData(await this.runtime.callTool('tab_cdp_events', {
+      tab_id: asNumber(this.tabId),
+      ...options,
+    }));
+  }
+}
+
+class PageAssetsFacade {
+  constructor(runtime, tabId) {
+    this.runtime = runtime;
+    this.tabId = tabId;
+  }
+
+  async list(options = {}) {
+    return unwrapActionData(await this.runtime.callTool('tab.capabilities.pageAssets.list', {
+      tab_id: asNumber(this.tabId),
+      ...options,
+    }));
+  }
+
+  async bundle(options = {}) {
+    return unwrapActionData(await this.runtime.callTool('tab.capabilities.pageAssets.bundle', {
+      tab_id: asNumber(this.tabId),
+      ...options,
+    }));
+  }
+}
+
+class WebMcpFacade {
+  constructor(runtime, tabId) {
+    this.runtime = runtime;
+    this.tabId = tabId;
+  }
+
+  async listTools(options = {}) {
+    return unwrapActionData(await this.runtime.callTool('tab.capabilities.webmcp.listTools', {
+      tab_id: asNumber(this.tabId),
+      ...options,
+    }));
+  }
+
+  async invokeTool(toolName, input = {}, options = {}) {
+    return unwrapActionData(await this.runtime.callTool('tab.capabilities.webmcp.invokeTool', {
+      tab_id: asNumber(this.tabId),
+      tool_name: String(toolName || ''),
+      input: isObject(input) ? input : {},
+      ...options,
+    }));
+  }
+}
+
+class BrowserAuthFacade {
+  constructor(runtime, tabId) {
+    this.runtime = runtime;
+    this.tabId = tabId;
+  }
+
+  async detect(options = {}) {
+    return unwrapActionData(await this.runtime.callTool('browser.botDetect', {
+      tabId: asNumber(this.tabId),
+      ...options,
+    }));
+  }
+
+  async handoff(reason, options = {}) {
+    return unwrapActionData(await this.runtime.callTool('browser.authHandoff', {
+      tabId: asNumber(this.tabId),
+      reason: String(reason || ''),
+      ...options,
+    }));
+  }
+}
+
+class BrowserViewportFacade {
+  constructor(runtime) {
+    this.runtime = runtime;
+  }
+
+  async state(options = {}) {
+    return unwrapActionData(await this.runtime.callTool('viewport.state', options));
+  }
+
+  async set(width, height, options = {}) {
+    return unwrapActionData(await this.runtime.callTool('viewport.set', { width, height, ...options }));
+  }
+
+  async reset(options = {}) {
+    return unwrapActionData(await this.runtime.callTool('viewport.reset', options));
+  }
+}
+
+class BrowserVisibilityFacade {
+  constructor(runtime) {
+    this.runtime = runtime;
+  }
+
+  async get(options = {}) {
+    return unwrapActionData(await this.runtime.callTool('browser.visibility.get', options));
+  }
+
+  async set(options = {}) {
+    return unwrapActionData(await this.runtime.callTool('browser.visibility.set', options));
+  }
+}
+
+class BrowserNotificationFacade {
+  constructor(runtime) {
+    this.runtime = runtime;
+  }
+
+  async create(title, message, options = {}) {
+    return unwrapActionData(await this.runtime.callTool('notification.create', {
+      title: String(title || ''),
+      message: String(message || ''),
+      ...options,
+    }));
   }
 }
 
@@ -1044,6 +1254,61 @@ function decodeScreenshot(value) {
   const text = String(value || '');
   const base64 = text.startsWith('data:') ? text.slice(text.indexOf(',') + 1) : text;
   return Uint8Array.from(Buffer.from(base64, 'base64'));
+}
+
+function locatorTarget(scope = {}, leaf) {
+  const parent = scope?.locatorAst;
+  return {
+    ...scope,
+    locatorAst: parent ? locatorWithin(parent, leaf) : leaf,
+    selector: undefined,
+    role: undefined,
+    name: undefined,
+    text: undefined,
+    label: undefined,
+    placeholder: undefined,
+    testId: undefined,
+  };
+}
+
+function locatorLeaf(kind, fields = {}) {
+  const normalizedKind = String(kind || '');
+  if (!['css', 'role', 'text', 'label', 'placeholder', 'testId'].includes(normalizedKind)) {
+    throw new Error(`Unsupported locator kind: ${normalizedKind || '<empty>'}`);
+  }
+  const leaf = { kind: normalizedKind };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) leaf[key] = value;
+  }
+  return leaf;
+}
+
+function locatorWithin(parent, child) {
+  if (!parent) return child;
+  return { kind: 'within', parent, child };
+}
+
+function locatorAstFrom(value) {
+  if (value instanceof LocatorFacade) return value.locatorAst();
+  if (isObject(value) && isObject(value.locatorAst)) return value.locatorAst;
+  return null;
+}
+
+function requireLocatorAst(value, operation) {
+  const ast = locatorAstFrom(value);
+  if (!ast) throw new Error(`Locator ${operation} requires another Locator from the same browser runtime`);
+  return ast;
+}
+
+function legacyLocatorAst(target = {}) {
+  if (isObject(target.locatorAst)) return target.locatorAst;
+  if (target.selector != null) return locatorLeaf('css', { selector: target.selector });
+  if (target.role != null) return locatorLeaf('role', { role: target.role, name: target.name, exact: target.exact });
+  if (target.text != null) return locatorLeaf('text', { text: target.text, exact: target.exact });
+  if (target.label != null) return locatorLeaf('label', { label: target.label, exact: target.exact });
+  if (target.placeholder != null) return locatorLeaf('placeholder', { placeholder: target.placeholder, exact: target.exact });
+  if (target.testId != null) return locatorLeaf('testId', { testId: target.testId });
+  throw new Error('Locator requires a selector strategy');
 }
 
 function dropUndefined(value) {

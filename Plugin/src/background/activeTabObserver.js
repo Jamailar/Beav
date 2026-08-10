@@ -19,6 +19,7 @@ export function createActiveTabObserver(options = {}) {
       chrome.tabs.onReplaced?.removeListener(handleTabWindowChanged);
       chrome.tabs.onAttached?.removeListener(handleTabWindowChanged);
       chrome.tabs.onDetached?.removeListener(handleTabWindowChanged);
+      chrome.tabs.onMoved?.removeListener(handleTabWindowChanged);
       chrome.tabs.onUpdated?.removeListener(handleTabUpdated);
       chrome.windows?.onCreated?.removeListener(handleWindowChanged);
       chrome.windows?.onFocusChanged?.removeListener(handleWindowChanged);
@@ -48,6 +49,7 @@ export function createActiveTabObserver(options = {}) {
     chrome.tabs.onReplaced?.addListener(handleTabWindowChanged);
     chrome.tabs.onAttached?.addListener(handleTabWindowChanged);
     chrome.tabs.onDetached?.addListener(handleTabWindowChanged);
+    chrome.tabs.onMoved?.addListener(handleTabWindowChanged);
     chrome.tabs.onUpdated?.addListener(handleTabUpdated);
     chrome.windows?.onCreated?.addListener(handleWindowChanged);
     chrome.windows?.onFocusChanged?.addListener(handleWindowChanged);

@@ -4,6 +4,7 @@ const CDP_COMMAND_TIMEOUT_MS = 10_000;
 const attachedCdpTabs = new Set();
 const attachedCdpTargets = new Set();
 const attachedCdpTargetTabs = new Map();
+const debuggerTargetQueues = new Map();
 let onCdpTransportTelemetry = null;
 
 export class CdpCommandTimeoutError extends Error {
@@ -35,6 +36,10 @@ export async function attachCdpTab(tabId) {
   requireDebuggerApi();
   const id = Number(tabId);
   if (!Number.isInteger(id)) throw new Error('CDP attach requires integer tabId');
+  return await serializeDebuggerTarget({ tabId: id }, async () => await attachCdpTabUnserialized(id));
+}
+
+async function attachCdpTabUnserialized(id) {
   const target = { tabId: id };
   if (attachedCdpTabs.has(id)) {
     emitCdpTransportTelemetry('attach.reused', { target });
@@ -58,6 +63,10 @@ export async function attachCdpTarget(targetId, tabId = null) {
   requireDebuggerApi();
   const id = String(targetId || '');
   if (!id) throw new Error('CDP target attach requires targetId');
+  return await serializeDebuggerTarget({ targetId: id }, async () => await attachCdpTargetUnserialized(id, tabId));
+}
+
+async function attachCdpTargetUnserialized(id, tabId = null) {
   const target = { targetId: id };
   const ownerTabId = Number(tabId);
   if (attachedCdpTargets.has(id)) {
@@ -82,15 +91,19 @@ export async function attachCdpTarget(targetId, tabId = null) {
 
 export async function detachCdpTarget(target) {
   requireDebuggerApi();
-  emitCdpTransportTelemetry('detach.started', { target: normalizeDebuggerTarget(target) });
-  const detached = await detachDebuggerTarget(target);
-  if (!detached.success) throw new Error(detached.error || 'Chrome debugger detach failed');
-  if (target.tabId) attachedCdpTabs.delete(target.tabId);
-  if (target.targetId) {
-    attachedCdpTargets.delete(target.targetId);
-    attachedCdpTargetTabs.delete(target.targetId);
-  }
-  emitCdpTransportTelemetry('detach.succeeded', { target: normalizeDebuggerTarget(target) });
+  const normalizedTarget = normalizeDebuggerTarget(target);
+  return await serializeDebuggerTarget(normalizedTarget, async () => {
+    emitCdpTransportTelemetry('detach.started', { target: normalizedTarget });
+    const detached = await detachDebuggerTargetUnserialized(normalizedTarget);
+    if (!detached.success) throw new Error(detached.error || 'Chrome debugger detach failed');
+    if (normalizedTarget.tabId) attachedCdpTabs.delete(normalizedTarget.tabId);
+    if (normalizedTarget.targetId) {
+      attachedCdpTargets.delete(normalizedTarget.targetId);
+      attachedCdpTargetTabs.delete(normalizedTarget.targetId);
+    }
+    emitCdpTransportTelemetry('detach.succeeded', { target: normalizedTarget });
+    return detached;
+  });
 }
 
 export async function detachAttachedDebuggersBestEffort() {
@@ -202,6 +215,13 @@ export async function detachAttachedDebuggersForTabs(tabIds = []) {
 
 export async function sendCdpCommandWithTimeout(target, method, params = {}, timeoutMs = CDP_COMMAND_TIMEOUT_MS) {
   requireDebuggerApi();
+  const normalizedTarget = normalizeDebuggerTarget(target);
+  return await serializeDebuggerTarget(normalizedTarget, async () => (
+    await sendCdpCommandWithTimeoutUnserialized(normalizedTarget, method, params, timeoutMs)
+  ));
+}
+
+async function sendCdpCommandWithTimeoutUnserialized(target, method, params = {}, timeoutMs = CDP_COMMAND_TIMEOUT_MS) {
   let timer = null;
   const startedAt = Date.now();
   const normalizedTarget = normalizeDebuggerTarget(target);
@@ -217,7 +237,7 @@ export async function sendCdpCommandWithTimeout(target, method, params = {}, tim
   });
   try {
     const result = await Promise.race([
-      chrome.debugger.sendCommand(target, method, params),
+      chrome.debugger.sendCommand(normalizedTarget, method, params),
       timeout,
     ]);
     emitCdpTransportTelemetry('command.succeeded', {
@@ -269,6 +289,13 @@ export function getAttachedCdpSnapshot() {
   };
 }
 
+export function getCdpTargetQueueSnapshot() {
+  return {
+    queuedTargetKeys: [...debuggerTargetQueues.keys()].sort(),
+    queuedTargetCount: debuggerTargetQueues.size,
+  };
+}
+
 export function getCdpProtocolVersion() {
   return CDP_PROTOCOL_VERSION;
 }
@@ -287,6 +314,11 @@ function describeChromeError(error) {
 }
 
 async function detachDebuggerTarget(target) {
+  const normalizedTarget = normalizeDebuggerTarget(target);
+  return await serializeDebuggerTarget(normalizedTarget, async () => await detachDebuggerTargetUnserialized(normalizedTarget));
+}
+
+async function detachDebuggerTargetUnserialized(target) {
   try {
     await chrome.debugger.detach(target);
     return { success: true, alreadyDetached: false };
@@ -325,6 +357,24 @@ function normalizeDebuggerTarget(target = {}) {
     tabId: Number.isInteger(Number(target.tabId)) ? Number(target.tabId) : null,
     targetId: typeof target.targetId === 'string' ? target.targetId : '',
   };
+}
+
+function serializeDebuggerTarget(target, operation) {
+  const key = debuggerTargetKey(target);
+  const previous = debuggerTargetQueues.get(key) || Promise.resolve();
+  const next = previous.then(operation, operation);
+  const settled = next.then(() => undefined, () => undefined);
+  debuggerTargetQueues.set(key, settled);
+  return next.finally(() => {
+    if (debuggerTargetQueues.get(key) === settled) debuggerTargetQueues.delete(key);
+  });
+}
+
+function debuggerTargetKey(target = {}) {
+  const normalized = normalizeDebuggerTarget(target);
+  if (normalized.targetId) return `target:${normalized.targetId}`;
+  if (normalized.tabId) return `tab:${normalized.tabId}`;
+  throw new Error('CDP target requires tabId or targetId');
 }
 
 function listParamKeys(params = {}) {

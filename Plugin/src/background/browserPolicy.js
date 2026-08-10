@@ -69,6 +69,8 @@ export function classifyBrowserAction(type) {
   if (/^input\.mouseWheel$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.NAVIGATE;
   if (/^input\.keyboard/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.LOCAL_FILTER;
   if (/^cursor\./i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
+  if (/^browser\.botDetect$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
+  if (/^browser\.authHandoff$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.LOCAL_FILTER;
   if (/^page\.(click|doubleClick)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.READ_ONLY_REVEAL;
   if (/^page\.hover$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.READ_ONLY_REVEAL;
   if (/^page\.(inspectPoint|hitTest)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
@@ -91,6 +93,8 @@ export function classifyBrowserAction(type) {
   if (/^tab_page_assets_bundle$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.READ_ONLY_EXPORT;
   if (/^(webmcp\.listTools|webmcp_list_tools)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
   if (/^(webmcp\.invokeTool|webmcp_invoke_tool)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.STATE_CHANGING;
+  if (/^(notification\.create|createNotification)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.READ_ONLY_REVEAL;
+  if (/^(tab\.mark|markTab)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.LOCAL_FILTER;
   if (/^(tab\.activate|activateTab|focusTab|tab\.back|tab\.forward)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.NAVIGATE;
   if (/^(tab\.close|tab\.remove|closeTab)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.STATE_CHANGING;
   if (/^(browser\.ping|browser\.info|browser\.events|browser\.sessionEvents|browser\.clientHeartbeat|lifecycle\.status|browser\.lifecycleStatus|sidePanel\.status|sidepanel\.status|session\.tabs|session\.name|turn\.ended|tab\.info|tabLeases\.list|tabs\.leases|tab\.lifecycleEvents|tabs\.lifecycleEvents|tabLifecycle\.events|tab\.lifecycleSnapshot|tabs\.lifecycleSnapshot|tabLifecycle\.snapshot|tabs\.list|windows\.list|browser\.windows|tabs\.finalize|tabs\.finalizedBadges|managedTabGroups\.list|tabGroups\.managed|activeTabObserver\.snapshot|activeTabs\.snapshot|page\.frames|frames\.list|history\.search|bookmarks\.list|topSites\.list|readingList\.list|sessions\.recentlyClosed|sessions\.devices|browser\.context|userBrowser\.context|viewport\.state|cdp\.viewportState|browser\.visibility\.get|browser_visibility_get|tab_page_assets_list|download\.events|download\.state|downloads\.state|downloads\.search)$/i.test(String(type || ''))) return BROWSER_ACTION_LEVELS.OBSERVE;
@@ -154,6 +158,8 @@ export function buildBrowserPolicyDecision(action, options = {}) {
     'cdp.attachedTargets',
     'fileChooser.snapshot',
     'tab.activate',
+    'notification.create',
+    'tab.mark',
     'tab.navigate',
     'tab.reload',
     'window.create',

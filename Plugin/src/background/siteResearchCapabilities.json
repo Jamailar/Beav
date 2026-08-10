@@ -6,7 +6,7 @@
       "id": "xiaohongshu",
       "aliases": ["xhs", "redbook", "rednote"],
       "displayName": "小红书",
-      "hostPatterns": ["xiaohongshu.com", "xhslink.com", "rednote.com"],
+      "hostPatterns": ["xiaohongshu.com", "xhslink.com", "xhslink.cn", "rednote.com"],
       "searchEntryUrl": "https://www.xiaohongshu.com/",
       "searchViaPageUi": true,
       "detailOpenMode": "page_click",
@@ -18,7 +18,7 @@
       },
       "defaultSurface": ["search", "author_scan", "content_scan"],
       "debugSurface": ["search", "author_scan", "content_scan"],
-      "capabilityVersion": "1.6.0",
+      "capabilityVersion": "1.6.1",
       "extractorSchemaHash": "ebb4c0e28313597c16c26a05854cc845514f7232925cf3c9569eb36124f167bc",
       "concurrencyPolicy": "single_account"
     },

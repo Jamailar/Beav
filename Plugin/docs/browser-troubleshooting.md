@@ -35,6 +35,8 @@ Common failure states:
 - `bridge_descriptor_missing`: Desktop 未启动，或尚未完成 Desktop Bridge 初始化。
 - `bridge_descriptor_invalid`: descriptor schema/protocol/权限或 ready 状态无效。
 - `bridge_handshake_failed`: App 实例、角色 token、Bridge/browser 协议或 Host/App 版本校验失败。
+- `NATIVE_HOST_EXITED`: 已连接的 Native Host 异常退出。插件会按指数退避重连并保留 `errorCode`、上一次连接状态和重试次数；完成 Desktop/Host 恢复后使用现有“重试”恢复条继续，不要反复重装扩展。
+- `NATIVE_TRANSPORT_DISCONNECTED`: Native Messaging 当前未连接，正在等待重连；如果状态先前不是 connected 或 Desktop 未运行，它是预期连接状态而不是高优先级事故。
 - `BROWSER_INSTANCE_SELECTION_REQUIRED`: 多个 profile 已连接；必须选择诊断返回的 `browserInstanceId`。
 - `extension_forwarding_failed`: Native Host 可响应，但扩展没有回答 browser-control action。
 - Tool results that show only `capabilities.toolsResponse.tools` and end with `[truncated by ToolResultBudget]` are not page-read failures. They mean the App facade returned a full MCP capability snapshot before the action result, so the model never saw the real `tab.info` / `page.queryElements` payload.
@@ -46,6 +48,7 @@ Site-research failures:
 - `SITE_CAPABILITY_VERSION_MISMATCH`: Desktop and the loaded extension disagree on `capabilityVersion` or `extractorSchemaHash`. Rebuild plus reload `Plugin/dist/extension`; changing files on disk does not reload the MV3 service worker.
 - A run that repeats the same extract result after scrolling usually indicates sub-actions reused one `callId`. Current Desktop Runner assigns `<parent>:research:<step>:<action>`; inspect transcript and lifecycle ledger for duplicate child IDs before changing selectors.
 - `waiting_for_user` with `login_required` or `security_verification_required` is not a failed connection. Complete the action in the retained handoff tab, then resume the same `runId` with `retryStage=browser`.
+- `BROWSER_BOT_BLOCKED` / `BROWSER_SECURITY_VERIFICATION_REQUIRED` similarly require manual completion in the retained tab. The extension detects only a visible blocker category; it never solves CAPTCHA or reads login/OTP/password input. A `chrome-extension://...` URL is deliberately policy-denied rather than injected, so it should be treated as an unsupported target, not a missing host permission.
 - `partial` with saved `redbox://browser-runs/<runId>/...` artifacts means browser evidence was preserved. Retry only Knowledge ingest when the failure is `knowledge_ingest_failed`; do not repeat paid download/OCR/ASR work.
 - `BROWSER_CLEANUP_INCOMPLETE` after a successful result keeps the business result but marks the run partial. Check tab leases, debugger attachments, and terminal lifecycle records; cleanup is idempotent.
 - `BROWSER_PAGE_INTERACTION_REQUIRED` means an observed Xiaohongshu/Douyin card URL was sent to direct navigation. Return to the originating results/author page and click the visible card; do not retry the href in a background tab.

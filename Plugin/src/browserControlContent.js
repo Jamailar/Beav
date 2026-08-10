@@ -1,10 +1,11 @@
 import './siteAdapters.js';
+import { installContentRuntimeLifecycle } from './content/contentRuntimeLifecycle.js';
 import { applyControlledTabBadge } from './content/controlBadge.js';
 import { applyAgentCursorState, hideAgentCursor, moveAgentCursor } from './content/cursorOverlay.js';
 import { readDomSnapshot, readFrame } from './content/domReader.js';
 import { applyTabFaviconBadge } from './content/faviconBadge.js';
 import { readPageAssets } from './content/pageAssetInventory.js';
-import { checkElement, clickElement, clickNextButton, clickNode, getElementAttribute, getElementValue, getElementValues, hoverElement, inspectPoint, isCheckedElement, isElementVisible, queryElements, scrollNode, scrollPage, selectElement, typeElement, waitForDomStable, waitForNode, waitForSelector } from './content/pageActions.js';
+import { checkElement, clickElement, clickNextButton, clickNode, detectBrowserAutomationBlocker, getElementAttribute, getElementValue, getElementValues, hoverElement, inspectPoint, isCheckedElement, isElementVisible, queryElements, scrollNode, scrollPage, selectElement, typeElement, waitForDomStable, waitForNode, waitForSelector } from './content/pageActions.js';
 import { applySiteResearchFilters, extractSiteResearch, prepareSiteResearchItemClick, prepareSiteResearchItemClose, submitSiteResearchSearch } from './content/siteResearchExtractor.js';
 
 const XWOW_READ_FRAME = 'xwow-data-ai:read-frame';
@@ -33,6 +34,7 @@ const XWOW_GET_VALUE = 'xwow-data-ai:get-value';
 const XWOW_GET_VALUES = 'xwow-data-ai:get-values';
 const XWOW_GET_ATTRIBUTE = 'xwow-data-ai:get-attribute';
 const XWOW_QUERY_ELEMENTS = 'xwow-data-ai:query-elements';
+const XWOW_DETECT_BROWSER_BLOCKER = 'xwow-data-ai:detect-browser-blocker';
 const XWOW_PAGE_ASSETS = 'xwow-data-ai:page-assets';
 const XWOW_CURSOR_MOVE = 'xwow-data-ai:cursor-move';
 const XWOW_CURSOR_HIDE = 'xwow-data-ai:cursor-hide';
@@ -44,8 +46,10 @@ const XWOW_TAB_FAVICON_BADGE = 'TAB_FAVICON_BADGE';
 const TARGET_CURSOR_STATE = 'AGENT_CURSOR_STATE';
 const TARGET_GET_CURSOR_STATE = 'GET_AGENT_CURSOR_STATE';
 const TARGET_GET_CONTROL_BADGE_STATE = 'GET_AGENT_CONTROL_BADGE_STATE';
+const contentRuntime = installContentRuntimeLifecycle();
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+function handleContentRuntimeMessage(message, sender, sendResponse) {
+  if (contentRuntime.disposed) return false;
   void (async () => {
     if (message?.type === XWOW_CONTENT_PING || message?.type === TARGET_CONTENT_PING) {
       sendResponse({ success: true, ok: true, frameUrl: location.href });
@@ -155,6 +159,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(queryElements(message.options || {}));
       return;
     }
+    if (message?.type === XWOW_DETECT_BROWSER_BLOCKER) {
+      sendResponse(detectBrowserAutomationBlocker(message.options || {}));
+      return;
+    }
     if (message?.type === XWOW_PAGE_ASSETS) {
       sendResponse({ success: true, assets: readPageAssets(message.options || {}) });
       return;
@@ -184,12 +192,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) });
   });
   return true;
+}
+
+chrome.runtime.onMessage.addListener(handleContentRuntimeMessage);
+contentRuntime.onDispose(() => {
+  chrome.runtime.onMessage.removeListener(handleContentRuntimeMessage);
 });
 
 chrome.runtime.sendMessage({ type: TARGET_GET_CURSOR_STATE }).then((response) => {
+  if (contentRuntime.disposed) return;
   if (response?.state) applyAgentCursorState(response.state);
 }).catch(() => {});
 
 chrome.runtime.sendMessage({ type: TARGET_GET_CONTROL_BADGE_STATE }).then((response) => {
+  if (contentRuntime.disposed) return;
   if (response?.state) applyControlledTabBadge(response.state);
 }).catch(() => {});

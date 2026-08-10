@@ -17,8 +17,8 @@ import { configureDynamicContentInjectionTelemetry, ensureContentScript, sendCon
 import { acceptFileChooser, configureFileChooserTelemetry, getFileChooserSnapshot, handleFileChooserCdpEvent, handleFileChooserDomEvent, setInputFiles, waitForFileChooser } from './background/fileChooserRuntime.js';
 import { listPageFrames } from './background/frameRuntime.js';
 import { CLIENT_HEARTBEAT_ALARM, TARGET_CLIENT_HEARTBEAT_ALARM, configureLifecycleGuard, ensureLifecycleInstallState, getBrowserClientHeartbeatState, getLifecycleStatus, handleLifecycleAlarm, maybeReloadForPendingUpdate, recordBrowserClientHeartbeat, recordLifecycleCleanupResult, registerLifecycleUpdateListener, restorePendingUpdate, startClientHeartbeat } from './background/lifecycleGuard.js';
-import { NATIVE_HOST_DEFAULT, NATIVE_RECONNECT_ALARM, configureNativeTransport, connectNativeTransport as connectNativeTransportRaw, disconnectNativeTransport, getNativeStatus, postNativeMessage, refreshNativeStatus, requestNativeHost as requestNativeHostRaw, restoreNativeStatus, sendNativeNotification, shouldReportNativeConnectionFailure } from './background/nativeTransport.js';
-import { PLUGIN_DIAGNOSTICS_RETRY_ALARM, drainPluginDiagnostics, reportPluginError } from './background/diagnostics.js';
+import { NATIVE_HOST_DEFAULT, classifyNativeTransportFailure, configureNativeTransport, connectNativeTransport as connectNativeTransportRaw, disconnectNativeTransport, getNativeStatus, handleNativeReconnectAlarm, postNativeMessage, refreshNativeStatus, requestNativeHost as requestNativeHostRaw, restoreNativeStatus, sendNativeNotification, shouldReportNativeConnectionFailure } from './background/nativeTransport.js';
+import { PLUGIN_DIAGNOSTICS_RETRY_ALARM, drainPluginDiagnostics, reportPluginError, reportPluginRecovery } from './background/diagnostics.js';
 import { CONTENT_PAGE_ASSETS_TYPE, bundlePageAssets, readPageAssetInventory } from './background/pageAssetRuntime.js';
 import { exportPage } from './background/pageExportRuntime.js';
 import { evaluatePageScript } from './background/pageScriptRuntime.js';
@@ -29,7 +29,7 @@ import { TARGET_GET_CONTROL_BADGE_STATE_TYPE, initializeTabControlBadges, readTa
 import { clearLeaseFaviconBadges, hasUnseenFinalizedBadges, initializeTabFaviconBadges, listFinalizedBadges, markFinalizedBadges } from './background/tabFaviconBadge.js';
 import { configureManagedTabGroupTelemetry, ensureAgentTabGroup, getManagedGroupIdContainingTabs, initializeManagedTabGroups, listManagedTabGroups, reconcileManagedGroupForTabs, refreshManagedGroupsFromChrome, releaseTabsFromManagedGroups, setSessionGroupTitle } from './background/tabGroupManager.js';
 import { createTabLifecycleRuntime } from './background/tabLifecycleRuntime.js';
-import { claimTabForSession as claimTabLeaseForSession, finalizeTabs as finalizeTabLeases, getSessionActiveLeases, getSessionTabs as getStoredSessionTabs, groupFinalizedTabs as groupStoredFinalizedTabs, listTabLeaseSnapshot, listTabLeases as listStoredTabLeases, moveReplacedTabLease, releaseActiveTurnLeases, releaseSessionTabLeases, releaseTabsForSession, removeTabLease, resumeHandoffTabs, syncSessionActiveTabFromLease, updateActiveSessionTurn } from './background/tabLeaseManager.js';
+import { claimChildTabForSourceLease, claimTabForSession as claimTabLeaseForSession, finalizeTabs as finalizeTabLeases, getSessionActiveLeases, getSessionTabs as getStoredSessionTabs, groupFinalizedTabs as groupStoredFinalizedTabs, handoffTabForUser, listTabLeaseSnapshot, listTabLeases as listStoredTabLeases, moveReplacedTabLease, releaseActiveTurnLeases, releaseSessionTabLeases, releaseTabsForSession, removeTabLease, resumeHandoffTabs, setTabMarkForSession, syncSessionActiveTabFromLease, updateActiveSessionTurn } from './background/tabLeaseManager.js';
 import { getActiveTabInfo, getUserBrowserContext, listBrowserWindows, listReadingList, listRecentlyClosedSessions, listSessionDevices, listTopSites, listUserBookmarks, listUserTabs, searchUserHistory } from './background/userBrowserState.js';
 import { fetchUrlContents } from './background/urlContentRuntime.js';
 import { unsupportedBrowserCommandError } from './background/unsupportedCommandRuntime.js';
@@ -67,6 +67,7 @@ const CONTENT_GET_VALUE_TYPE = 'xwow-data-ai:get-value';
 const CONTENT_GET_VALUES_TYPE = 'xwow-data-ai:get-values';
 const CONTENT_GET_ATTRIBUTE_TYPE = 'xwow-data-ai:get-attribute';
 const CONTENT_QUERY_ELEMENTS_TYPE = 'xwow-data-ai:query-elements';
+const CONTENT_DETECT_BROWSER_BLOCKER_TYPE = 'xwow-data-ai:detect-browser-blocker';
 const CONTROLLED_PAGE_MUTATION_ACTIONS = new Set(['page.navigate', 'page.goto', 'page.waitForLoadState', 'page.waitForURL', 'page.waitForTimeout', 'page.evaluate', 'page.evaluateScript', 'page.scroll', 'page.click', 'page.clickNode', 'node.click', 'page.hover', 'page.inspectPoint', 'page.hitTest', 'page.scrollNode', 'node.scroll', 'page.waitForNode', 'node.wait', 'page.waitForSelector', 'page.waitSelector', 'page.check', 'page.setChecked', 'page.isChecked', 'page.isVisible', 'page.getValue', 'page.getValues', 'page.getAttribute', 'page.queryElements', 'page.domSnapshot', 'page.export', 'tab.export', 'page.consoleLogs', 'tab_console_logs', 'tab.consoleLogs', 'page.select', 'page.type', 'page.frames', 'page.readClipboard', 'clipboard.read', 'page.readClipboardText', 'clipboard.readText', 'page.writeClipboard', 'clipboard.write', 'page.writeClipboardText', 'clipboard.writeText', 'page.waitForFileChooser', 'page.acceptFileChooser', 'page.setInputFiles', 'fileChooser.accept', 'webmcp.listTools', 'webmcp.invokeTool', 'webmcp_list_tools', 'webmcp_invoke_tool', 'input.mouseDrag', 'input.mouseWheel', 'input.keyboardType', 'input.keyboardPress', 'input.keyboardCombo']);
 const CDP_COMMAND_TIMEOUT_MS = getDefaultCdpTimeoutMs();
 
@@ -75,6 +76,7 @@ let activeRun = null;
 let activeBrowserSession = null;
 let initializePromise = null;
 let nativeStatus = getNativeStatus();
+let activeNativeConnectionDiagnostic = null;
 let lastClientHeartbeatState = null;
 const activeTabObserver = createActiveTabObserver({
   onChanged: handleObservedActiveTabsChanged,
@@ -113,6 +115,7 @@ const nativeMethodRouter = createNativeMethodRouter({
   getInfo: async () => await getBrowserControlInfo(),
   listTools: () => listBrowserControlMcpTools(),
   executeCommand: (command) => executeCommand(command),
+  notifyCursorArrived,
   runBrowserAction: async (action, sessionId = '') => runBrowserAction(action, {
     session: await resolveBrowserActionSession(sessionId || '', 'native_host'),
   }),
@@ -473,6 +476,16 @@ const BROWSER_CONTROL_MCP_TOOLS = [
     description: 'Send a Chrome DevTools Protocol command to an attached tab.',
     inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, method: { type: 'string' }, params: { type: 'object' }, sessionId: { type: 'string' } }, required: ['tabId', 'method'], additionalProperties: true },
   },
+  {
+    name: 'browser.botDetect',
+    description: 'Detect a visible login, CAPTCHA, or security-verification blocker without reading credentials.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId'], additionalProperties: true },
+  },
+  {
+    name: 'browser.authHandoff',
+    description: 'Retain one controlled tab for manual login or security verification, then return a typed waiting_for_user result. Never supplies credentials.',
+    inputSchema: { type: 'object', properties: { tabId: { type: 'number' }, reason: { type: 'string', enum: ['login_required', 'security_verification_required', 'bot_verification_required'] }, ttlMs: { type: 'number' }, sessionId: { type: 'string' } }, required: ['tabId', 'reason'], additionalProperties: false },
+  },
 ];
 
 function listBrowserControlMcpTools() {
@@ -497,6 +510,7 @@ const localCommandActionRouter = createLocalCommandActionRouter({
     }
     return await requestNativeHost(payload.method || 'ping', payload.params || {}, payload.timeoutMs);
   },
+  notifyCursorArrived,
   runBrowserAction: async (action, session) => runBrowserAction(action, { session }),
   openUrl,
   captureActiveTab,
@@ -550,29 +564,23 @@ configureNativeTransport({
   onStatusChange: (status) => {
     const previousStatus = nativeStatus;
     nativeStatus = status;
+    const currentDiagnostic = buildNativeTransportDiagnostic(status, previousStatus);
     if (status?.state === 'connected') {
+      queuePluginRecovery(activeNativeConnectionDiagnostic || currentDiagnostic);
+      activeNativeConnectionDiagnostic = null;
       return;
     }
     if (shouldReportNativeConnectionFailure(status?.error ? new Error(status.error) : null, status, previousStatus)) {
+      activeNativeConnectionDiagnostic = currentDiagnostic;
       queuePluginDiagnostic(status?.error || new Error(`Native transport ${status?.state || 'failed'}`), {
         category: 'plugin.connection',
         event: 'plugin.connection.failed',
         operation: 'native-transport',
         trigger: 'plugin_connection_error',
-        code: status?.state === 'upgrade_required'
-          ? 'NATIVE_HOST_UPGRADE_REQUIRED'
-          : status?.state === 'bridge_error'
-            ? status?.handshake?.desktopBridge?.errorCode || 'DESKTOP_BRIDGE_ERROR'
-          : 'NATIVE_TRANSPORT_DISCONNECTED',
+        code: currentDiagnostic.code,
         phase: 'native_transport',
-        fields: {
-          previousState: previousStatus?.state || 'unknown',
-          state: status?.state || 'unknown',
-          availability: status?.handshake?.desktopBridge?.availability || '',
-          bridgeErrorCode: status?.handshake?.desktopBridge?.errorCode || '',
-          reconnectAttempt: Number(status?.reconnectAttempt || 0),
-          retryable: status?.state === 'reconnecting' || status?.state === 'disconnected',
-        },
+        retryable: currentDiagnostic.fields.retryable === true,
+        fields: currentDiagnostic.fields,
       });
     }
   },
@@ -603,6 +611,54 @@ function queuePluginDiagnostic(error, options = {}) {
   });
 }
 
+function queuePluginRecovery(options = {}) {
+  void reportPluginRecovery({
+    category: 'plugin.connection',
+    event: 'plugin.connection.recovered',
+    operation: 'native-transport',
+    trigger: 'plugin_connection_recovered',
+    phase: 'native_transport',
+    ...options,
+  }).catch((reportError) => {
+    console.warn('[redbox-plugin][diagnostics] recovery report failed', reportError);
+  });
+}
+
+function buildNativeTransportDiagnostic(status = {}, previousStatus = {}) {
+  const bridge = status?.handshake?.desktopBridge && typeof status.handshake.desktopBridge === 'object'
+    ? status.handshake.desktopBridge
+    : {};
+  const previousBridge = previousStatus?.handshake?.desktopBridge
+    && typeof previousStatus.handshake.desktopBridge === 'object'
+    ? previousStatus.handshake.desktopBridge
+    : {};
+  const code = status?.state === 'upgrade_required'
+    ? 'NATIVE_HOST_UPGRADE_REQUIRED'
+    : status?.state === 'bridge_error'
+      ? bridge.errorCode || 'DESKTOP_BRIDGE_ERROR'
+      : status?.errorCode || previousStatus?.errorCode || previousBridge.errorCode || classifyNativeTransportFailure(status?.error);
+  return {
+    code,
+    fields: {
+      previousState: previousStatus?.state || 'unknown',
+      state: status?.state || 'unknown',
+      availability: bridge.availability || '',
+      bridgeErrorCode: bridge.errorCode || previousBridge.errorCode || '',
+      bridgePhase: bridge.phase || previousBridge.phase || '',
+      bridgeReconnectAttempt: Math.max(0, Number(bridge.bridgeReconnectAttempt || 0)),
+      descriptorAgeMs: Math.max(0, Number(bridge.details?.descriptorAgeMs || 0)),
+      nativeHostVersion: status?.handshake?.appVersion || '',
+      desktopAppVersion: bridge.appVersion || '',
+      nativeErrorCode: status?.errorCode || classifyNativeTransportFailure(status?.error),
+      reconnectAttempt: Number(status?.reconnectAttempt || 0),
+      retryable: bridge.retryable === true
+        || status?.state === 'bridge_error'
+        || status?.state === 'reconnecting'
+        || status?.state === 'disconnected',
+    },
+  };
+}
+
 registerLifecycleUpdateListener();
 registerSidePanelStatus();
 
@@ -610,9 +666,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm?.name === PLUGIN_DIAGNOSTICS_RETRY_ALARM) {
     void drainPluginDiagnostics().catch(() => {});
   }
-  if (alarm?.name === NATIVE_RECONNECT_ALARM) {
-    void connectNativeTransport({ silent: true }).catch(() => {});
-  }
+  void handleNativeReconnectAlarm(alarm).catch(() => {});
   if (alarm?.name === CLIENT_HEARTBEAT_ALARM || alarm?.name === TARGET_CLIENT_HEARTBEAT_ALARM) {
     void handleLifecycleAlarm(alarm).catch(() => {});
   }
@@ -678,6 +732,15 @@ chrome.tabs.onAttached?.addListener(() => {
 
 chrome.tabs.onDetached?.addListener(() => {
   void refreshManagedGroupsFromChrome().catch(() => {});
+});
+
+// Navigation targets are commonly created as about:blank before their first
+// committed URL. A source lease is the authority boundary: only a child opened
+// by an active source lease may inherit the same session and turn.
+chrome.webNavigation?.onCreatedNavigationTarget?.addListener((details) => {
+  void handleCreatedNavigationTarget(details).catch((error) => {
+    console.warn('[XWOW BrowserDataAI] child navigation target claim failed', error);
+  });
 });
 
 if (chrome.downloads?.onCreated) {
@@ -1274,7 +1337,11 @@ async function captureTabById(tabId, options = {}) {
 async function captureTabByIdInternal(tabId, options = {}) {
   const tab = await chrome.tabs.get(Number(tabId));
   if (!tab?.id || !isHttpUrl(tab.url)) {
-    throw new Error('Tab is not capturable');
+    const error = new Error('Tab URL is not capturable');
+    error.code = 'UNSUPPORTED_URL';
+    error.phase = 'capture_preflight';
+    error.retryable = false;
+    throw error;
   }
   await claimTabForActiveSession(tab.id, 'user', 'source');
   assertBrowserActionAllowed({
@@ -1550,6 +1617,12 @@ async function runBrowserAction(action, context = {}) {
       case 'tab.activate':
         result = await activateControlledTab(session, normalized);
         break;
+      case 'tab.mark':
+        result = await setTabMarkForSession(session, normalized.tabId, normalized.mark);
+        break;
+      case 'notification.create':
+        result = await createBrowserNotification(normalized);
+        break;
       case 'tab.close':
         result = await closeControlledTab(session, normalized);
         break;
@@ -1563,6 +1636,13 @@ async function runBrowserAction(action, context = {}) {
         break;
       case 'browser.capabilities':
         result = await getBrowserControlInfo();
+        break;
+      case 'browser.botDetect':
+        await requireActiveControlledTabLease(session, normalized.tabId, 'browser.botDetect');
+        result = await sendContentMessage(normalized.tabId, CONTENT_DETECT_BROWSER_BLOCKER_TYPE, normalized.options || normalized, normalized.options?.frameId);
+        break;
+      case 'browser.authHandoff':
+        result = await requestBrowserUserHandoff(session, normalized);
         break;
       case 'research.run':
         result = await runSiteResearch(normalized, {
@@ -2181,6 +2261,7 @@ function reportBrowserActionFailure(error, action = {}, browserError = {}) {
   const actionType = String(action?.type || 'unknown');
   const captureAction = isCaptureActionType(actionType);
   const connectionError = isBrowserConnectionError(error, browserError);
+  if (captureAction && isExpectedCapturePreconditionFailure(error, browserError)) return;
   if (!captureAction && connectionError && !shouldReportNativeConnectionFailure(error, getNativeStatus())) return;
   if (!captureAction && !connectionError) return;
   queuePluginDiagnostic(error, {
@@ -2200,6 +2281,14 @@ function reportBrowserActionFailure(error, action = {}, browserError = {}) {
       targetPresent: Boolean(action?.targetId),
     },
   });
+}
+
+function isExpectedCapturePreconditionFailure(error, browserError = {}) {
+  const code = String(browserError?.code || error?.code || '').toUpperCase();
+  const message = describeErrorMessage(error).trim();
+  return /^(URL_NOT_BELONG_TO_XIAOHONGSHU|UNSUPPORTED_URL|UNSUPPORTED_PAGE|CAPTURE_NOT_APPLICABLE)$/.test(code)
+    || /^URL does not belong to (?:小红书|Xiaohongshu)$/i.test(message)
+    || /(?:not a|unsupported)\s+(?:xiaohongshu|小红书)\s+(?:url|page)/i.test(message);
 }
 
 function isCaptureActionType(actionType) {
@@ -2223,7 +2312,7 @@ function buildBrowserActionError(error, action = {}, session = {}, activeRequest
   const message = describeErrorMessage(error) || 'Browser action failed';
   const normalizedMessage = message.toLowerCase();
   const declaredCode = String(error?.code || '').toUpperCase();
-  let code = declaredCode.startsWith('BROWSER_') ? declaredCode : 'BROWSER_ACTION_FAILED';
+  let code = /^(?:BROWSER_|NATIVE_|DESKTOP_)/.test(declaredCode) ? declaredCode : 'BROWSER_ACTION_FAILED';
   let retryable = error?.retryable === true;
   let userActionRequired = error?.userActionRequired === true;
   if (isCdpCommandTimeoutError(error) || normalizedMessage.includes('timed out') || normalizedMessage.includes('timeout')) {
@@ -2236,6 +2325,12 @@ function buildBrowserActionError(error, action = {}, session = {}, activeRequest
   } else if (declaredCode === 'BROWSER_ACTION_CANCELLED' || error?.name === 'AbortError') {
     code = 'BROWSER_ACTION_CANCELLED';
     retryable = false;
+  } else if (/native host has exited|native host exited/.test(normalizedMessage)) {
+    code = 'NATIVE_HOST_EXITED';
+    retryable = true;
+  } else if (/native transport is disconnected|native host disconnected/.test(normalizedMessage)) {
+    code = 'NATIVE_TRANSPORT_DISCONNECTED';
+    retryable = true;
   }
   return {
     code,
@@ -2523,6 +2618,24 @@ function normalizeBrowserAction(action) {
       actionClass: action?.actionClass || classifyBrowserAction('page.consoleLogs'),
     };
   }
+  if (targetWebMcpType === 'tab_cdp_call') {
+    const normalizedTargetParams = normalizeNativeMethodParams(targetWebMcpType, action || {});
+    return {
+      ...normalizedTargetParams,
+      requestedType: targetWebMcpType,
+      type: 'cdp.send',
+      actionClass: action?.actionClass || classifyBrowserAction({ type: 'cdp.send', method: normalizedTargetParams.method }),
+    };
+  }
+  if (targetWebMcpType === 'tab_cdp_events') {
+    const normalizedTargetParams = normalizeNativeMethodParams(targetWebMcpType, action || {});
+    return {
+      ...normalizedTargetParams,
+      requestedType: targetWebMcpType,
+      type: 'cdp.events',
+      actionClass: action?.actionClass || classifyBrowserAction('cdp.events'),
+    };
+  }
   if (targetWebMcpType === 'tab.capabilities.webmcp.listTools' || targetWebMcpType === 'tab.capabilities.webmcp.invokeTool') {
     const normalizedTargetParams = normalizeNativeMethodParams(targetWebMcpType, action || {});
     const type = targetWebMcpType === 'tab.capabilities.webmcp.listTools' ? 'webmcp.listTools' : 'webmcp.invokeTool';
@@ -2536,7 +2649,7 @@ function normalizeBrowserAction(action) {
   const normalized = {
     ...(action || {}),
     type: String(action?.type || ''),
-    actionClass: action?.actionClass || classifyBrowserAction(action?.type),
+    actionClass: action?.actionClass || classifyBrowserAction(action || {}),
   };
   if (!normalized.type) throw new Error('Browser action missing type');
   return normalized;
@@ -3279,6 +3392,51 @@ async function reconcileReplacedTab(addedTabId, removedTabId) {
   }
 }
 
+async function handleCreatedNavigationTarget(details = {}) {
+  const sourceTabId = Number(details.sourceTabId);
+  const targetTabId = Number(details.tabId);
+  if (!Number.isInteger(sourceTabId) || sourceTabId <= 0 || !Number.isInteger(targetTabId) || targetTabId <= 0) return;
+
+  const target = await chrome.tabs.get(targetTabId).catch(() => null);
+  // Chrome may report an empty URL while the popup is being constructed. Do
+  // not inherit an extension/internal target, but allow about:blank so that a
+  // legitimate target is owned before its first navigation completes.
+  if (!target || (!isHttpUrl(target.url) && String(target.url || '') !== 'about:blank')) return;
+
+  const claimed = await claimChildTabForSourceLease(sourceTabId, targetTabId, {
+    pageRole: 'popup',
+    source: 'web_navigation_created_target',
+  });
+  if (!claimed.claimed || !claimed.lease || !claimed.session) return;
+
+  await browserControlRuntime.startSession(claimed.session.sessionId, claimed.session.currentTurnId || claimed.session.turnId, {
+    publishTabs: false,
+    reason: 'child_tab_claimed',
+  }).catch(() => {});
+  await browserControlRuntime.trackTab(claimed.session.sessionId, targetTabId, {
+    publish: false,
+    reason: 'child_tab_claimed',
+  }).catch(() => {});
+  const previousAgentTabIds = await activeAgentTabIds(claimed.session.sessionId);
+  await ensureAgentTabGroup(claimed.session.sessionId, targetTabId, previousAgentTabIds.filter((id) => id !== targetTabId)).catch(() => {});
+  if (target.active) {
+    const synced = await syncSessionActiveTabFromLease(targetTabId, 'child_navigation_target').catch(() => null);
+    if (synced?.session) activeBrowserSession = synced.session;
+  } else if (activeBrowserSession?.sessionId === claimed.session.sessionId) {
+    activeBrowserSession = claimed.session;
+  }
+  setStatus({ browserControl: activeBrowserSession || claimed.session });
+  await browserEventBridge.publishTabLifecycleEvent({
+    eventType: 'tabLifecycle',
+    kind: 'tab.child.claimed',
+    tabId: targetTabId,
+    sourceTabId,
+    sessionId: claimed.session.sessionId,
+    turnId: claimed.lease.turnId,
+    url: target.url || '',
+  }).catch(() => {});
+}
+
 function isBrowserControlActive() {
   return Boolean(activeBrowserSession?.status === 'active' || browserControlRuntime.isBrowserControlActive() || sessionHasActiveRequests(activeBrowserSession) || hasPendingCursorArrivals() || hasAttachedCdp());
 }
@@ -3805,6 +3963,84 @@ async function activateControlledTab(session, action = {}) {
     synced: sync.success === true,
     lease,
   };
+}
+
+async function createBrowserNotification(action = {}) {
+  if (!chrome.notifications?.create) throw new Error('Chrome notifications API is unavailable');
+  const id = String(action.id || `redbox-browser-${Date.now().toString(36)}`).slice(0, 120);
+  const notificationId = await chrome.notifications.create(id, {
+    type: 'basic',
+    iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+    title: String(action.title || '').slice(0, 120),
+    message: String(action.message || '').slice(0, 1_000),
+    ...(Number.isInteger(action.priority) ? { priority: action.priority } : {}),
+  });
+  return { success: true, notificationId, title: String(action.title || '').slice(0, 120) };
+}
+
+async function requestBrowserUserHandoff(session, action = {}) {
+  const tabId = Number(action.tabId || session?.activeTabId || activeBrowserSession?.activeTabId || 0);
+  if (!Number.isInteger(tabId) || tabId <= 0) throw new Error('browser.authHandoff requires tabId');
+  await requireActiveControlledTabLease(session, tabId, 'browser.authHandoff');
+  const reason = normalizeBrowserHandoffReason(action.reason || action.blockerReason);
+  const handoff = await handoffTabForUser(session, tabId, {
+    reason,
+    ttlMs: action.ttlMs || action.ttl_ms,
+  });
+  await detachAttachedDebuggersForTabs([tabId]).catch(() => {});
+  await browserControlRuntime.untrackTab(session.sessionId, tabId, {
+    reason: 'waiting_for_user_browser_handoff',
+    publish: false,
+    clearCursor: true,
+  }).catch(() => {});
+  await clearCursorOverlayForTab(tabId, 'waiting_for_user_browser_handoff').catch(() => {});
+  if (activeBrowserSession?.sessionId === session.sessionId) {
+    activeBrowserSession = handoff.session;
+    setStatus({ browserControl: activeBrowserSession });
+  }
+  const browserError = {
+    code: browserHandoffErrorCode(reason),
+    message: browserHandoffMessage(reason),
+    retryable: true,
+    userActionRequired: true,
+    handoff: handoff.handoff,
+  };
+  await browserEventBridge.publishLifecycleEvent('browser.user_handoff.requested', {
+    sessionId: session.sessionId,
+    turnId: session.currentTurnId || session.turnId || '',
+    tabId,
+    reason,
+    handoff: handoff.handoff,
+    browserError,
+  }).catch(() => {});
+  return {
+    success: false,
+    status: 'waiting_for_user',
+    tabId,
+    handoff: handoff.handoff,
+    browserError,
+    error: browserError.message,
+  };
+}
+
+function normalizeBrowserHandoffReason(value) {
+  const reason = String(value || 'security_verification_required').trim().toLowerCase();
+  if (!['login_required', 'security_verification_required', 'bot_verification_required'].includes(reason)) {
+    throw new Error('browser.authHandoff reason must be login_required, security_verification_required, or bot_verification_required');
+  }
+  return reason;
+}
+
+function browserHandoffErrorCode(reason) {
+  if (reason === 'login_required') return 'BROWSER_LOGIN_REQUIRED';
+  if (reason === 'bot_verification_required') return 'BROWSER_BOT_BLOCKED';
+  return 'BROWSER_SECURITY_VERIFICATION_REQUIRED';
+}
+
+function browserHandoffMessage(reason) {
+  if (reason === 'login_required') return 'Complete the login in the retained browser tab, then continue this task.';
+  if (reason === 'bot_verification_required') return 'Complete the browser verification in the retained tab, then continue this task.';
+  return 'Complete the security verification in the retained browser tab, then continue this task.';
 }
 
 async function requireActiveControlledTabLease(session, tabId, actionType) {

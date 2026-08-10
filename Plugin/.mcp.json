@@ -73,11 +73,14 @@
         "viewport.state",
         "viewport.set",
         "viewport.reset",
-        "cdp.send"
+        "cdp.send",
+        "browser.botDetect",
+        "browser.authHandoff"
       ],
       "perTool": {
         "browser.info": { "approvalMode": "never" },
         "browser.capabilities": { "approvalMode": "never" },
+        "browser.botDetect": { "approvalMode": "never" },
         "research.run": { "approvalMode": "never" },
         "browser.context": { "approvalMode": "destructive" },
         "browser.events": { "approvalMode": "never" },

@@ -1,7 +1,7 @@
 {
   "name": "beav",
   "private": true,
-  "version": "2.6.19",
+  "version": "2.7.0",
   "type": "module",
   "engines": {
     "node": ">=22 <23"
@@ -16,6 +16,15 @@
     "diagnose:browser-control": "node scripts/diagnose-browser-control.mjs",
     "test:browser-control-faults": "node scripts/test-browser-control-faults.mjs",
     "test:browser-control-binding": "node scripts/test-browser-control-binding.mjs",
+    "test:browser-session-kernel": "node scripts/test-browser-session-kernel.mjs",
+    "test:cdp-transport-queue": "node scripts/test-cdp-transport-queue.mjs",
+    "test:browser-protocol-compat": "node scripts/test-browser-protocol-compat.mjs",
+    "test:content-runtime-lifecycle": "node scripts/test-content-runtime-lifecycle.mjs",
+    "test:browser-client-locator": "node scripts/test-browser-client-locator.mjs",
+    "test:locator-ast-runtime": "node scripts/test-locator-ast-runtime.mjs",
+    "test:frame-topology-diagnostics": "node scripts/test-frame-topology-diagnostics.mjs",
+    "test:cdp-event-replay": "node scripts/test-cdp-event-replay.mjs",
+    "test:cdp-policy-classification": "node scripts/test-cdp-policy-classification.mjs",
     "test:desktop-bridge-client": "node scripts/test-desktop-bridge-client.mjs",
     "test:plugin-diagnostics": "node scripts/test-plugin-diagnostics.mjs",
     "test:site-research": "node --test scripts/test-site-research-runtime.mjs",

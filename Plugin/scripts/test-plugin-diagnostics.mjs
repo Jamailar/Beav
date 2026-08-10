@@ -40,8 +40,10 @@ const {
   PLUGIN_DIAGNOSTICS_QUEUE_KEY,
   PLUGIN_FEEDBACK_ENDPOINT,
   buildPluginDiagnosticPayload,
+  classifyPluginFeedbackPriority,
   drainPluginDiagnostics,
   reportPluginError,
+  reportPluginRecovery,
 } = await import('../src/background/diagnostics.js');
 
 const payload = buildPluginDiagnosticPayload(
@@ -61,6 +63,10 @@ const payload = buildPluginDiagnosticPayload(
       sourceUrl: 'https://example.com/private?token=secret',
       content: 'page正文不应进入诊断',
       count: 2,
+      failureBuckets: {
+        source_rate_limited: 2,
+        source_auth_required: 1,
+      },
     },
   },
 );
@@ -72,6 +78,10 @@ assert(!serializedPayload.includes('secret-token'));
 assert(!serializedPayload.includes('page正文不应进入诊断'));
 assert(!serializedPayload.includes('/Users/jam/private/page.html'));
 assert(!serializedPayload.includes('/private?token=secret'));
+assert.deepEqual(payload.fields.failureBuckets, {
+  source_rate_limited: 2,
+  source_auth_required: 1,
+});
 
 const first = await reportPluginError(new Error('native host disconnected'), {
   category: 'plugin.connection',
@@ -92,6 +102,7 @@ assert.equal(firstRequest.source, 'browser_extension');
 assert.equal(firstRequest.category, 'plugin_connection');
 assert.equal(firstRequest.context.schema, 'redbox.browserPluginDiagnostic.v1');
 assert.equal(firstRequest.context.automatic, true);
+assert.equal(firstRequest.priority, 'normal');
 assert(!JSON.stringify(firstRequest).includes('native host disconnected at https://'));
 
 const duplicate = await reportPluginError(new Error('native host disconnected'), {
@@ -103,8 +114,25 @@ const duplicate = await reportPluginError(new Error('native host disconnected'),
   phase: 'native_messaging',
 });
 assert.equal(duplicate.skipped, true);
+assert.equal(duplicate.reason, 'active_episode');
+assert.equal(duplicate.occurrences, 2);
 assert.equal(storage[PLUGIN_DIAGNOSTICS_QUEUE_KEY].length, 0);
 assert.equal(retryAlarmCreates, 1);
+
+const recovery = await reportPluginRecovery({
+  category: 'plugin.connection',
+  event: 'plugin.connection.recovered',
+  operation: 'native-transport',
+  trigger: 'plugin_connection_recovered',
+  code: 'NATIVE_HOST_DISCONNECTED',
+  phase: 'native_messaging',
+});
+assert.equal(recovery.sent, 1);
+assert.equal(fetchCalls.length, 2);
+const recoveryRequest = JSON.parse(fetchCalls.at(-1).options.body);
+assert.equal(recoveryRequest.context.event, 'plugin.connection.recovered');
+assert.equal(recoveryRequest.context.fields.recovered, true);
+assert.equal(recoveryRequest.context.fields.occurrences, 2);
 
 globalThis.fetch = async () => {
   throw new Error('network offline');
@@ -135,6 +163,29 @@ assert.equal(retry.sent, 1);
 assert.equal(retry.queued, 0);
 assert.equal(storage[PLUGIN_DIAGNOSTICS_QUEUE_KEY].length, 0);
 assert.equal(fetchCalls.at(-1).url, PLUGIN_FEEDBACK_ENDPOINT);
+
+assert.equal(classifyPluginFeedbackPriority({
+  fields: { code: 'URL_NOT_BELONG_TO_XIAOHONGSHU' },
+}), 'low');
+assert.equal(classifyPluginFeedbackPriority({
+  message: 'URL does not belong to 小红书',
+  fields: { code: 'PLUGIN_ERROR' },
+}), 'low');
+assert.equal(classifyPluginFeedbackPriority({
+  fields: { code: 'NATIVE_HOST_DISCONNECTED', nativeStatus: { expectedDisconnect: true } },
+}), 'low');
+assert.equal(classifyPluginFeedbackPriority({
+  fields: { code: 'DESKTOP_BRIDGE_PROTOCOL_MISMATCH' },
+}), 'high');
+assert.equal(classifyPluginFeedbackPriority({
+  fields: { code: 'NATIVE_HOST_EXITED' },
+}), 'normal');
+assert.equal(classifyPluginFeedbackPriority({
+  fields: { code: 'CAPTURE_PARTIAL_FAILURE' },
+}), 'normal');
+assert.equal(classifyPluginFeedbackPriority({
+  fields: { code: 'WRITE_OUTCOME_UNKNOWN' },
+}), 'high');
 
 console.log(JSON.stringify({
   ok: true,

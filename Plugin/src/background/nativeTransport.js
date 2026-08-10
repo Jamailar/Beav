@@ -7,8 +7,13 @@ export const TARGET_NATIVE_DISCONNECTED_ERROR = 'Native transport is disconnecte
 export const TARGET_NATIVE_INVALID_RESPONSE_ERROR = 'Native host returned an invalid response';
 export const TARGET_NATIVE_RESPONSE_HANDLING = 'pending_id_then_error_or_result_else_invalid_response';
 export const XWOW_NATIVE_RESPONSE_VALIDATION = 'strict_jsonrpc_expected_id_exactly_one_result_or_error';
-export const NATIVE_RECONNECT_DELAY_MS = 5000;
-export const NATIVE_RECONNECT_PERIOD_MINUTES = NATIVE_RECONNECT_DELAY_MS / 60_000;
+export const NATIVE_RECONNECT_DELAY_MS = 1000;
+export const NATIVE_RECONNECT_MAX_DELAY_MS = 30_000;
+export const NATIVE_RECONNECT_JITTER_RATIO = 0.2;
+// Chrome 120+ permits extension alarms no more frequently than every 30 seconds.
+export const NATIVE_RECONNECT_PERIOD_MINUTES = 0.5;
+export const BRIDGE_HEALTH_CHECK_DELAY_MS = NATIVE_RECONNECT_PERIOD_MINUTES * 60_000;
+export const NATIVE_HOST_LIFECYCLE_GRACE_MS = 20_000;
 export const NATIVE_TELEMETRY_LIMIT = 50;
 export const NATIVE_HANDSHAKE_TIMEOUT_MS = 3000;
 export const NATIVE_PENDING_REQUEST_LIMIT = 8;
@@ -18,6 +23,8 @@ let nativeRequestSeq = 0;
 let nativeReconnectAttempt = 0;
 let nativeReconnectPending = false;
 let nativeReconnectTimeoutId = null;
+let nativeDisconnectRequested = false;
+let lastNativeLifecycle = null;
 let onNativeMessage = null;
 let onStatusChange = null;
 let onTelemetry = null;
@@ -30,6 +37,8 @@ let nativeStatus = {
   hostName: NATIVE_HOST_DEFAULT,
   lastChecked: Date.now(),
   reconnectAttempt: 0,
+  expectedDisconnect: false,
+  lifecycle: null,
   telemetry: [],
 };
 
@@ -90,12 +99,26 @@ export async function connectNativeTransport(options = {}) {
   try {
     nativePort = chrome.runtime.connectNative(hostName);
   } catch (error) {
+    const errorCode = classifyNativeTransportFailure(error);
     recordNativeTelemetry('connect_failed', { hostName, error: describeError(error) });
-    await setNativeStatus(options.silent ? 'reconnecting' : 'disconnected', { hostName, error: describeError(error), nextRetryMs: NATIVE_RECONNECT_DELAY_MS });
-    if (!options.silent) throw error;
+    await setNativeStatus(options.silent ? 'reconnecting' : 'disconnected', {
+      hostName,
+      error: describeError(error),
+      errorCode,
+      nextRetryMs: nextNativeReconnectDelayMs(),
+    });
+    nativeReconnectPending = false;
+    await scheduleNativeReconnect();
+    if (!options.silent) {
+      throw Object.assign(error instanceof Error ? error : new Error(describeError(error)), {
+        code: errorCode,
+        retryable: true,
+      });
+    }
     return getNativeStatus();
   }
   nativePort.onMessage.addListener((message) => {
+    if (handleNativeLifecycle(message)) return;
     if (handleNativeResponse(message)) return;
     if (onNativeMessage) {
       void Promise.resolve(onNativeMessage(message)).catch((error) => {
@@ -106,10 +129,26 @@ export async function connectNativeTransport(options = {}) {
   const connectedPort = nativePort;
   nativePort.onDisconnect.addListener(() => {
     const error = chrome.runtime.lastError?.message || 'Native host disconnected';
+    const errorCode = classifyNativeTransportFailure(error);
+    const disconnectError = Object.assign(new Error(error), {
+      code: errorCode,
+      retryable: true,
+    });
+    const disconnectRequested = nativeDisconnectRequested;
+    nativeDisconnectRequested = false;
     if (nativePort === connectedPort) nativePort = null;
-    rejectPendingNativeRequests(new Error(error));
-    recordNativeTelemetry('disconnected', { hostName, error });
-    void setNativeStatus('disconnected', { hostName, error }).then(() => scheduleNativeReconnect()).catch(() => {});
+    rejectPendingNativeRequests(disconnectError);
+    const lifecycle = recentNativeLifecycle();
+    const expectedDisconnect = lifecycle?.expected === true;
+    recordNativeTelemetry('disconnected', { hostName, error, errorCode, expectedDisconnect, lifecycle });
+    if (disconnectRequested) return;
+    void setNativeStatus('disconnected', {
+      hostName,
+      error,
+      errorCode,
+      expectedDisconnect,
+      lifecycle,
+    }).then(() => scheduleNativeReconnect({ immediate: true })).catch(() => {});
   });
   let handshake;
   try {
@@ -119,9 +158,11 @@ export async function connectNativeTransport(options = {}) {
     }
     assertNativeHostVersionCompatibility(handshake);
   } catch (error) {
+    const errorCode = classifyNativeTransportFailure(error);
     if (nativePort === connectedPort) {
       nativePort = null;
       try {
+        nativeDisconnectRequested = true;
         connectedPort.disconnect();
       } catch {}
     }
@@ -130,10 +171,17 @@ export async function connectNativeTransport(options = {}) {
     await setNativeStatus(options.silent ? 'reconnecting' : 'disconnected', {
       hostName,
       error: describeError(error),
-      nextRetryMs: NATIVE_RECONNECT_DELAY_MS,
+      errorCode,
+      nextRetryMs: nextNativeReconnectDelayMs(),
     });
+    nativeReconnectPending = false;
     await scheduleNativeReconnect();
-    if (!options.silent) throw error;
+    if (!options.silent) {
+      throw Object.assign(error instanceof Error ? error : new Error(describeError(error)), {
+        code: errorCode,
+        retryable: true,
+      });
+    }
     return getNativeStatus();
   }
   let registration = null;
@@ -161,6 +209,7 @@ export async function connectNativeTransport(options = {}) {
   }
   nativeReconnectAttempt = 0;
   nativeReconnectPending = false;
+  lastNativeLifecycle = null;
   clearNativeReconnectTimeout();
   const connectionState = classifyDesktopBridgeHandshake(handshake);
   const desktopBridgeConnected = connectionState === 'connected';
@@ -178,9 +227,19 @@ export async function connectNativeTransport(options = {}) {
   await setNativeStatus(connectionState, {
     hostName,
     error: connectionError,
+    errorCode: connectionState === 'connected'
+      ? ''
+      : connectionState === 'upgrade_required'
+        ? 'NATIVE_HOST_UPGRADE_REQUIRED'
+        : connectionState === 'bridge_error'
+          ? String(handshake?.desktopBridge?.errorCode || 'DESKTOP_BRIDGE_ERROR')
+          : 'APP_NOT_RUNNING',
     handshake,
     registration,
     registrationSucceeded,
+    expectedDisconnect: false,
+    lifecycle: null,
+    nextRetryMs: desktopBridgeConnected ? 0 : BRIDGE_HEALTH_CHECK_DELAY_MS,
   });
   if (desktopBridgeConnected) {
     await clearNativeReconnectAlarm();
@@ -223,6 +282,10 @@ export function shouldReportNativeConnectionFailure(error = null, status = nativ
   const availability = String(status?.handshake?.desktopBridge?.availability || '').trim().toLowerCase();
   const code = String(error?.code || error?.data?.code || '').trim().toUpperCase();
 
+  if (status?.expectedDisconnect === true || status?.lifecycle?.expected === true) {
+    return false;
+  }
+
   if (
     currentState === 'app_not_running'
     || (availability === 'app_not_running' && currentState !== 'connected')
@@ -243,6 +306,23 @@ export function shouldReportNativeConnectionFailure(error = null, status = nativ
   return currentState === 'connected' || previousState === 'connected';
 }
 
+export function classifyNativeTransportFailure(error = null) {
+  const message = describeError(error).toLowerCase();
+  if (/native_request_timeout|native transport is busy/.test(message)) {
+    return 'NATIVE_REQUEST_TIMEOUT';
+  }
+  if (/native host has exited|native host exited|native host process.*(?:exit|quit|crash)/.test(message)) {
+    return 'NATIVE_HOST_EXITED';
+  }
+  if (/specified native messaging host|native messaging host.*(?:not found|not registered)|host manifest.*(?:not found|missing)/.test(message)) {
+    return 'NATIVE_HOST_NOT_REGISTERED';
+  }
+  if (/native host version mismatch|desktop bridge.*upgrade|required.*upgrade/.test(message)) {
+    return 'NATIVE_HOST_UPGRADE_REQUIRED';
+  }
+  return 'NATIVE_TRANSPORT_DISCONNECTED';
+}
+
 export function normalizeProductVersion(value = '') {
   const segments = String(value).trim().split('.').slice(0, 3);
   if (segments.length !== 3 || segments.some((segment) => !/^\d+$/.test(segment))) return '';
@@ -253,6 +333,7 @@ export async function disconnectNativeTransport(reason = 'disconnect') {
   recordNativeTelemetry('disconnect_requested', { reason, connected: Boolean(nativePort) });
   if (nativePort) {
     try {
+      nativeDisconnectRequested = true;
       nativePort.disconnect();
     } catch {}
   }
@@ -267,7 +348,10 @@ export async function disconnectNativeTransport(reason = 'disconnect') {
 export async function requestNativeHost(method, params = {}, timeoutMs = 12_000) {
   if (!nativePort) {
     await scheduleNativeReconnect();
-    throw new Error(TARGET_NATIVE_DISCONNECTED_ERROR);
+    throw Object.assign(new Error(TARGET_NATIVE_DISCONNECTED_ERROR), {
+      code: 'NATIVE_TRANSPORT_DISCONNECTED',
+      retryable: true,
+    });
   }
   if (pendingNativeRequests.size >= NATIVE_PENDING_REQUEST_LIMIT) {
     const error = new Error('Native transport is busy; retry the request');
@@ -288,7 +372,11 @@ export async function requestNativeHost(method, params = {}, timeoutMs = 12_000)
     const timer = setTimeout(() => {
       pendingNativeRequests.delete(id);
       recordNativeTelemetry('request_timeout', { id, method: message.method, timeoutMs: Number(timeoutMs || 12_000) });
-      reject(new Error(`native_request_timeout: ${method}`));
+      reject(Object.assign(new Error(`native_request_timeout: ${method}`), {
+        code: 'NATIVE_REQUEST_TIMEOUT',
+        retryable: true,
+        phase: 'native_messaging',
+      }));
     }, Number(timeoutMs || 12_000));
     pendingNativeRequests.set(id, {
       resolve: (value) => {
@@ -392,18 +480,35 @@ function rejectPendingNativeRequests(error) {
   pendingNativeRequests.clear();
 }
 
-async function scheduleNativeReconnect() {
+export function calculateNativeReconnectDelayMs(attempt = nativeReconnectAttempt, random = Math.random) {
+  const normalizedAttempt = Math.max(1, Math.floor(Number(attempt) || 1));
+  const exponentialDelay = Math.min(
+    NATIVE_RECONNECT_MAX_DELAY_MS,
+    NATIVE_RECONNECT_DELAY_MS * (2 ** Math.min(normalizedAttempt - 1, 8)),
+  );
+  const randomValue = Math.max(0, Math.min(1, Number(random()) || 0));
+  const jitter = Math.round(exponentialDelay * NATIVE_RECONNECT_JITTER_RATIO * randomValue);
+  return Math.min(NATIVE_RECONNECT_MAX_DELAY_MS, exponentialDelay + jitter);
+}
+
+function nextNativeReconnectDelayMs() {
+  return calculateNativeReconnectDelayMs(nativeReconnectAttempt || 1);
+}
+
+async function scheduleNativeReconnect(options = {}) {
   if (nativePort) return;
   if (!nativeReconnectPending) {
     nativeReconnectPending = true;
-    nativeReconnectAttempt += 1;
+    nativeReconnectAttempt = Math.max(1, nativeReconnectAttempt + 1);
   }
+  const delayMs = options.immediate === true ? 0 : nextNativeReconnectDelayMs();
   recordNativeTelemetry('reconnect_scheduled', {
     attempt: nativeReconnectAttempt,
-    delayMs: NATIVE_RECONNECT_DELAY_MS,
+    delayMs,
+    immediate: options.immediate === true,
   });
-  await setNativeStatus('reconnecting', { nextRetryMs: NATIVE_RECONNECT_DELAY_MS }).catch(() => {});
-  scheduleNativeReconnectTimeout();
+  await setNativeStatus('reconnecting', { nextRetryMs: delayMs }).catch(() => {});
+  scheduleNativeReconnectTimeout(delayMs);
   await ensureNativeReconnectAlarm();
 }
 
@@ -420,6 +525,7 @@ async function runNativeReconnectAttempt(hostName = '') {
         await setNativeStatus('connected', {
           handshake,
           error: '',
+          errorCode: '',
           nextRetryMs: 0,
         });
         await clearNativeReconnectAlarm();
@@ -432,36 +538,46 @@ async function runNativeReconnectAttempt(hostName = '') {
           : connectionState === 'bridge_error'
             ? `Beav Desktop Bridge handshake failed: ${handshake?.desktopBridge?.errorCode || 'unknown'}`
             : 'Beav desktop app is not connected',
-        nextRetryMs: NATIVE_RECONNECT_DELAY_MS,
+        errorCode: connectionState === 'upgrade_required'
+          ? 'NATIVE_HOST_UPGRADE_REQUIRED'
+          : connectionState === 'bridge_error'
+            ? String(handshake?.desktopBridge?.errorCode || 'DESKTOP_BRIDGE_ERROR')
+            : 'APP_NOT_RUNNING',
+        nextRetryMs: BRIDGE_HEALTH_CHECK_DELAY_MS,
       });
     } catch (error) {
+      if (nativePort) await disconnectNativeTransport('health_check_failed');
       await setNativeStatus('reconnecting', {
         error: describeError(error),
-        nextRetryMs: NATIVE_RECONNECT_DELAY_MS,
+        errorCode: classifyNativeTransportFailure(error),
+        nextRetryMs: nextNativeReconnectDelayMs(),
       });
     }
-    scheduleNativeReconnectTimeout();
+    nativeReconnectPending = false;
+    await scheduleNativeReconnect();
     await ensureNativeReconnectAlarm();
     return getNativeStatus();
   }
   clearNativeReconnectTimeout();
-  nativeReconnectPending = true;
-  nativeReconnectAttempt += 1;
+  if (!nativeReconnectPending) {
+    nativeReconnectPending = true;
+    nativeReconnectAttempt = Math.max(1, nativeReconnectAttempt + 1);
+  }
   recordNativeTelemetry('reconnect_attempt', { hostName: hostName || nativeStatus.hostName || NATIVE_HOST_DEFAULT });
   const status = await connectNativeTransport({ silent: true, hostName: hostName || nativeStatus.hostName || NATIVE_HOST_DEFAULT });
-  if (status.state !== 'connected') {
-    scheduleNativeReconnectTimeout();
+  if (status.state !== 'connected' && !nativeReconnectPending) {
+    await scheduleNativeReconnect();
     await ensureNativeReconnectAlarm();
   }
   return status;
 }
 
-function scheduleNativeReconnectTimeout() {
-  if ((nativePort && nativeStatus.state === 'connected') || nativeReconnectTimeoutId != null) return;
+function scheduleNativeReconnectTimeout(delayMs = nextNativeReconnectDelayMs()) {
+  if (nativePort || nativeReconnectTimeoutId != null) return;
   nativeReconnectTimeoutId = setTimeout(() => {
     nativeReconnectTimeoutId = null;
     void runNativeReconnectAttempt().catch(() => {});
-  }, NATIVE_RECONNECT_DELAY_MS);
+  }, delayMs);
 }
 
 function clearNativeReconnectTimeout() {
@@ -478,13 +594,7 @@ async function ensureNativeReconnectAlarm() {
       periodInMinutes: NATIVE_RECONNECT_PERIOD_MINUTES,
     }).catch(() => {});
   }
-  const targetAlarmName = getTargetNativeReconnectAlarmName();
-  const targetExisting = await chrome.alarms.get(targetAlarmName).catch(() => null);
-  if (!targetExisting) {
-    await chrome.alarms.create(targetAlarmName, {
-      periodInMinutes: NATIVE_RECONNECT_PERIOD_MINUTES,
-    }).catch(() => {});
-  }
+  await chrome.alarms.clear(getTargetNativeReconnectAlarmName()).catch(() => {});
 }
 
 async function clearNativeReconnectAlarm() {
@@ -512,6 +622,26 @@ async function setNativeStatus(state, patch = {}) {
   await persistNativeStatus();
   onStatusChange?.(getNativeStatus());
   return getNativeStatus();
+}
+
+function handleNativeLifecycle(message) {
+  if (message?.method !== 'host.lifecycle') return false;
+  const params = message.params && typeof message.params === 'object' ? message.params : {};
+  const details = params.details && typeof params.details === 'object' ? params.details : {};
+  lastNativeLifecycle = {
+    reason: String(params.reason || 'unknown').slice(0, 80),
+    atMs: Number(params.atMs || Date.now()),
+    expected: details.expected === true || params.reason === 'app_upgrade',
+  };
+  recordNativeTelemetry('host_lifecycle', lastNativeLifecycle);
+  void setNativeStatus(nativeStatus.state, { lifecycle: lastNativeLifecycle }).catch(() => {});
+  return true;
+}
+
+function recentNativeLifecycle() {
+  if (!lastNativeLifecycle) return null;
+  if (Date.now() - Number(lastNativeLifecycle.atMs || 0) > NATIVE_HOST_LIFECYCLE_GRACE_MS) return null;
+  return { ...lastNativeLifecycle };
 }
 
 async function persistNativeStatus() {

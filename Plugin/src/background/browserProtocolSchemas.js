@@ -1,5 +1,25 @@
-export const BROWSER_PROTOCOL_SCHEMA_VERSION = 1;
-export const NATIVE_METHOD_SCHEMA_CATALOG_VERSION = 1;
+export const BROWSER_PROTOCOL_SCHEMA_VERSION = 2;
+export const NATIVE_METHOD_SCHEMA_CATALOG_VERSION = 2;
+
+// Compatibility inventory only. It records observed public contracts from the
+// supplied comparison extension; no third-party code or product behavior is
+// copied into this extension.
+export const CHATGPT_BROWSER_AUTOMATION_REFERENCE = Object.freeze({
+  referenceId: 'chatgpt-chrome-extension-1.2.27236.6274',
+  comparedAt: '2026-08-09',
+  alignmentScope: 'browser_control_automation_contracts',
+  adoptedContracts: [
+    'child_navigation_target_ownership',
+    'getBookmarks',
+    'getTopSites',
+    'getRecentlyClosedSessions',
+    'createNotification',
+    'markTab',
+    'focusTab',
+    'notifyCursorArrived',
+  ],
+  explicitlyNotAdopted: ['chat_specific_tab_mentions', 'toolbar_usage_telemetry', 'foreign_extension_iframe_blanking'],
+});
 
 export const NATIVE_METHOD_SCHEMAS = {
   executeCdp: methodSchema('executeCdp', {
@@ -7,6 +27,18 @@ export const NATIVE_METHOD_SCHEMAS = {
     aliases: { timeoutMs: 'timeout_ms', tabId: 'target.tabId', targetId: 'target.targetId', params: 'commandParams' },
     inputFields: ['browser_id?', 'session_id?', 'turn_id?', 'target?', 'tabId?', 'targetId?', 'method', 'params?', 'timeout_ms?'],
     outputFields: ['success', 'result|error'],
+  }),
+  tab_cdp_call: methodSchema('tab_cdp_call', {
+    required: ['tab_id', 'method'],
+    aliases: { tabId: 'tab_id', params: 'commandParams', timeoutMs: 'timeout_ms' },
+    inputFields: ['browser_id?', 'session_id?', 'turn_id?', 'tab_id', 'method', 'params?', 'timeout_ms?'],
+    outputFields: ['success', 'target', 'method', 'result'],
+  }),
+  tab_cdp_events: methodSchema('tab_cdp_events', {
+    required: [],
+    aliases: { tabId: 'tab_id', targetId: 'target_id', afterSequence: 'cursor', afterEventId: 'after_event_id' },
+    inputFields: ['browser_id?', 'session_id?', 'turn_id?', 'tab_id?', 'target_id?', 'methods?', 'cursor?', 'limit?'],
+    outputFields: ['success', 'events', 'nextCursor', 'truncated'],
   }),
   attachTarget: methodSchema('attachTarget', {
     required: ['targetId', 'tabId'],
@@ -55,6 +87,48 @@ export const NATIVE_METHOD_SCHEMAS = {
     aliases: { turnId: 'turn_id' },
     inputFields: ['session_id?', 'turn_id'],
     outputFields: ['success', 'turnId'],
+  }),
+  getBookmarks: methodSchema('getBookmarks', {
+    required: [],
+    aliases: { maxResults: 'limit' },
+    inputFields: ['limit?', 'query?'],
+    outputFields: ['success', 'bookmarks'],
+  }),
+  getTopSites: methodSchema('getTopSites', {
+    required: [],
+    aliases: { maxResults: 'limit' },
+    inputFields: ['limit?'],
+    outputFields: ['success', 'topSites'],
+  }),
+  getRecentlyClosedSessions: methodSchema('getRecentlyClosedSessions', {
+    required: [],
+    aliases: { maxResults: 'limit' },
+    inputFields: ['limit?'],
+    outputFields: ['success', 'sessions'],
+  }),
+  createNotification: methodSchema('createNotification', {
+    required: ['title', 'message'],
+    aliases: { notificationId: 'id' },
+    inputFields: ['id?', 'title', 'message', 'priority?'],
+    outputFields: ['success', 'notificationId'],
+  }),
+  markTab: methodSchema('markTab', {
+    required: ['tabId', 'mark'],
+    aliases: { tabId: 'id|activeTabId', mark: 'status' },
+    inputFields: ['browser_id?', 'session_id?', 'turn_id?', 'tabId', 'mark:handoff|deliverable|clear'],
+    outputFields: ['success', 'tabId', 'mark'],
+  }),
+  focusTab: methodSchema('focusTab', {
+    required: ['tabId'],
+    aliases: { tabId: 'id|activeTabId' },
+    inputFields: ['browser_id?', 'session_id?', 'turn_id?', 'tabId'],
+    outputFields: ['success', 'tabId', 'windowId', 'focusedWindow'],
+  }),
+  notifyCursorArrived: methodSchema('notifyCursorArrived', {
+    required: ['sessionId', 'turnId', 'moveSequence'],
+    aliases: { sessionId: 'session_id', turnId: 'turn_id', moveSequence: 'move_sequence' },
+    inputFields: ['session_id', 'turn_id', 'move_sequence', 'frameUrl?'],
+    outputFields: ['success', 'notified'],
   }),
   browser_viewport_set: methodSchema('browser_viewport_set', {
     required: ['width', 'height'],
@@ -144,7 +218,10 @@ export function normalizeNativeMethodParams(method, params = {}) {
   const name = String(method || '');
   switch (name) {
     case 'executeCdp':
+    case 'tab_cdp_call':
       return normalizeExecuteCdpParams(params);
+    case 'tab_cdp_events':
+      return normalizeCdpEventListParams(params);
     case 'executeUnhandledCommand':
       return normalizeExecuteUnhandledCommandParams(params);
     case 'attach':
@@ -164,6 +241,7 @@ export function normalizeNativeMethodParams(method, params = {}) {
     case 'claimUserTab':
       return normalizeClaimUserTabParams(params);
     case 'activateTab':
+    case 'focusTab':
       return normalizeActivateTabParams(params);
     case 'navigateTab':
       return normalizeNavigateTabParams(params);
@@ -178,10 +256,19 @@ export function normalizeNativeMethodParams(method, params = {}) {
       return normalizeFinalizeTabsParams(params);
     case 'getUserTabs':
     case 'getUserBookmarks':
+    case 'getBookmarks':
     case 'getUserTopSites':
+    case 'getTopSites':
     case 'getUserReadingList':
     case 'getUserSessions':
+    case 'getRecentlyClosedSessions':
       return normalizeUserStateListParams(params, name);
+    case 'markTab':
+      return normalizeTabMarkParams(params);
+    case 'createNotification':
+      return normalizeNotificationParams(params);
+    case 'notifyCursorArrived':
+      return normalizeCursorArrivalParams(params);
     case 'getUserBrowserContext':
       return normalizeUserBrowserContextParams(params);
     case 'getWindows':
@@ -410,12 +497,38 @@ function normalizeExecuteCdpParams(params = {}) {
   normalized.method = method;
   const target = isObject(normalized.target) ? normalized.target : {};
   const targetId = firstString(normalized.targetId, normalized.id, target.targetId);
-  const tabId = firstPositiveInteger(normalized.tabId, target.tabId);
+  const tabId = firstPositiveInteger(normalized.tabId, normalized.tab_id, target.tabId);
   if (targetId) normalized.targetId = targetId;
   if (tabId) normalized.tabId = tabId;
   if (normalized.commandParams == null) normalized.commandParams = isObject(normalized.params) ? normalized.params : {};
   if (method !== 'Target.getTargets' && !targetId && !tabId) {
     throw new Error('executeCdp requires tabId or targetId');
+  }
+  return normalized;
+}
+
+function normalizeCdpEventListParams(params = {}) {
+  const normalized = normalizeBaseParams(params);
+  const tabId = firstPositiveInteger(normalized.tabId, normalized.tab_id);
+  if (tabId) normalized.tabId = tabId;
+  const targetId = firstString(normalized.targetId, normalized.target_id);
+  if (targetId) normalized.targetId = targetId;
+  if (normalized.methods != null && !Array.isArray(normalized.methods)) throw new Error('tab_cdp_events requires methods to be an array');
+  if (Array.isArray(normalized.methods)) {
+    const methods = [...new Set(normalized.methods.map((item) => String(item || '').trim()).filter(Boolean))];
+    if (methods.length > 50) throw new Error('tab_cdp_events supports at most 50 methods');
+    normalized.methods = methods;
+  }
+  const cursor = normalized.cursor ?? normalized.afterSequence ?? normalized.after_sequence;
+  if (cursor != null && cursor !== '') {
+    const value = Number(cursor);
+    if (!Number.isInteger(value) || value < 0) throw new Error('tab_cdp_events cursor must be a non-negative integer');
+    normalized.cursor = value;
+  }
+  if (normalized.limit != null) {
+    const limit = Number(normalized.limit);
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) throw new Error('tab_cdp_events limit must be an integer between 1 and 1000');
+    normalized.limit = limit;
   }
   return normalized;
 }
@@ -501,6 +614,52 @@ function normalizeActivateTabParams(params = {}) {
   const tabId = firstPositiveInteger(normalized.tabId, normalized.id, normalized.activeTabId);
   if (!tabId) throw new Error('activateTab requires tabId to be a positive integer');
   normalized.tabId = tabId;
+  return normalized;
+}
+
+function normalizeTabMarkParams(params = {}) {
+  const normalized = normalizeBaseParams(params);
+  const tabId = firstPositiveInteger(normalized.tabId, normalized.id, normalized.activeTabId);
+  if (!tabId) throw new Error('markTab requires tabId to be a positive integer');
+  const mark = firstString(normalized.mark, normalized.status).toLowerCase();
+  if (!['handoff', 'deliverable', 'clear'].includes(mark)) {
+    throw new Error('markTab requires mark to be handoff, deliverable, or clear');
+  }
+  normalized.tabId = tabId;
+  normalized.mark = mark;
+  return normalized;
+}
+
+function normalizeNotificationParams(params = {}) {
+  const normalized = normalizeBaseParams(params);
+  const title = firstString(normalized.title);
+  const message = firstString(normalized.message, normalized.body);
+  if (!title || title.length > 120) throw new Error('createNotification requires title between 1 and 120 characters');
+  if (!message || message.length > 1_000) throw new Error('createNotification requires message between 1 and 1000 characters');
+  const id = firstString(normalized.id, normalized.notificationId);
+  if (id && !/^[a-zA-Z0-9_.:-]{1,120}$/.test(id)) throw new Error('createNotification id contains unsupported characters');
+  if (normalized.priority != null) {
+    const priority = Number(normalized.priority);
+    if (!Number.isInteger(priority) || priority < -2 || priority > 2) throw new Error('createNotification priority must be an integer between -2 and 2');
+    normalized.priority = priority;
+  }
+  normalized.title = title;
+  normalized.message = message;
+  if (id) normalized.id = id;
+  return normalized;
+}
+
+function normalizeCursorArrivalParams(params = {}) {
+  const normalized = normalizeBaseParams(params);
+  const sessionId = firstString(normalized.sessionId, normalized.session_id);
+  const turnId = firstString(normalized.turnId, normalized.turn_id);
+  const moveSequence = Number(normalized.moveSequence ?? normalized.move_sequence);
+  if (!sessionId) throw new Error('notifyCursorArrived requires sessionId');
+  if (!turnId) throw new Error('notifyCursorArrived requires turnId');
+  if (!Number.isInteger(moveSequence) || moveSequence < 0) throw new Error('notifyCursorArrived requires moveSequence to be a non-negative integer');
+  normalized.sessionId = sessionId;
+  normalized.turnId = turnId;
+  normalized.moveSequence = moveSequence;
   return normalized;
 }
 

@@ -8,6 +8,8 @@ import path from 'node:path';
 import { BrowserControlTransport } from './browser-client.mjs';
 import {
   assertNativeHostVersionCompatibility,
+  calculateNativeReconnectDelayMs,
+  classifyNativeTransportFailure,
   classifyDesktopBridgeHandshake,
   normalizeProductVersion,
   shouldReportNativeConnectionFailure,
@@ -25,6 +27,8 @@ try {
   await testLateResponseTimeout();
   await testOversizedResponse();
   testNativeHostVersionCompatibility();
+  testNativeReconnectBackoff();
+  testNativeTransportFailureClassification();
   testDesktopBridgeHandshakeClassification();
   console.log(JSON.stringify({
     ok: true,
@@ -36,6 +40,8 @@ try {
       'oversized_response_rejected',
       'native_host_patch_update_compatible',
       'native_host_minor_mismatch_rejected',
+      'native_host_reconnect_uses_capped_exponential_backoff',
+      'native_host_exit_is_a_typed_recoverable_failure',
       'old_app_requires_upgrade',
       'bridge_error_is_reportable_but_app_not_running_is_suppressed',
     ],
@@ -43,6 +49,20 @@ try {
 } finally {
   await Promise.all(servers.map((server) => closeServer(server)));
   await fs.rm(tempRoot, { recursive: true, force: true });
+}
+
+function testNativeReconnectBackoff() {
+  assert.equal(calculateNativeReconnectDelayMs(1, () => 0), 1_000);
+  assert.equal(calculateNativeReconnectDelayMs(2, () => 0), 2_000);
+  assert.equal(calculateNativeReconnectDelayMs(5, () => 0), 16_000);
+  assert.equal(calculateNativeReconnectDelayMs(99, () => 1), 30_000);
+}
+
+function testNativeTransportFailureClassification() {
+  assert.equal(classifyNativeTransportFailure(new Error('Native host has exited.')), 'NATIVE_HOST_EXITED');
+  assert.equal(classifyNativeTransportFailure(new Error('Specified native messaging host not found.')), 'NATIVE_HOST_NOT_REGISTERED');
+  assert.equal(classifyNativeTransportFailure(new Error('native_request_timeout: desktop.health')), 'NATIVE_REQUEST_TIMEOUT');
+  assert.equal(classifyNativeTransportFailure(new Error('Native transport is disconnected; reconnect is pending')), 'NATIVE_TRANSPORT_DISCONNECTED');
 }
 
 function testNativeHostVersionCompatibility() {

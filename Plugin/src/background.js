@@ -1702,6 +1702,48 @@ function classifyXhsTaskResult(result) {
   return Number(result?.failed || 0) > 0 ? 'partial' : 'success';
 }
 
+function classifyCaptureFailureBucket(failure) {
+  const message = normalizeText(failure?.error).toLowerCase().slice(0, 1_200);
+  if (/\b429\b|too many requests|rate limit|操作过于频繁|请求过于频繁|发送过于频繁/.test(message)) {
+    return 'source_rate_limited';
+  }
+  if (/\b(?:401|403)\b|not.?logged.?in|unauthorized|forbidden|登录.*(?:失效|过期|失败)/.test(message)) {
+    return 'source_auth_required';
+  }
+  if (/\b404\b|not found|内容不存在|笔记不存在/.test(message)) {
+    return 'source_not_found';
+  }
+  if (/\b(?:408|504)\b|timeout|timed out|超时/.test(message)) {
+    return 'network_timeout';
+  }
+  if (/failed to fetch|network(?: error)?|networkerror|connection|econn|网络(?:连接)?失败/.test(message)) {
+    return 'network_transport';
+  }
+  if (/\b5\d\d\b|bad gateway|service unavailable|internal server error/.test(message)) {
+    return 'source_server_error';
+  }
+  if (/write.*(?:redbox|knowledge)|保存.*(?:redbox|知识库)|desktop bridge/.test(message)) {
+    return 'desktop_write_failed';
+  }
+  if (/invalid|解析失败|响应.*无效|feed.*(?:empty|missing)/.test(message)) {
+    return 'source_response_invalid';
+  }
+  return 'unclassified';
+}
+
+function summarizeCaptureFailureBuckets(failures) {
+  const buckets = new Map();
+  for (const failure of Array.isArray(failures) ? failures : []) {
+    const bucket = classifyCaptureFailureBucket(failure);
+    buckets.set(bucket, Number(buckets.get(bucket) || 0) + 1);
+  }
+  return Object.fromEntries(
+    [...buckets.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(0, 8),
+  );
+}
+
 function buildXhsTaskLogMessage(task, status, result, error) {
   const action = getXhsTaskActionLabel(task?.type);
   if (status === 'running') {
@@ -1947,6 +1989,7 @@ async function runNextXhsTask() {
           tabId: Number(task.tabId || 0) || null,
           savedCount: Number(task.savedCount || result?.count || 0),
           failedCount: Number(result?.failed || 0),
+          failureBuckets: summarizeCaptureFailureBuckets(result?.failures),
           progress: task.progress || null,
         },
       });
@@ -3573,6 +3616,14 @@ async function runExtraction(tabId, func, options = {}) {
   }
   if (!targetTabId) {
     throw new Error('No active tab');
+  }
+  const targetTab = await chrome.tabs.get(targetTabId).catch(() => null);
+  if (!targetTab?.id || !isHttpUrl(targetTab.url)) {
+    const error = new Error('Tab URL is not capturable');
+    error.code = 'UNSUPPORTED_URL';
+    error.phase = 'capture_preflight';
+    error.retryable = false;
+    throw error;
   }
   if (options.captureRuntime) {
     await chrome.scripting.executeScript({

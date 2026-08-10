@@ -97,6 +97,11 @@ export function createNativeMethodRouter(deps = {}) {
       const normalized = normalize('executeCdp', params);
       return deps.runBrowserAction({ type: 'cdp.send', ...normalized }, normalized.sessionId);
     })
+    .register('tab_cdp_call', async (params) => {
+      const normalized = normalize('tab_cdp_call', params);
+      return deps.runBrowserAction({ type: 'cdp.send', ...normalized }, normalized.sessionId);
+    })
+    .register('tab_cdp_events', async (params) => runNativeBrowserAction(deps, 'cdp.events', 'tab_cdp_events', params))
     .register('attach', async (params) => {
       const normalized = normalize('attach', params);
       return deps.runBrowserAction({ type: 'cdp.attach', ...normalized }, normalized.sessionId);
@@ -141,6 +146,10 @@ export function createNativeMethodRouter(deps = {}) {
       const normalized = normalize('activateTab', params);
       return deps.runBrowserAction({ type: 'tab.activate', ...normalized }, normalized.sessionId);
     })
+    .register('focusTab', async (params) => {
+      const normalized = normalize('focusTab', params);
+      return deps.runBrowserAction({ type: 'tab.activate', ...normalized }, normalized.sessionId);
+    })
     .register('navigateTab', async (params) => {
       const normalized = normalize('navigateTab', params);
       return deps.runBrowserAction({ type: 'tab.navigate', ...normalized }, normalized.sessionId);
@@ -165,9 +174,26 @@ export function createNativeMethodRouter(deps = {}) {
     .register('getUserTabs', async (params) => runNativeBrowserAction(deps, 'tabs.list', 'getUserTabs', params))
     .register('getUserHistory', async (params) => runNativeBrowserAction(deps, 'history.search', 'getUserHistory', params))
     .register('getUserBookmarks', async (params) => runNativeBrowserAction(deps, 'bookmarks.list', 'getUserBookmarks', params))
+    .register('getBookmarks', async (params) => runNativeBrowserAction(deps, 'bookmarks.list', 'getBookmarks', params))
     .register('getUserTopSites', async (params) => runNativeBrowserAction(deps, 'topSites.list', 'getUserTopSites', params))
+    .register('getTopSites', async (params) => runNativeBrowserAction(deps, 'topSites.list', 'getTopSites', params))
     .register('getUserReadingList', async (params) => runNativeBrowserAction(deps, 'readingList.list', 'getUserReadingList', params))
     .register('getUserSessions', async (params) => runNativeBrowserAction(deps, 'sessions.recentlyClosed', 'getUserSessions', params))
+    .register('getRecentlyClosedSessions', async (params) => runNativeBrowserAction(deps, 'sessions.recentlyClosed', 'getRecentlyClosedSessions', params))
+    .register('markTab', async (params) => {
+      const normalized = normalize('markTab', params);
+      return deps.runBrowserAction({ type: 'tab.mark', ...normalized }, normalized.sessionId);
+    })
+    .register('createNotification', async (params) => {
+      const normalized = normalize('createNotification', params);
+      return deps.runBrowserAction({ type: 'notification.create', ...normalized }, normalized.sessionId);
+    })
+    .register('notifyCursorArrived', async (params) => {
+      const normalized = normalize('notifyCursorArrived', params);
+      if (typeof deps.notifyCursorArrived !== 'function') throw new Error('notifyCursorArrived is unavailable');
+      deps.notifyCursorArrived(normalized);
+      return { success: true, notified: true, moveSequence: normalized.moveSequence };
+    })
     .register('getUserBrowserContext', async (params) => runNativeBrowserAction(deps, 'browser.context', 'getUserBrowserContext', params))
     .register('getWindows', async (params) => runNativeBrowserAction(deps, 'windows.list', 'getWindows', params))
     .register('getSessionEvents', async (params) => runNativeBrowserAction(deps, 'browser.sessionEvents', 'getSessionEvents', params))
@@ -266,6 +292,14 @@ export function createLocalCommandActionRouter(deps = {}) {
     .register('claimUserTab', async ({ payload, session }) => runBrowserAction('tab.claim', payload, session))
     .register('activateTab', async ({ payload, session }) => runBrowserAction('tab.activate', payload, session))
     .register('focusTab', async ({ payload, session }) => runBrowserAction('tab.activate', payload, session))
+    .register('markTab', async ({ payload, session }) => runBrowserAction('tab.mark', payload, session))
+    .register('tab.mark', async ({ payload, session }) => runBrowserAction('tab.mark', payload, session))
+    .register('createNotification', async ({ payload, session }) => runBrowserAction('notification.create', payload, session))
+    .register('notifyCursorArrived', async ({ payload }) => {
+      if (typeof deps.notifyCursorArrived !== 'function') throw new Error('notifyCursorArrived is unavailable');
+      deps.notifyCursorArrived(payload);
+      return { success: true, notified: true, moveSequence: payload.moveSequence ?? payload.move_sequence ?? null };
+    })
     .register('tab.activate', async ({ payload, session }) => runBrowserAction('tab.activate', payload, session))
     .register('navigateTab', async ({ payload, session }) => runBrowserAction('tab.navigate', payload, session))
     .register('tab.navigate', async ({ payload, session }) => runBrowserAction('tab.navigate', payload, session))
@@ -470,12 +504,15 @@ export function createLocalCommandActionRouter(deps = {}) {
     .register('getUserHistory', async ({ payload, session }) => runBrowserAction('history.search', payload, session))
     .register('bookmarks.list', async ({ payload, session }) => runBrowserAction('bookmarks.list', payload, session))
     .register('getUserBookmarks', async ({ payload, session }) => runBrowserAction('bookmarks.list', payload, session))
+    .register('getBookmarks', async ({ payload, session }) => runBrowserAction('bookmarks.list', payload, session))
     .register('topSites.list', async ({ payload, session }) => runBrowserAction('topSites.list', payload, session))
     .register('getUserTopSites', async ({ payload, session }) => runBrowserAction('topSites.list', payload, session))
+    .register('getTopSites', async ({ payload, session }) => runBrowserAction('topSites.list', payload, session))
     .register('readingList.list', async ({ payload, session }) => runBrowserAction('readingList.list', payload, session))
     .register('getUserReadingList', async ({ payload, session }) => runBrowserAction('readingList.list', payload, session))
     .register('sessions.recentlyClosed', async ({ payload, session }) => runBrowserAction('sessions.recentlyClosed', payload, session))
     .register('getUserSessions', async ({ payload, session }) => runBrowserAction('sessions.recentlyClosed', payload, session))
+    .register('getRecentlyClosedSessions', async ({ payload, session }) => runBrowserAction('sessions.recentlyClosed', payload, session))
     .register('sessions.devices', async ({ payload, session }) => runBrowserAction('sessions.devices', payload, session))
     .register('browser.context', async ({ payload, session }) => runBrowserAction('browser.context', payload, session))
     .register('userBrowser.context', async ({ payload, session }) => runBrowserAction('browser.context', payload, session))

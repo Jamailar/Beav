@@ -101,6 +101,7 @@ export async function clickElement(options) {
   return {
     success: true,
     selector: cssPath(target),
+    locator: locatorReceipt(options, target),
     text: label,
     href: target.href || target.getAttribute('href') || '',
     button: normalizeMouseButtonName(options.button),
@@ -128,6 +129,7 @@ export async function hoverElement(options) {
   return {
     success: true,
     selector: cssPath(target),
+    locator: locatorReceipt(options, target),
     text: label,
     rect: {
       x,
@@ -161,6 +163,7 @@ export async function typeElement(options) {
   return {
     success: true,
     selector: cssPath(target),
+    locator: locatorReceipt(options, target),
     textLength: text.length,
     label,
     value: nextValue,
@@ -196,6 +199,7 @@ export async function selectElement(options) {
   return {
     success: true,
     selector: cssPath(target),
+    locator: locatorReceipt(options, target),
     label,
     value: target.value,
     values: selectedValues,
@@ -231,6 +235,7 @@ export async function checkElement(options = {}) {
   return {
     success: true,
     selector: cssPath(target),
+    locator: locatorReceipt(options, target),
     label,
     checked: Boolean(target.checked),
     value: Boolean(target.checked),
@@ -247,6 +252,7 @@ export function isCheckedElement(options = {}) {
   return {
     success: true,
     selector: cssPath(target),
+    locator: locatorReceipt(options, target),
     label: elementLabel(target),
     checked: Boolean(target.checked),
     value: Boolean(target.checked),
@@ -260,6 +266,7 @@ export function isElementVisible(options = {}) {
   return {
     success: true,
     selector: cssPath(target),
+    locator: locatorReceipt(options, target),
     label: elementLabel(target),
     value: isVisibleElement(target),
     visible: isVisibleElement(target),
@@ -321,10 +328,12 @@ export function queryElements(options = {}) {
   return {
     success: true,
     selector: cssPath(baseNodes[0]),
+    locator: locatorReceipt(options, baseNodes[0]),
     relativeSelector: relativeSelector || null,
     count: rawNodes.length,
     returnedCount: values.length,
     first: values[0] || null,
+    elements: values,
     values,
     textContents: values.map((item) => item.text_content ?? ''),
     innerTexts: values.map((item) => item.inner_text ?? ''),
@@ -334,6 +343,40 @@ export function queryElements(options = {}) {
     isVisible: values[0]?.visible ?? false,
     textContent: values[0]?.text_content ?? null,
     innerText: values[0]?.inner_text ?? null,
+  };
+}
+
+export function detectBrowserAutomationBlocker(options = {}) {
+  const maxTextLength = Math.max(500, Math.min(20_000, Number(options.maxTextLength || 8_000)));
+  const text = normalizeWhitespace(document.body?.innerText || document.body?.textContent || '').slice(0, maxTextLength);
+  const title = String(document.title || '').slice(0, 240);
+  const selectorMatch = [
+    'iframe[src*="captcha" i]',
+    'iframe[src*="challenge" i]',
+    '[class*="captcha" i]',
+    '[id*="captcha" i]',
+    '[class*="verify" i]',
+    '[id*="verify" i]',
+    '[data-sitekey]',
+  ].some((selector) => {
+    try { return Boolean(document.querySelector(selector)); } catch { return false; }
+  });
+  const patterns = [
+    ['captcha', /(captcha|hcaptcha|recaptcha)/i],
+    ['security_verification', /(verify you are human|security check|unusual traffic|access denied|请完成验证|安全验证|滑块验证|行为验证|访问受限)/i],
+    ['login_required', /(sign in to continue|log in to continue|请先登录|登录后继续)/i],
+  ];
+  const matched = patterns.find(([, pattern]) => pattern.test(`${title}\n${text}`));
+  const reason = matched?.[0] || (selectorMatch ? 'captcha' : '');
+  return {
+    success: true,
+    blocked: Boolean(reason),
+    reason: reason || null,
+    evidence: {
+      titleMatched: Boolean(matched && title),
+      selectorMatched: selectorMatch,
+      textScanned: Math.min(text.length, maxTextLength),
+    },
   };
 }
 
@@ -561,6 +604,8 @@ function setCheckedValue(target, value) {
 }
 
 function findClickTarget(options) {
+  const locatorTarget = resolveLocatorActionTarget(options, isClickable);
+  if (locatorTarget !== undefined) return locatorTarget;
   if (options.selector) {
     const bySelector = [...document.querySelectorAll(options.selector)].find(isClickable);
     if (bySelector) return bySelector;
@@ -581,6 +626,8 @@ function findClickTarget(options) {
 }
 
 function findHoverTarget(options) {
+  const locatorTarget = resolveLocatorActionTarget(options, isHoverable);
+  if (locatorTarget !== undefined) return locatorTarget;
   if (options.selector) {
     const bySelector = [...document.querySelectorAll(options.selector)].find(isHoverable);
     if (bySelector) return bySelector;
@@ -599,6 +646,8 @@ function findHoverTarget(options) {
 }
 
 function findInputTarget(options) {
+  const locatorTarget = resolveLocatorActionTarget(options, (node) => isInputLike(node) && isClickable(node));
+  if (locatorTarget !== undefined) return locatorTarget;
   if (options.selector) {
     const bySelector = [...document.querySelectorAll(options.selector)]
       .find((node) => isInputLike(node) && isClickable(node));
@@ -621,6 +670,8 @@ function findInputTarget(options) {
 }
 
 function findSelectTarget(options) {
+  const locatorTarget = resolveLocatorActionTarget(options, (node) => node.tagName?.toLowerCase() === 'select' && isClickable(node));
+  if (locatorTarget !== undefined) return locatorTarget;
   if (options.selector) {
     const bySelector = [...document.querySelectorAll(options.selector)]
       .find((node) => node.tagName?.toLowerCase() === 'select' && isClickable(node));
@@ -642,6 +693,8 @@ function findSelectTarget(options) {
 }
 
 function findCheckTarget(options) {
+  const locatorTarget = resolveLocatorActionTarget(options, (node) => isCheckableInput(node) && (options.force === true || isClickable(node)));
+  if (locatorTarget !== undefined) return locatorTarget;
   if (options.selector) {
     const bySelector = [...document.querySelectorAll(options.selector)]
       .find((node) => isCheckableInput(node) && (options.force === true || isClickable(node)));
@@ -667,6 +720,8 @@ function findCheckTarget(options) {
 }
 
 function findAnyTarget(options) {
+  const locatorTarget = resolveLocatorActionTarget(options, (node) => node instanceof Element);
+  if (locatorTarget !== undefined) return locatorTarget;
   if (options.selector) {
     const node = document.querySelector(options.selector);
     if (node instanceof Element) return node;
@@ -684,6 +739,10 @@ function findAnyTarget(options) {
 }
 
 function collectLocatorTargets(options = {}) {
+  if (isObject(options.locatorAst)) {
+    const nodes = resolveLocatorAst(options.locatorAst);
+    return selectLocatorNodes(nodes, options);
+  }
   let nodes = [];
   if (options.selector) {
     nodes = [...document.querySelectorAll(String(options.selector))];
@@ -716,6 +775,181 @@ function collectLocatorTargets(options = {}) {
     return nodes;
   }
   return nodes[0] ? [nodes[0]] : [];
+}
+
+const LOCATOR_AST_MAX_DEPTH = 16;
+const LOCATOR_AST_MAX_NODES = 5_000;
+
+function resolveLocatorActionTarget(options = {}, predicate) {
+  if (!isObject(options.locatorAst)) return undefined;
+  const nodes = resolveLocatorAst(options.locatorAst).filter((node) => predicate(node));
+  const selected = selectLocatorNodes(nodes, { ...options, all: false, multiple: false, mode: '' });
+  return selected[0] || null;
+}
+
+function selectLocatorNodes(nodes, options = {}) {
+  const bounded = uniqueElements(nodes).slice(0, LOCATOR_AST_MAX_NODES);
+  const nth = Number(options.nth ?? options.index);
+  if (Number.isInteger(nth) && nth >= 0) return bounded[nth] ? [bounded[nth]] : [];
+  if (options.first === true) return bounded[0] ? [bounded[0]] : [];
+  if (options.last === true) return bounded.length ? [bounded[bounded.length - 1]] : [];
+  if (options.all === true || options.multiple === true || options.mode === 'all' || options.mode === 'count') return bounded;
+  if (options.strict !== false && bounded.length !== 1) {
+    throw new Error(`locator_strict_mode_violation: expected 1 element, found ${bounded.length}`);
+  }
+  return bounded[0] ? [bounded[0]] : [];
+}
+
+function resolveLocatorAst(ast, root = document, depth = 0) {
+  if (!isObject(ast)) throw new Error('locator_ast_invalid');
+  if (depth > LOCATOR_AST_MAX_DEPTH) throw new Error('locator_ast_too_deep');
+  const kind = String(ast.kind || '').trim();
+  switch (kind) {
+    case 'css':
+      return queryLocatorScope(root, String(ast.selector || ''));
+    case 'role':
+      return queryLocatorScope(root, '*').filter((node) => matchesLocatorRole(node, ast));
+    case 'text':
+      return preferSmallestTextMatches(queryLocatorScope(root, '*').filter((node) => matchesText(node, ast.text, ast.exact)));
+    case 'label':
+      return resolveLabelLocator(root, ast);
+    case 'placeholder':
+      return queryLocatorScope(root, 'input,textarea,[contenteditable="true"],[placeholder]')
+        .filter((node) => matchesTextValue(node.getAttribute('placeholder') || '', ast.placeholder, ast.exact));
+    case 'testId':
+      return queryLocatorScope(root, '[data-testid],[data-test],[data-test-id]')
+        .filter((node) => [node.getAttribute('data-testid'), node.getAttribute('data-test'), node.getAttribute('data-test-id')]
+          .some((value) => String(value || '') === String(ast.testId || '')));
+    case 'within': {
+      const parents = resolveLocatorAst(ast.parent, root, depth + 1);
+      return uniqueElements(parents.flatMap((parent) => resolveLocatorAst(ast.child, parent, depth + 1)));
+    }
+    case 'and': {
+      const items = Array.isArray(ast.items) ? ast.items : [];
+      if (items.length < 2 || items.length > 8) throw new Error('locator_and_requires_2_to_8_items');
+      const [first, ...rest] = items.map((item) => resolveLocatorAst(item, root, depth + 1));
+      return first.filter((node) => rest.every((nodes) => nodes.includes(node)));
+    }
+    case 'or': {
+      const items = Array.isArray(ast.items) ? ast.items : [];
+      if (items.length < 2 || items.length > 8) throw new Error('locator_or_requires_2_to_8_items');
+      return uniqueElements(items.flatMap((item) => resolveLocatorAst(item, root, depth + 1)));
+    }
+    case 'filter':
+      return resolveLocatorFilter(ast, root, depth + 1);
+    case 'first': {
+      const nodes = resolveLocatorAst(ast.base, root, depth + 1);
+      return nodes[0] ? [nodes[0]] : [];
+    }
+    case 'last': {
+      const nodes = resolveLocatorAst(ast.base, root, depth + 1);
+      return nodes.length ? [nodes[nodes.length - 1]] : [];
+    }
+    case 'nth': {
+      const index = Number(ast.index);
+      if (!Number.isInteger(index) || index < 0) throw new Error('locator_nth_requires_non_negative_index');
+      const nodes = resolveLocatorAst(ast.base, root, depth + 1);
+      return nodes[index] ? [nodes[index]] : [];
+    }
+    default:
+      throw new Error(`locator_ast_unsupported_kind:${kind || '<empty>'}`);
+  }
+}
+
+function resolveLocatorFilter(ast, root, depth) {
+  let nodes = resolveLocatorAst(ast.base, root, depth + 1);
+  if (ast.hasText != null) nodes = nodes.filter((node) => matchesText(node, ast.hasText, false));
+  if (ast.hasNotText != null) nodes = nodes.filter((node) => !matchesText(node, ast.hasNotText, false));
+  if (typeof ast.visible === 'boolean') nodes = nodes.filter((node) => isElementActuallyVisible(node) === ast.visible);
+  if (isObject(ast.has)) {
+    const descendants = new Set(resolveLocatorAst(ast.has, root, depth + 1));
+    nodes = nodes.filter((node) => [...descendants].some((descendant) => node !== descendant && node.contains(descendant)));
+  }
+  if (isObject(ast.hasNot)) {
+    const descendants = new Set(resolveLocatorAst(ast.hasNot, root, depth + 1));
+    nodes = nodes.filter((node) => ![...descendants].some((descendant) => node !== descendant && node.contains(descendant)));
+  }
+  return nodes;
+}
+
+function queryLocatorScope(root, selector) {
+  const normalized = String(selector || '').trim();
+  if (!normalized) throw new Error('locator_css_requires_selector');
+  try {
+    return [...root.querySelectorAll(normalized)].filter((node) => node instanceof Element).slice(0, LOCATOR_AST_MAX_NODES);
+  } catch {
+    throw new Error('locator_css_invalid_selector');
+  }
+}
+
+function resolveLabelLocator(root, ast) {
+  const labelText = String(ast.label || '').trim();
+  if (!labelText) return [];
+  const labels = queryLocatorScope(root, 'label').filter((label) => matchesText(label, labelText, ast.exact));
+  const labelled = labels.flatMap((label) => {
+    const byId = label.htmlFor ? document.getElementById(label.htmlFor) : null;
+    const nested = label.querySelector('input,textarea,select,[contenteditable="true"]');
+    return [byId, nested].filter((node) => node instanceof Element);
+  });
+  const aria = queryLocatorScope(root, 'input,textarea,select,button,[aria-label],[aria-labelledby]')
+    .filter((node) => matchesTextValue(accessibleName(node), labelText, ast.exact));
+  return uniqueElements([...labelled, ...aria]);
+}
+
+function matchesLocatorRole(node, ast) {
+  const expectedRole = String(ast.role || '').trim().toLowerCase();
+  if (!expectedRole) return false;
+  const role = String(node.getAttribute('role') || implicitRole(node) || '').toLowerCase();
+  if (role !== expectedRole) return false;
+  if (ast.name == null) return true;
+  return matchesTextValue(accessibleName(node), ast.name, ast.exact);
+}
+
+function accessibleName(node) {
+  const labelledBy = String(node.getAttribute('aria-labelledby') || '').trim();
+  if (labelledBy) {
+    const labelled = labelledBy.split(/\s+/).map((id) => document.getElementById(id))
+      .filter((item) => item instanceof Element)
+      .map((item) => item.textContent || '')
+      .join(' ');
+    if (normalizeWhitespace(labelled)) return normalizeWhitespace(labelled);
+  }
+  return elementLabel(node);
+}
+
+function matchesText(node, expected, exact) {
+  return matchesTextValue(normalizeWhitespace(node.innerText || node.textContent || ''), expected, exact);
+}
+
+function matchesTextValue(value, expected, exact) {
+  const left = normalizeWhitespace(String(value || ''));
+  const right = normalizeWhitespace(String(expected || ''));
+  if (!right) return false;
+  return exact === false ? left.toLowerCase().includes(right.toLowerCase()) : left === right;
+}
+
+function preferSmallestTextMatches(nodes) {
+  const matching = new Set(nodes);
+  return nodes.filter((node) => ![...node.children].some((child) => matching.has(child)));
+}
+
+function uniqueElements(nodes) {
+  return [...new Set(nodes.filter((node) => node instanceof Element))];
+}
+
+function locatorReceipt(options = {}, node) {
+  if (!isObject(options.locatorAst) || !(node instanceof Element)) return null;
+  return {
+    kind: 'locator_receipt',
+    nodeId: getNodeId(node),
+    selector: cssPath(node),
+    matchedAt: new Date().toISOString(),
+    strict: options.strict !== false,
+  };
+}
+
+function isObject(value) {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function normalizeLocatorLimit(value) {
@@ -783,6 +1017,7 @@ function readElementValues(node) {
 
 function elementReadSnapshot(node) {
   return {
+    nodeId: getNodeId(node),
     attributes: Object.fromEntries([...node.attributes || []].map((attr) => [attr.name, attr.value])),
     inner_text: normalizeWhitespace(node.innerText || ''),
     text_content: node.textContent,

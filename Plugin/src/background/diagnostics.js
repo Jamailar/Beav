@@ -1,4 +1,5 @@
 import { getNativeStatus } from './nativeTransport.js';
+import { EXTENSION_INSTANCE_ID_KEY } from './lifecycleGuard.js';
 
 export const PLUGIN_DIAGNOSTICS_QUEUE_KEY = 'redboxPluginDiagnosticsQueue';
 export const PLUGIN_DIAGNOSTICS_RECENT_KEY = 'redboxPluginDiagnosticsRecent';
@@ -7,7 +8,7 @@ export const PLUGIN_FEEDBACK_ENDPOINT = 'https://api.ziz.hk/beav/v1/public-feedb
 
 const QUEUE_LIMIT = 40;
 const RECENT_LIMIT = 120;
-const SAME_ERROR_COOLDOWN_MS = 60_000;
+const ACTIVE_EPISODE_IDLE_MS = 30 * 60_000;
 const RETRY_COOLDOWN_MS = 30_000;
 const DRAIN_BATCH_LIMIT = 4;
 const MAX_MESSAGE_CHARS = 600;
@@ -17,6 +18,7 @@ const MAX_DELIVERY_ATTEMPTS = 8;
 
 let drainPromise = null;
 let enqueuePromise = Promise.resolve();
+let installationFingerprintPromise = null;
 
 export async function reportPluginError(error, options = {}) {
   const next = enqueuePromise.then(() => enqueuePluginError(error, options));
@@ -24,23 +26,45 @@ export async function reportPluginError(error, options = {}) {
   return await next;
 }
 
+export async function reportPluginRecovery(options = {}) {
+  const next = enqueuePromise.then(() => enqueuePluginRecovery(options));
+  enqueuePromise = next.catch(() => {});
+  return await next;
+}
+
 async function enqueuePluginError(error, options = {}) {
   const payload = buildPluginDiagnosticPayload(error, options);
+  const installationIdHash = await resolveInstallationFingerprint();
+  if (installationIdHash) payload.fields.installationIdHash = installationIdHash;
   const dedupeKey = buildDedupeKey(payload);
   const now = Date.now();
   const store = await readDiagnosticStore();
   const recent = pruneRecentReports(store.recent, now);
-  const lastReportedAt = Number(recent[dedupeKey] || 0);
+  const previousEpisode = readEpisode(recent[dedupeKey]);
 
-  if (lastReportedAt > 0 && now - lastReportedAt < SAME_ERROR_COOLDOWN_MS) {
+  if (previousEpisode && now - previousEpisode.lastSeenAt < ACTIVE_EPISODE_IDLE_MS) {
+    const episode = nextEpisode(previousEpisode, now);
+    recent[dedupeKey] = episode;
+    const queue = updateQueuedEpisode(store.queue, dedupeKey, episode);
+    await writeDiagnosticStore({
+      queue,
+      recent: pruneRecentReports(recent, now),
+    });
     return {
       ...(await drainPluginDiagnostics()),
       skipped: true,
-      reason: 'cooldown',
+      reason: 'active_episode',
+      occurrences: episode.occurrences,
     };
   }
 
-  recent[dedupeKey] = now;
+  const episode = {
+    firstSeenAt: now,
+    lastSeenAt: now,
+    occurrences: 1,
+  };
+  recent[dedupeKey] = episode;
+  payload.fields = withEpisodeFields(payload.fields, dedupeKey, episode);
   const queue = Array.isArray(store.queue) ? store.queue.slice() : [];
   const existing = queue.find((entry) => entry?.dedupeKey === dedupeKey);
   if (existing) {
@@ -72,6 +96,55 @@ async function enqueuePluginError(error, options = {}) {
     .slice(-QUEUE_LIMIT);
   await writeDiagnosticStore({
     queue: nextQueue,
+    recent: pruneRecentReports(recent, now),
+  });
+  await schedulePluginDiagnosticsRetry();
+  return await drainPluginDiagnostics();
+}
+
+async function enqueuePluginRecovery(options = {}) {
+  const code = safeToken(options.code || 'PLUGIN_ERROR', 'PLUGIN_ERROR');
+  const payload = buildPluginDiagnosticPayload(
+    new Error(options.message || 'Browser plugin connection recovered'),
+    {
+      ...options,
+      event: options.event || 'plugin.connection.recovered',
+      trigger: options.trigger || 'plugin_connection_recovered',
+      code,
+    },
+  );
+  const installationIdHash = await resolveInstallationFingerprint();
+  if (installationIdHash) payload.fields.installationIdHash = installationIdHash;
+  const dedupeKey = buildDedupeKey(payload);
+  const now = Date.now();
+  const store = await readDiagnosticStore();
+  const recent = pruneRecentReports(store.recent, now);
+  const episode = readEpisode(recent[dedupeKey]);
+  if (!episode) {
+    return { success: true, skipped: true, reason: 'no_active_episode' };
+  }
+
+  delete recent[dedupeKey];
+  const completedEpisode = closeEpisode(episode, now);
+  payload.fields = {
+    ...withEpisodeFields(payload.fields, dedupeKey, completedEpisode),
+    recovered: true,
+    recoveredAt: new Date(now).toISOString(),
+    durationMs: Math.max(0, now - completedEpisode.firstSeenAt),
+  };
+  const queue = Array.isArray(store.queue) ? store.queue.slice() : [];
+  queue.push({
+    id: `plugin-diagnostic-${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    dedupeKey: `${dedupeKey}:recovered`,
+    queuedAt: now,
+    lastSeenAt: now,
+    lastAttemptAt: 0,
+    attempts: 0,
+    occurrences: completedEpisode.occurrences,
+    payload,
+  });
+  await writeDiagnosticStore({
+    queue: queue.filter((entry) => entry && entry.payload).slice(-QUEUE_LIMIT),
     recent: pruneRecentReports(recent, now),
   });
   await schedulePluginDiagnosticsRetry();
@@ -178,7 +251,7 @@ export function buildPluginFeedbackRequest(payload = {}, reportId = '') {
       : '浏览器插件采集失败（自动上报）',
     content: `插件自动上报：${message}`.slice(0, 4_000),
     category,
-    priority: 'high',
+    priority: classifyPluginFeedbackPriority(payload),
     source: 'browser_extension',
     request_kind: 'plugin_error',
     client: {
@@ -190,6 +263,26 @@ export function buildPluginFeedbackRequest(payload = {}, reportId = '') {
     attachments: [],
     context,
   };
+}
+
+export function classifyPluginFeedbackPriority(payload = {}) {
+  const fields = payload.fields && typeof payload.fields === 'object' ? payload.fields : {};
+  const code = String(fields.code || '').trim().toUpperCase();
+  const message = String(payload.message || '');
+  const nativeStatus = fields.nativeStatus && typeof fields.nativeStatus === 'object'
+    ? fields.nativeStatus
+    : {};
+  const expectedDisconnect = nativeStatus.expectedDisconnect === true
+    || nativeStatus.lifecycle?.expected === true;
+  const expectedCaptureFailure = /^(URL_NOT_BELONG_TO_XIAOHONGSHU|UNSUPPORTED_URL|UNSUPPORTED_PAGE|CAPTURE_NOT_APPLICABLE)$/.test(code)
+    || /^URL does not belong to (?:小红书|Xiaohongshu)$/i.test(message.trim());
+  const expectedConnectionState = /^(APP_NOT_RUNNING|APP_BRIDGE_UNAVAILABLE|NATIVE_HOST_RESTARTING)$/.test(code);
+  const protocolOrAuthorizationFailure = /(?:PROTOCOL_MISMATCH|AUTHENTICATION_FAILED|VERSION_STALE|UNTRUSTED_ORIGIN)/.test(code);
+  const outcomeUnknown = /(?:WRITE_OUTCOME_UNKNOWN|OPERATION_OUTCOME_UNKNOWN)/.test(code);
+
+  if (expectedDisconnect || expectedCaptureFailure || expectedConnectionState) return 'low';
+  if (protocolOrAuthorizationFailure || outcomeUnknown) return 'high';
+  return 'normal';
 }
 
 export async function schedulePluginDiagnosticsRetry() {
@@ -258,7 +351,6 @@ function buildDedupeKey(payload) {
   const fields = payload.fields || {};
   return [
     payload.category,
-    payload.event,
     fields.operation,
     fields.code,
     fields.phase,
@@ -312,20 +404,120 @@ async function removeQueuedReport(id) {
 function pruneRecentReports(recent, now) {
   return Object.fromEntries(
     Object.entries(recent || {})
-      .filter(([, timestamp]) => Number(timestamp) > now - 24 * 60 * 60 * 1000)
-      .sort((left, right) => Number(right[1]) - Number(left[1]))
+      .filter(([, episode]) => readEpisode(episode)?.lastSeenAt > now - 24 * 60 * 60 * 1000)
+      .sort((left, right) => (
+        Number(readEpisode(right[1])?.lastSeenAt || 0) - Number(readEpisode(left[1])?.lastSeenAt || 0)
+      ))
       .slice(0, RECENT_LIMIT),
   );
 }
 
+function readEpisode(value) {
+  if (Number.isFinite(Number(value))) {
+    const timestamp = Number(value);
+    return timestamp > 0
+      ? { firstSeenAt: timestamp, lastSeenAt: timestamp, occurrences: 1 }
+      : null;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const firstSeenAt = Number(value.firstSeenAt || value.lastSeenAt || 0);
+  const lastSeenAt = Number(value.lastSeenAt || firstSeenAt || 0);
+  if (firstSeenAt <= 0 || lastSeenAt <= 0) return null;
+  return {
+    firstSeenAt,
+    lastSeenAt,
+    occurrences: Math.max(1, Math.min(999, Number(value.occurrences || 1))),
+  };
+}
+
+function nextEpisode(episode, now) {
+  return {
+    firstSeenAt: Number(episode.firstSeenAt || now),
+    lastSeenAt: now,
+    occurrences: Math.min(999, Math.max(1, Number(episode.occurrences || 1)) + 1),
+  };
+}
+
+function closeEpisode(episode, now) {
+  return {
+    firstSeenAt: Number(episode.firstSeenAt || now),
+    lastSeenAt: now,
+    occurrences: Math.min(999, Math.max(1, Number(episode.occurrences || 1))),
+  };
+}
+
+function withEpisodeFields(fields, incidentKey, episode) {
+  return {
+    ...(fields || {}),
+    incidentKey,
+    occurrences: episode.occurrences,
+    firstSeenAt: new Date(episode.firstSeenAt).toISOString(),
+    lastSeenAt: new Date(episode.lastSeenAt).toISOString(),
+  };
+}
+
+function updateQueuedEpisode(entries, dedupeKey, episode) {
+  return (Array.isArray(entries) ? entries : []).map((entry) => {
+    if (entry?.dedupeKey !== dedupeKey || !entry.payload) return entry;
+    return {
+      ...entry,
+      lastSeenAt: episode.lastSeenAt,
+      occurrences: episode.occurrences,
+      payload: {
+        ...entry.payload,
+        fields: withEpisodeFields(entry.payload.fields, dedupeKey, episode),
+      },
+    };
+  });
+}
+
+async function resolveInstallationFingerprint() {
+  if (!installationFingerprintPromise) {
+    installationFingerprintPromise = (async () => {
+      const stored = await callChromePromise(
+        globalThis.chrome?.storage?.local?.get?.(EXTENSION_INSTANCE_ID_KEY),
+        {},
+      );
+      const installationId = String(stored?.[EXTENSION_INSTANCE_ID_KEY] || '').trim();
+      if (!installationId || !globalThis.crypto?.subtle || typeof TextEncoder === 'undefined') return '';
+      const digest = await globalThis.crypto.subtle.digest(
+        'SHA-256',
+        new TextEncoder().encode(`beav-plugin-diagnostic:${installationId}`),
+      );
+      return [...new Uint8Array(digest)]
+        .map((value) => value.toString(16).padStart(2, '0'))
+        .join('')
+        .slice(0, 32);
+    })().catch(() => '');
+  }
+  return await installationFingerprintPromise;
+}
+
 function compactNativeStatus(status = {}) {
+  const bridge = status.handshake?.desktopBridge && typeof status.handshake.desktopBridge === 'object'
+    ? status.handshake.desktopBridge
+    : {};
   return {
     state: safeToken(status.state || 'unknown', 'unknown'),
     reconnectAttempt: Number.isInteger(Number(status.reconnectAttempt))
       ? Number(status.reconnectAttempt)
       : 0,
     error: redactText(status.error || '', 240),
-    desktopBridgeConnected: status.handshake?.desktopBridge?.connected === true,
+    desktopBridgeConnected: bridge.connected === true,
+    bridgeErrorCode: safeToken(bridge.errorCode || '', ''),
+    bridgePhase: safeToken(bridge.phase || '', ''),
+    bridgeReconnectAttempt: Math.max(0, Number(bridge.bridgeReconnectAttempt || 0)),
+    descriptorAgeMs: Math.max(0, Number(bridge.details?.descriptorAgeMs || 0)),
+    nativeHostVersion: safeToken(status.handshake?.appVersion || '', ''),
+    desktopAppVersion: safeToken(bridge.appVersion || '', ''),
+    expectedDisconnect: status.expectedDisconnect === true,
+    nextRetryMs: Math.max(0, Number(status.nextRetryMs || 0)),
+    lifecycle: status.lifecycle && typeof status.lifecycle === 'object'
+      ? {
+        reason: safeToken(status.lifecycle.reason || 'unknown', 'unknown'),
+        expected: status.lifecycle.expected === true,
+      }
+      : null,
   };
 }
 

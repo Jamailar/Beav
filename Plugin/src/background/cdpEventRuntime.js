@@ -1,51 +1,71 @@
-import { getStoredMap, setStoredMap } from './storage.js';
+import { getStoredMap, mutateBrowserControlState } from './storage.js';
 
 export const CDP_EVENT_LOG_KEY = 'xwowBrowserDataAiCdpEvents';
-export const CDP_EVENT_LOG_LIMIT = 200;
+export const CDP_EVENT_LOG_LIMIT = 1_000;
 
 export async function recordCdpEvent(source = {}, method = '', params = {}) {
-  const events = await getStoredMap(CDP_EVENT_LOG_KEY);
-  const id = `cdp-event-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-  const event = normalizeCdpEvent({
-    id,
-    source,
-    method,
-    params,
-    receivedAt: new Date().toISOString(),
+  const mutation = await mutateBrowserControlState([CDP_EVENT_LOG_KEY], (maps) => {
+    const events = maps[CDP_EVENT_LOG_KEY];
+    const sequence = Math.max(0, ...Object.values(events).map((event) => Number(event?.sequence || 0)).filter(Number.isFinite)) + 1;
+    const id = `cdp-event-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    const event = normalizeCdpEvent({
+      id,
+      sequence,
+      source,
+      method,
+      params,
+      receivedAt: new Date().toISOString(),
+    });
+    events[id] = event;
+    const retained = Object.values(events)
+      .map(normalizeCdpEvent)
+      .sort((a, b) => Number(b.sequence || 0) - Number(a.sequence || 0))
+      .slice(0, CDP_EVENT_LOG_LIMIT);
+    maps[CDP_EVENT_LOG_KEY] = Object.fromEntries(retained.map((item) => [item.id, item]));
+    return { event };
   });
-  events[id] = event;
-  const sorted = Object.values(events)
-    .map(normalizeCdpEvent)
-    .sort((a, b) => String(b.receivedAt || '').localeCompare(String(a.receivedAt || '')))
-    .slice(0, CDP_EVENT_LOG_LIMIT);
-  await setStoredMap(CDP_EVENT_LOG_KEY, Object.fromEntries(sorted.map((item) => [item.id, item])));
-  return event;
+  return mutation.result.event;
 }
 
 export async function listCdpEvents(action = {}) {
   const limit = clamp(Number(action.limit || 50), 1, CDP_EVENT_LOG_LIMIT);
   const method = String(action.method || '');
+  const methods = normalizeMethods(action.methods);
   const tabId = normalizePositiveInteger(action.tabId || action.tab_id);
   const targetId = String(action.targetId || action.target_id || '');
   const since = String(action.since || action.sinceReceivedAt || '');
   const afterEventId = String(action.afterEventId || '');
+  const cursor = normalizeCursor(action.cursor || action.afterSequence || action.after_sequence);
   const sorted = Object.values(await getStoredMap(CDP_EVENT_LOG_KEY))
     .map(normalizeCdpEvent)
     .filter((event) => !method || event.method === method)
+    .filter((event) => !methods.length || methods.includes(event.method))
     .filter((event) => !tabId || event.source.tabId === tabId)
     .filter((event) => !targetId || event.source.targetId === targetId)
-    .filter((event) => !since || String(event.receivedAt || '') > since)
-    .sort((a, b) => String(b.receivedAt || '').localeCompare(String(a.receivedAt || '')));
-  const afterIndex = afterEventId ? sorted.findIndex((event) => event.id === afterEventId || event.eventId === afterEventId) : -1;
-  const windowed = afterIndex >= 0 ? sorted.slice(afterIndex + 1) : sorted;
+    .filter((event) => !since || String(event.receivedAt || '') > since);
+  const ascending = [...sorted].sort(compareCdpEventsAscending);
+  const descending = [...ascending].reverse();
+  const afterIndex = afterEventId ? descending.findIndex((event) => event.id === afterEventId || event.eventId === afterEventId) : -1;
+  const windowed = cursor !== null
+    ? ascending.filter((event) => Number(event.sequence || 0) > cursor)
+    : afterIndex >= 0
+      ? descending.slice(afterIndex + 1)
+      : descending;
   const selected = windowed.slice(0, limit);
+  const newest = descending[0] || null;
+  const oldest = ascending[0] || null;
   return {
     success: true,
-    filters: { method, tabId: tabId || null, targetId, since, afterEventId },
+    filters: { method, methods, tabId: tabId || null, targetId, since, afterEventId, cursor },
     events: selected,
     hasMore: windowed.length > selected.length,
-    newestEventId: sorted[0]?.eventId || '',
-    newestReceivedAt: sorted[0]?.receivedAt || '',
+    truncated: windowed.length > selected.length,
+    nextCursor: selected.length ? Number(selected[selected.length - 1].sequence || 0) : cursor,
+    newestEventId: newest?.eventId || '',
+    newestReceivedAt: newest?.receivedAt || '',
+    oldestEventId: oldest?.eventId || '',
+    oldestReceivedAt: oldest?.receivedAt || '',
+    retainedLimit: CDP_EVENT_LOG_LIMIT,
   };
 }
 
@@ -98,6 +118,7 @@ function normalizeCdpEvent(event = {}) {
   return {
     ...event,
     id,
+    sequence: Number.isInteger(Number(event.sequence)) && Number(event.sequence) > 0 ? Number(event.sequence) : 0,
     eventId: event.eventId || `cdp:${id}`,
     eventType: 'cdp',
     source,
@@ -151,6 +172,24 @@ function sourceKey(source = {}) {
 function normalizePositiveInteger(value) {
   const normalized = Number(value || 0);
   return Number.isInteger(normalized) && normalized > 0 ? normalized : null;
+}
+
+function normalizeMethods(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))].slice(0, 50);
+}
+
+function normalizeCursor(value) {
+  if (value == null || value === '') return null;
+  const cursor = Number(value);
+  if (!Number.isInteger(cursor) || cursor < 0) throw new Error('cdp.events cursor must be a non-negative integer');
+  return cursor;
+}
+
+function compareCdpEventsAscending(left, right) {
+  const sequenceDiff = Number(left.sequence || 0) - Number(right.sequence || 0);
+  if (sequenceDiff) return sequenceDiff;
+  return String(left.receivedAt || '').localeCompare(String(right.receivedAt || '')) || String(left.id || '').localeCompare(String(right.id || ''));
 }
 
 function clamp(value, min, max) {

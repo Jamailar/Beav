@@ -58,6 +58,17 @@ test('normalizes generic web content scans and existing-tab requests', () => {
   assert.equal(existingTab.tabId, 12);
 });
 
+test('accepts Xiaohongshu xhslink.cn shortlinks for browser research', () => {
+  const request = normalizeResearchRequest({
+    operation: 'content_scan',
+    site: 'xhs',
+    url: 'https://xhslink.cn/o/7kdpy1bMjdX',
+  });
+
+  assert.equal(request.site.id, 'xiaohongshu');
+  assert.equal(request.sourceUrl, 'https://xhslink.cn/o/7kdpy1bMjdX');
+});
+
 test('normalizes supported typed filters and rejects unsupported filters', () => {
   const request = normalizeResearchRequest({
     operation: 'search',

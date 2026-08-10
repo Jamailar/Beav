@@ -69,6 +69,8 @@ const FALLBACK_TOOLS = [
   browserTool('viewport.set', 'Set browser viewport dimensions.', { width: { type: 'number' }, height: { type: 'number' }, windowId: { type: 'number' }, sessionId: { type: 'string' } }, ['width', 'height']),
   browserTool('viewport.reset', 'Reset browser viewport state.', { windowId: { type: 'number' }, sessionId: { type: 'string' } }),
   browserTool('cdp.send', 'Send a Chrome DevTools Protocol command to an attached tab.', { tabId: { type: 'number' }, method: { type: 'string' }, params: { type: 'object' }, sessionId: { type: 'string' } }, ['tabId', 'method']),
+  browserTool('browser.botDetect', 'Detect a visible login, CAPTCHA, or security-verification blocker without reading credentials.', { tabId: { type: 'number' }, sessionId: { type: 'string' } }, ['tabId']),
+  browserTool('browser.authHandoff', 'Retain one controlled tab for manual login or verification, then return a typed waiting_for_user result.', { tabId: { type: 'number' }, reason: { type: 'string', enum: ['login_required', 'security_verification_required', 'bot_verification_required'] }, ttlMs: { type: 'number' }, sessionId: { type: 'string' } }, ['tabId', 'reason']),
 ];
 
 let inputBuffer = Buffer.alloc(0);

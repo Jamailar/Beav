@@ -33,11 +33,15 @@ await browser.tabs.finalize({ keep: [] });
 - `browser.tabs.finalize({ keep })` closes or releases tabs at the end of the task.
 - `tab.goto(url)`, `tab.back()`, `tab.forward()`, `tab.reload()`, `tab.close()`, `tab.url()`, `tab.title()`, and `tab.screenshot()` map to Beav browser-control tools.
 - `tab.playwright.locator(selector)`, `getByRole`, `getByText`, `getByLabel`, `getByPlaceholder`, and `getByTestId` create locator facades.
-- Locator methods include `count`, `allTextContents`, `innerText`, `textContent`, `isEnabled`, `isVisible`, `getAttribute`, `click`, `dblclick`, `fill`, `type`, `press`, `check`, `uncheck`, `setChecked`, `selectOption`, and `waitFor`.
+- Locator methods include `count`, `allTextContents`, `filter`, `and`, `or`, `first`, `last`, `nth`, `innerText`, `textContent`, `isEnabled`, `isVisible`, `getAttribute`, `click`, `dblclick`, `fill`, `type`, `press`, `check`, `uncheck`, `setChecked`, `selectOption`, and `waitFor`. Mutations and singleton reads are strict; use collection reads or an explicit index for multi-match locators.
 - `tab.cua` exposes coordinate mouse and keyboard primitives.
 - `tab.dom_cua` exposes DOM snapshot and node-id actions.
 - `tab.clipboard` exposes browser clipboard reads and writes.
 - `tab.dev.logs()` reads captured console logs.
+- `tab.cdp.call(method, params)` and `tab.cdp.events({ cursor, methods, limit })` expose bounded CDP diagnostics. Event replay returns an ascending `nextCursor`; raw CDP still follows browser policy and approval.
+- `tab.assets.list()` / `tab.assets.bundle()` and `tab.webmcp.listTools()` / `tab.webmcp.invokeTool()` are typed facades over the existing asset and WebMCP runtimes.
+- `tab.focus()` and `tab.mark('handoff' | 'deliverable' | 'clear')` operate only on the current session's active lease.
+- `tab.auth.detect()` reports only a login/CAPTCHA/security-blocker category and bounded scan metadata. `tab.auth.handoff(reason, { ttlMs })` detaches automation and retains the one controlled HTTP(S) tab for manual completion. It returns the typed `waiting_for_user` error path, never field values, cookies, OTPs, or credentials. The TTL is clamped to 5–30 minutes and the next turn resumes only if the retained tab is still live.
 
 ## Site research
 
@@ -67,6 +71,8 @@ Current capability contract `6` supports:
 - typed Xiaohongshu/Douyin filters: `sort`, `contentType`, `publishTime`.
 - Xiaohongshu/Douyin detail opening mode `page_click`; direct-card-URL fallback is forbidden.
 
+Xiaohongshu capability matching accepts canonical `xiaohongshu.com`, `rednote.com`, and share shortlinks on `xhslink.com` and `xhslink.cn`. A shortlink may be used only as the user-supplied navigation URL: the browser follows it, and the resulting extracted evidence must name the final page URL. A successful redirect, HTTP response, or tab creation alone is not research evidence.
+
 Media collection is candidate-first. Extractors attach dimensions, visibility, semantic role, article context, and a relevance score; Desktop applies the typed `mediaTypes`, `mediaLimit`, `minMediaWidth`, and `minMediaHeight` policy before invoking `download_media`. Downloads use a run-owned staging path, reserve time to return before the outer browser action deadline, cancel and remove timed-out files, and are removed from staging after Desktop has copied them into the controlled browser-run artifact directory. Desktop writes an evidence checkpoint before the first download, so a later media failure still leaves a readable partial manifest.
 
 Every response carries `capabilityVersion` and `extractorSchemaHash`. Desktop fails closed on drift, so rebuilding the extension is not enough: reload `Plugin/dist/extension` in the target browser before current-build acceptance. Site research is read-only at the browser layer; it never publishes, submits, likes, follows, comments, or changes remote content.
@@ -80,6 +86,7 @@ Every response carries `capabilityVersion` and `extractorSchemaHash`. Desktop fa
 - Before click, fill, select, or press, verify the locator is unique unless uniqueness is obvious.
 - After interactions, collect the cheapest state check that answers the next decision.
 - Call `browser.tabs.finalize({ keep })` before ending a browser task.
+- Never attempt automation on `chrome://`, `edge://`, `brave://`, browser-store, or extension-internal pages. Those pages are policy-denied before content-script injection.
 
 ## Compatibility contract
 
