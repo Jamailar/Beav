@@ -46,6 +46,10 @@ const elements = {
   taskQueueCancel: document.getElementById('task-queue-cancel'),
   taskLogBadge: document.getElementById('task-log-badge'),
   taskLogList: document.getElementById('task-log-list'),
+  platformSafetyNoticeDialog: document.getElementById('platform-safety-notice-dialog'),
+  platformSafetyNoticeTitle: document.getElementById('platform-safety-notice-title'),
+  platformSafetyNoticeDescription: document.getElementById('platform-safety-notice-description'),
+  platformSafetyNoticeConfirm: document.getElementById('platform-safety-notice-confirm'),
 };
 
 let context = null;
@@ -54,6 +58,8 @@ let capturePendingAction = '';
 let captureFeedback = null;
 let captureSignature = '';
 let updateChecking = false;
+let platformSafetyNoticePending = false;
+let resolvePlatformSafetyNoticeDialog = null;
 let currentSettings = {
   xhsBloggerNoteLimit: 50,
   xhsIntervalMaxSeconds: 6,
@@ -92,6 +98,11 @@ function bindEvents() {
   elements.openSettings.addEventListener('click', () => chrome.runtime.openOptionsPage());
   elements.checkUpdate.addEventListener('click', () => void refreshUpdateStatus(true));
   elements.openUpdateSource.addEventListener('click', () => void openUpdateSource());
+  elements.platformSafetyNoticeDialog.addEventListener('close', () => {
+    const resolve = resolvePlatformSafetyNoticeDialog;
+    resolvePlatformSafetyNoticeDialog = null;
+    resolve?.(elements.platformSafetyNoticeDialog.returnValue === 'confirm');
+  });
   elements.bloggerNotesApiMode.addEventListener('change', () => {
     renderBloggerNotesMode();
   });
@@ -378,7 +389,7 @@ function renderCaptureActions(nextContext) {
     button.className = item.primary ? 'primary' : '';
     button.title = item.title || item.label;
     button.textContent = capturePendingAction === item.action ? meta.pending : item.label;
-    button.disabled = Boolean(capturePendingAction) || !isHealthy || item.disabled;
+    button.disabled = Boolean(capturePendingAction) || platformSafetyNoticePending || !isHealthy || item.disabled;
     elements.captureActions.appendChild(button);
   }
 
@@ -389,7 +400,7 @@ function renderCaptureActions(nextContext) {
     checkbox.id = 'xhs-save-comments-inline';
     checkbox.type = 'checkbox';
     checkbox.checked = currentSettings?.xhsSaveCommentsWithNote !== false;
-    checkbox.disabled = Boolean(capturePendingAction) || !isHealthy;
+    checkbox.disabled = Boolean(capturePendingAction) || platformSafetyNoticePending || !isHealthy;
     const text = document.createElement('span');
     text.textContent = '保存评论区';
     label.append(checkbox, text);
@@ -442,8 +453,45 @@ async function updateXhsSaveCommentsSetting(enabled) {
   }
 }
 
+function showPlatformSaveSafetyNotice(notice) {
+  const title = String(notice?.title || '请先确认已登录小号');
+  const description = String(notice?.description || '频繁保存内容可能触发平台风控，影响账号正常使用。请先在当前浏览器登录专门用于采集的小号，再继续保存。');
+  const confirmLabel = String(notice?.confirmLabel || '我已登录小号，继续保存');
+  const dialog = elements.platformSafetyNoticeDialog;
+  if (!dialog?.showModal) {
+    return Promise.resolve(window.confirm(`${title}\n\n${description}\n\n点击“确定”表示：${confirmLabel}`));
+  }
+  elements.platformSafetyNoticeTitle.textContent = title;
+  elements.platformSafetyNoticeDescription.textContent = description;
+  elements.platformSafetyNoticeConfirm.textContent = confirmLabel;
+  return new Promise((resolve) => {
+    resolvePlatformSafetyNoticeDialog = resolve;
+    dialog.showModal();
+  });
+}
+
+async function ensurePlatformSaveSafetyNotice(action) {
+  const requirement = await sendRawMessage({
+    type: 'capture:platform-save-safety-notice:get',
+    action,
+  });
+  if (!requirement?.success) {
+    throw new Error(requirement?.error || '无法读取账号安全提示');
+  }
+  if (!requirement.required) return true;
+  if (!await showPlatformSaveSafetyNotice(requirement.notice)) return false;
+  const acknowledgement = await sendRawMessage({
+    type: 'capture:platform-save-safety-notice:acknowledge',
+    platform: requirement.platform,
+  });
+  if (!acknowledgement?.success) {
+    throw new Error(acknowledgement?.error || '无法确认账号安全提示');
+  }
+  return true;
+}
+
 async function runCaptureAction(action) {
-  if (!action || capturePendingAction) return;
+  if (!action || capturePendingAction || platformSafetyNoticePending) return;
   const meta = getCaptureActionMeta(action);
   if (!meta.type) return;
   const tabId = Number(context?.tab?.id || 0);
@@ -452,6 +500,22 @@ async function runCaptureAction(action) {
     renderCaptureActions(context);
     return;
   }
+
+  platformSafetyNoticePending = true;
+  renderCaptureActions(context);
+  let canContinue = false;
+  try {
+    canContinue = await ensurePlatformSaveSafetyNotice(meta.type);
+  } catch (error) {
+    captureFeedback = {
+      status: 'error',
+      message: `无法确认保存：${error instanceof Error ? error.message : String(error)}`,
+    };
+  } finally {
+    platformSafetyNoticePending = false;
+    renderCaptureActions(context);
+  }
+  if (!canContinue) return;
 
   capturePendingAction = action;
   captureFeedback = { status: 'pending', message: meta.pending };

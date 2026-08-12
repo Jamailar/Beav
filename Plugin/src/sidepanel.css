@@ -703,3 +703,72 @@ h1 {
   font-size: 16px;
   line-height: 1;
 }
+
+.platform-safety-notice-dialog {
+  width: min(360px, calc(100vw - 32px));
+  margin: auto;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #171717;
+  padding: 0;
+  box-shadow: 0 20px 56px rgba(15, 23, 42, 0.24);
+}
+
+.platform-safety-notice-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.platform-safety-notice-card {
+  display: grid;
+  gap: 18px;
+  border-radius: inherit;
+  background: #ffffff;
+  padding: 20px;
+}
+
+.platform-safety-notice-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.platform-safety-notice-copy h2,
+.platform-safety-notice-copy p {
+  margin: 0;
+}
+
+.platform-safety-notice-copy h2 {
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.platform-safety-notice-copy p {
+  color: #525252;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.platform-safety-notice-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.35fr;
+  gap: 8px;
+}
+
+.platform-safety-notice-actions button {
+  min-height: 36px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  border-radius: 7px;
+  background: #ffffff;
+  color: #262626;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.platform-safety-notice-actions button.primary {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #f7fffb;
+}

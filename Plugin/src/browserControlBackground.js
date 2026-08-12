@@ -69,6 +69,7 @@ const CONTENT_GET_ATTRIBUTE_TYPE = 'xwow-data-ai:get-attribute';
 const CONTENT_QUERY_ELEMENTS_TYPE = 'xwow-data-ai:query-elements';
 const CONTENT_DETECT_BROWSER_BLOCKER_TYPE = 'xwow-data-ai:detect-browser-blocker';
 const CONTROLLED_PAGE_MUTATION_ACTIONS = new Set(['page.navigate', 'page.goto', 'page.waitForLoadState', 'page.waitForURL', 'page.waitForTimeout', 'page.evaluate', 'page.evaluateScript', 'page.scroll', 'page.click', 'page.clickNode', 'node.click', 'page.hover', 'page.inspectPoint', 'page.hitTest', 'page.scrollNode', 'node.scroll', 'page.waitForNode', 'node.wait', 'page.waitForSelector', 'page.waitSelector', 'page.check', 'page.setChecked', 'page.isChecked', 'page.isVisible', 'page.getValue', 'page.getValues', 'page.getAttribute', 'page.queryElements', 'page.domSnapshot', 'page.export', 'tab.export', 'page.consoleLogs', 'tab_console_logs', 'tab.consoleLogs', 'page.select', 'page.type', 'page.frames', 'page.readClipboard', 'clipboard.read', 'page.readClipboardText', 'clipboard.readText', 'page.writeClipboard', 'clipboard.write', 'page.writeClipboardText', 'clipboard.writeText', 'page.waitForFileChooser', 'page.acceptFileChooser', 'page.setInputFiles', 'fileChooser.accept', 'webmcp.listTools', 'webmcp.invokeTool', 'webmcp_list_tools', 'webmcp_invoke_tool', 'input.mouseDrag', 'input.mouseWheel', 'input.keyboardType', 'input.keyboardPress', 'input.keyboardCombo']);
+const INTERNAL_SUBSCRIPTION_ACTIONS = new Set(['subscription.scan.v1', 'subscription.capture.v1']);
 const CDP_COMMAND_TIMEOUT_MS = getDefaultCdpTimeoutMs();
 
 let cachedBaseUrl = null;
@@ -1495,6 +1496,14 @@ async function waitUrl(url, options = {}) {
   return await waitTabById(opened.tab.id, options);
 }
 
+async function runInternalSubscriptionAction(type, payload) {
+  const handler = globalThis.__redboxSubscriptionCapture;
+  if (typeof handler !== 'function') {
+    throw new Error('Subscription capture runtime is unavailable; reload the RedBox extension');
+  }
+  return await handler(type, payload);
+}
+
 async function runBrowserAction(action, context = {}) {
   let session = context.session || activeBrowserSession || (await resolveBrowserActionSession('', 'manual_repair'));
   const normalized = normalizeBrowserAction(action);
@@ -1555,20 +1564,23 @@ async function runBrowserAction(action, context = {}) {
       activeBrowserSession = session;
       setStatus({ browserControl: activeBrowserSession });
     }
-    const tab = normalized.tabId ? await chrome.tabs.get(Number(normalized.tabId)).catch(() => null) : null;
-    decision = assertBrowserActionAllowed({
-      ...normalized,
-      requestId: activeRequest?.requestId || normalized.requestId || '',
-      currentUrl: resolveBrowserPolicyPageUrl(normalized, tab, { isHttpUrl }),
-    }, { isHttpUrl, requestId: activeRequest?.requestId || '' });
-    await publishPolicyDecisionAudit({
-      kind: 'policy.allowed',
-      action: normalized,
-      decision,
-      session,
-      requestId: activeRequest?.requestId || '',
-      tabId: requestTabId,
-    }).catch(() => {});
+    const isInternalSubscriptionAction = INTERNAL_SUBSCRIPTION_ACTIONS.has(normalized.type);
+    if (!isInternalSubscriptionAction) {
+      const tab = normalized.tabId ? await chrome.tabs.get(Number(normalized.tabId)).catch(() => null) : null;
+      decision = assertBrowserActionAllowed({
+        ...normalized,
+        requestId: activeRequest?.requestId || normalized.requestId || '',
+        currentUrl: resolveBrowserPolicyPageUrl(normalized, tab, { isHttpUrl }),
+      }, { isHttpUrl, requestId: activeRequest?.requestId || '' });
+      await publishPolicyDecisionAudit({
+        kind: 'policy.allowed',
+        action: normalized,
+        decision,
+        session,
+        requestId: activeRequest?.requestId || '',
+        tabId: requestTabId,
+      }).catch(() => {});
+    }
     let result;
     switch (normalized.type) {
       case 'tab.create':
@@ -1636,6 +1648,10 @@ async function runBrowserAction(action, context = {}) {
         break;
       case 'browser.capabilities':
         result = await getBrowserControlInfo();
+        break;
+      case 'subscription.scan.v1':
+      case 'subscription.capture.v1':
+        result = await runInternalSubscriptionAction(normalized.type, normalized);
         break;
       case 'browser.botDetect':
         await requireActiveControlledTabLease(session, normalized.tabId, 'browser.botDetect');

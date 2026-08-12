@@ -26,6 +26,7 @@ const XHS_TASK_QUEUE_STATE_KEY = 'xhsCollectorTaskQueueState';
 const XHS_TASK_LOG_KEY = 'xhsCollectorTaskLogs';
 const XHS_BLOGGER_PROGRESS_KEY = 'xhsBloggerCollectedNotes';
 const CAPTURE_CHECKPOINT_KEY = 'redboxCaptureCheckpoints';
+const PLATFORM_SAVE_SAFETY_NOTICE_KEY = 'platformSaveSafetyNoticeAcknowledgements';
 const XHS_TASK_HISTORY_LIMIT = 80;
 const XHS_TASK_LOG_LIMIT = 80;
 const XHS_BLOGGER_PROGRESS_LIMIT = 200;
@@ -41,6 +42,24 @@ const MENU_SELECTION_ID = 'redbox-save-selection';
 const MENU_LINK_ID = 'redbox-save-link';
 const MENU_IMAGE_ID = 'redbox-save-image';
 const MENU_VIDEO_ID = 'redbox-save-video';
+const PLATFORM_SAVE_SAFETY_NOTICES = Object.freeze({
+  xiaohongshu: Object.freeze({
+    platform: 'xiaohongshu',
+    platformName: '小红书',
+    title: '请先确认已登录小号',
+    description: '频繁保存内容可能触发平台风控，影响账号正常使用。为降低主号受限风险，请先在当前浏览器登录专门用于采集的小号，再继续保存。',
+    confirmLabel: '我已登录小号，继续保存',
+    cancelLabel: '暂不保存',
+  }),
+  douyin: Object.freeze({
+    platform: 'douyin',
+    platformName: '抖音',
+    title: '请先确认已登录小号',
+    description: '频繁保存内容可能触发平台风控，影响账号正常使用。为降低主号受限风险，请先在当前浏览器登录专门用于采集的小号，再继续保存。',
+    confirmLabel: '我已登录小号，继续保存',
+    cancelLabel: '暂不保存',
+  }),
+});
 const PLUGIN_CAPTURE_MESSAGE_TYPES = new Set([
   'save-xhs',
   'xhs:download-current-note',
@@ -236,7 +255,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return;
   const run = async () => {
     if (info.menuItemId === MENU_PAGE_ID) {
-      await saveCurrentPageFromTab(tab.id);
+      await saveCurrentPageFromContextMenu(tab.id);
       return;
     }
     if (info.menuItemId === MENU_SELECTION_ID) {
@@ -387,15 +406,25 @@ async function handleMessage(message, sender) {
     case 'settings:test-connection':
       clearCachedKnowledgeApi();
       return await checkDesktopServer(true);
+    case 'capture:platform-save-safety-notice:get':
+      return {
+        success: true,
+        ...(await resolvePlatformSaveSafetyNotice(message?.action, tabId)),
+      };
+    case 'capture:platform-save-safety-notice:acknowledge':
+      return await acknowledgePlatformSaveSafetyNotice(message?.platform);
     case 'inspect-page':
       return await inspectPage(tabId);
-    case 'save-xhs':
+    case 'save-xhs': {
+      const noticeRequired = await requirePlatformSaveSafetyNotice(message.type, tabId);
+      if (noticeRequired) return noticeRequired;
       return await enqueueXhsTask({
         type: message.type,
         title: createXhsTaskTitle(message.type, message, tabId),
         tabId,
         execute: () => saveXhsNoteFromTab(tabId),
       });
+    }
     case 'xhs:download-current-note':
       return await enqueueXhsTask({
         type: message.type,
@@ -487,8 +516,11 @@ async function handleMessage(message, sender) {
       return { success: true, checkpoints: [] };
     case 'xhs:export-current-note-json':
       return await exportCurrentXhsNoteJson(tabId);
-    case 'save-douyin':
+    case 'save-douyin': {
+      const noticeRequired = await requirePlatformSaveSafetyNotice(message.type, tabId);
+      if (noticeRequired) return noticeRequired;
       return await saveDouyinVideoFromTab(tabId);
+    }
     case 'save-youtube':
       return await saveYouTubeFromTab(tabId);
     case 'save-zhihu-answer':
@@ -509,8 +541,11 @@ async function handleMessage(message, sender) {
       });
     case 'save-selection':
       return await saveSelectedTextFromTab(tabId);
-    case 'save-page-auto':
+    case 'save-page-auto': {
+      const noticeRequired = await requirePlatformSaveSafetyNotice(message.type, tabId);
+      if (noticeRequired) return noticeRequired;
       return await saveCurrentPageFromTab(tabId);
+    }
     case 'save-page-link':
       return await saveCurrentPageLinkFromTab(tabId);
     case 'save-drag-image':
@@ -847,6 +882,75 @@ function setStorageLocal(values) {
       resolve();
     });
   });
+}
+
+function getPlatformSaveSafetyNoticePlatform(action) {
+  switch (String(action || '')) {
+    case 'save-xhs':
+      return 'xiaohongshu';
+    case 'save-douyin':
+      return 'douyin';
+    default:
+      return '';
+  }
+}
+
+function normalizePlatformSaveSafetyNoticeAcknowledgements(input) {
+  const source = input && typeof input === 'object' ? input : {};
+  return Object.fromEntries(
+    Object.keys(PLATFORM_SAVE_SAFETY_NOTICES).map((platform) => [platform, source[platform] === true]),
+  );
+}
+
+async function readPlatformSaveSafetyNoticeAcknowledgements() {
+  const result = await getStorageLocal([PLATFORM_SAVE_SAFETY_NOTICE_KEY]);
+  return normalizePlatformSaveSafetyNoticeAcknowledgements(result?.[PLATFORM_SAVE_SAFETY_NOTICE_KEY]);
+}
+
+async function acknowledgePlatformSaveSafetyNotice(platform) {
+  const normalizedPlatform = String(platform || '');
+  if (!PLATFORM_SAVE_SAFETY_NOTICES[normalizedPlatform]) {
+    return { success: false, error: '不支持的平台安全提示' };
+  }
+  const acknowledgements = await readPlatformSaveSafetyNoticeAcknowledgements();
+  await setStorageLocal({
+    [PLATFORM_SAVE_SAFETY_NOTICE_KEY]: {
+      ...acknowledgements,
+      [normalizedPlatform]: true,
+    },
+  });
+  return { success: true };
+}
+
+async function resolvePlatformSaveSafetyNotice(action, tabId = 0) {
+  let resolvedAction = String(action || '');
+  if (resolvedAction === 'save-page-auto' && tabId) {
+    const inspection = await inspectPage(tabId).catch(() => null);
+    resolvedAction = String(inspection?.pageInfo?.action || '');
+  }
+  const platform = getPlatformSaveSafetyNoticePlatform(resolvedAction);
+  const notice = PLATFORM_SAVE_SAFETY_NOTICES[platform];
+  if (!notice) {
+    return { required: false, platform: '' };
+  }
+  const acknowledgements = await readPlatformSaveSafetyNoticeAcknowledgements();
+  return {
+    required: acknowledgements[platform] !== true,
+    platform,
+    notice,
+  };
+}
+
+async function requirePlatformSaveSafetyNotice(action, tabId = 0) {
+  const requirement = await resolvePlatformSaveSafetyNotice(action, tabId);
+  if (!requirement.required) return null;
+  return {
+    success: false,
+    code: 'PLATFORM_SAVE_SAFETY_NOTICE_REQUIRED',
+    error: `请先确认 ${requirement.notice.platformName} 的账号安全提示`,
+    platform: requirement.platform,
+    notice: requirement.notice,
+  };
 }
 
 function normalizePluginSettings(input = {}) {
@@ -3135,7 +3239,7 @@ function buildXhsCommentsEntry(payload) {
   };
 }
 
-function buildXhsEntryV2Request(notePayload = {}, commentsPayload = {}) {
+function buildXhsEntryV2Request(notePayload = {}, commentsPayload = {}, metadataInput = {}) {
   const sourceUrl = normalizeText(notePayload?.source || commentsPayload?.source);
   const sourceDomain = extractDomainFromUrl(sourceUrl) || 'www.xiaohongshu.com';
   const stableNoteId = normalizeText(notePayload?.noteId || commentsPayload?.noteId)
@@ -3182,6 +3286,9 @@ function buildXhsEntryV2Request(notePayload = {}, commentsPayload = {}) {
         imageUrls,
         videoUrl: videoAssetUrl || undefined,
       },
+      metadata: metadataInput && typeof metadataInput === 'object' && !Array.isArray(metadataInput)
+        ? metadataInput
+        : undefined,
     },
     comments: {
       totalText: normalizeText(commentsPayload?.totalText) || undefined,
@@ -4334,6 +4441,25 @@ async function saveCurrentPageFromTab(tabId) {
   return await saveCurrentPageLinkFromTab(tabId);
 }
 
+async function saveCurrentPageFromContextMenu(tabId) {
+  const requirement = await resolvePlatformSaveSafetyNotice('save-page-auto', tabId);
+  if (!requirement.required) {
+    return await saveCurrentPageFromTab(tabId);
+  }
+  const result = await chrome.tabs.sendMessage(tabId, {
+    type: 'capture:platform-save-safety-notice:show',
+    notice: requirement.notice,
+    continueAction: 'save-page-auto',
+  }).catch((error) => ({
+    success: false,
+    error: error instanceof Error ? error.message : String(error),
+  }));
+  if (!result?.success) {
+    throw new Error(result?.error || '无法显示账号安全提示，请刷新页面后重试');
+  }
+  return result;
+}
+
 async function saveCurrentPageLinkFromTab(tabId) {
   const genericResult = await genericCaptureCoordinator.extract(tabId);
   let entry;
@@ -4409,7 +4535,7 @@ async function saveZhihuArticleFromTab(tabId) {
   };
 }
 
-async function saveXhsNoteFromTab(tabId) {
+async function saveXhsNoteFromTab(tabId, options = {}) {
   const payload = await runExtraction(tabId, extractXhsNotePayload, { world: 'MAIN' });
   const settings = await readPluginSettings();
   console.log('[redbox-plugin][xhs] payload', {
@@ -4465,7 +4591,7 @@ async function saveXhsNoteFromTab(tabId) {
   }
   let response;
   try {
-    response = await postKnowledgeXhsEntryV2(buildXhsEntryV2Request(payload, commentsPayload));
+    response = await postKnowledgeXhsEntryV2(buildXhsEntryV2Request(payload, commentsPayload, options.metadata));
     if (Array.isArray(commentsPayload?.comments) && commentsPayload.comments.length > 0) {
       await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
         source: commentsPayload?.source || payload?.source,
@@ -4494,7 +4620,163 @@ async function saveXhsNoteFromTab(tabId) {
     noteId: response.entryId || '',
     duplicate: Boolean(response.duplicate),
     comments: Number(response?.comments?.captured || 0),
+    storageStatus: response?.storageStatus || (response?.persisted === true ? 'stored' : ''),
+    readBack: response?.readBack || null,
+    sourceUrl: normalizeText(payload?.source),
+    externalId: normalizeText(payload?.noteId),
   };
+}
+
+globalThis.__redboxSubscriptionCapture = async (type, payload = {}) => {
+  if (type === 'subscription.scan.v1') return await scanXhsSubscriptionProfile(payload);
+  if (type === 'subscription.capture.v1') return await captureXhsSubscriptionItem(payload);
+  throw new Error(`Unsupported internal subscription browser action: ${String(type || '')}`);
+};
+
+async function scanXhsSubscriptionProfile(payload = {}) {
+  const profile = validateXhsSubscriptionProfile(payload);
+  let tab = null;
+  try {
+    tab = await chrome.tabs.create({ url: profile.sourceUrl, active: false });
+    await waitForTabComplete(tab.id, 30_000);
+    await sleepXhsTaskInterruptibly(900);
+    const extracted = await runExtraction(tab.id, extractXhsBloggerNotesPayload, {
+      world: 'MAIN',
+      args: [profile.limit, 'rpa'],
+    });
+    const authorId = normalizeText(extracted?.userId);
+    if (!authorId) throw new Error('未识别到小红书博主身份，请确认已登录并打开正确主页');
+    if (profile.creatorKey && authorId !== profile.creatorKey) {
+      throw new Error('博主主页身份与订阅不一致，已停止保存');
+    }
+    const candidates = [];
+    for (const note of Array.isArray(extracted?.notes) ? extracted.notes : []) {
+      const candidate = normalizeXhsSubscriptionCandidate(note?.url, note?.noteId);
+      if (!candidate || candidates.some((item) => item.externalId === candidate.externalId)) continue;
+      candidates.push({
+        ...candidate,
+        title: normalizeText(note?.title),
+        authorId,
+      });
+      if (candidates.length >= profile.limit) break;
+    }
+    return {
+      success: true,
+      schema: 'redbox.subscriptionScan.v1',
+      platform: 'xiaohongshu',
+      creator: {
+        key: authorId,
+        profileUrl: normalizeText(extracted?.source) || profile.sourceUrl,
+        name: normalizeText(extracted?.nickname),
+        avatarUrl: normalizeText(extracted?.avatar),
+      },
+      candidates,
+    };
+  } finally {
+    if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+async function captureXhsSubscriptionItem(payload = {}) {
+  const candidate = normalizeXhsSubscriptionCandidate(payload?.candidate?.canonicalUrl || payload?.canonicalUrl, payload?.candidate?.externalId || payload?.externalId);
+  if (!candidate) throw new Error('订阅候选内容链接无效');
+  const subscriptionId = normalizeText(payload?.subscriptionId);
+  const subscriptionItemId = normalizeText(payload?.subscriptionItemId || payload?.itemId);
+  const creatorKey = normalizeText(payload?.creatorKey);
+  if (!subscriptionId || !subscriptionItemId) throw new Error('订阅保存缺少归属信息');
+  let tab = null;
+  try {
+    tab = await chrome.tabs.create({ url: candidate.canonicalUrl, active: false });
+    await waitForTabComplete(tab.id, 30_000);
+    await sleepXhsTaskInterruptibly(900);
+    const pagePayload = await runExtraction(tab.id, extractXhsNotePayload, { world: 'MAIN' });
+    const pageId = normalizeText(pagePayload?.noteId);
+    const pageUrl = normalizeText(pagePayload?.source);
+    if (pageId !== candidate.externalId || !sameXhsSubscriptionContent(pageUrl, candidate.canonicalUrl)) {
+      throw new Error('打开的笔记与订阅候选不一致，已停止保存');
+    }
+    const authorId = normalizeText(pagePayload?.authorId);
+    if (creatorKey && authorId && authorId !== creatorKey) {
+      throw new Error('笔记作者与订阅博主不一致，已停止保存');
+    }
+    const saved = await saveXhsNoteFromTab(tab.id, {
+      metadata: {
+        sourceKind: 'creator_feed',
+        subscriptionId,
+        subscriptionItemId,
+        creatorKey,
+        externalId: candidate.externalId,
+        canonicalUrl: candidate.canonicalUrl,
+        discoveredAt: normalizeText(payload?.discoveredAt) || new Date().toISOString(),
+      },
+    });
+    if (saved.storageStatus !== 'stored' || !saved.noteId || !saved.readBack) {
+      throw new Error('笔记写入后回读校验失败');
+    }
+    await sleepXhsTaskInterruptibly(3_000 + Math.floor(Math.random() * 3_001));
+    return {
+      success: true,
+      schema: 'redbox.subscriptionCaptureReceipt.v1',
+      subscriptionId,
+      subscriptionItemId,
+      platform: 'xiaohongshu',
+      externalId: candidate.externalId,
+      canonicalUrl: candidate.canonicalUrl,
+      entryId: saved.noteId,
+      storageStatus: saved.storageStatus,
+      duplicate: saved.duplicate === true,
+      readBack: saved.readBack,
+    };
+  } finally {
+    if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+function validateXhsSubscriptionProfile(payload = {}) {
+  if (normalizeText(payload?.platform) !== 'xiaohongshu') throw new Error('当前仅支持小红书浏览器订阅');
+  let url;
+  try {
+    url = new URL(normalizeText(payload?.sourceUrl));
+  } catch {
+    throw new Error('订阅博主页链接无效');
+  }
+  if (!isXhsSubscriptionHost(url.hostname) || !/^\/user\/profile\//i.test(url.pathname)) {
+    throw new Error('订阅博主页链接不受支持');
+  }
+  return {
+    sourceUrl: url.toString(),
+    creatorKey: normalizeText(payload?.creatorKey),
+    limit: Math.max(1, Math.min(Number(payload?.limit || 20), 20)),
+  };
+}
+
+function normalizeXhsSubscriptionCandidate(rawUrl, expectedId) {
+  let url;
+  try {
+    url = new URL(normalizeText(rawUrl));
+  } catch {
+    return null;
+  }
+  if (!isXhsSubscriptionHost(url.hostname)) return null;
+  const externalId = url.pathname.match(/\/(?:explore|discovery\/item)\/([A-Za-z0-9_-]+)/i)?.[1] || '';
+  if (!externalId || (expectedId && externalId !== normalizeText(expectedId))) return null;
+  url.hash = '';
+  return { externalId, canonicalUrl: url.toString() };
+}
+
+function isXhsSubscriptionHost(hostname) {
+  const host = normalizeText(hostname).toLowerCase();
+  return host === 'xiaohongshu.com' || host.endsWith('.xiaohongshu.com') || host === 'rednote.com' || host.endsWith('.rednote.com');
+}
+
+function sameXhsSubscriptionContent(leftInput, rightInput) {
+  try {
+    const left = new URL(leftInput);
+    const right = new URL(rightInput);
+    return left.hostname === right.hostname && left.pathname === right.pathname;
+  } catch {
+    return false;
+  }
 }
 
 function sleep(ms) {
@@ -6266,9 +6548,10 @@ async function saveVideoFromContext(tab, info) {
     /(^|\.)youtube\.com$/i.test(extractDomainFromUrl(tabUrl))
     || extractDomainFromUrl(tabUrl) === 'youtu.be'
     || /(^|\.)xiaohongshu\.com$/i.test(extractDomainFromUrl(tabUrl))
+    || /(^|\.)rednote\.com$/i.test(extractDomainFromUrl(tabUrl))
     || /(^|\.)douyin\.com$/i.test(extractDomainFromUrl(tabUrl))
   ) {
-    return await saveCurrentPageFromTab(tab.id);
+    return await saveCurrentPageFromContextMenu(tab.id);
   }
   if (resourceUrl && !isHttpUrl(resourceUrl)) {
     return await saveCurrentPageFromTab(tab.id);

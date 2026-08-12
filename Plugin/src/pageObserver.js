@@ -1185,6 +1185,38 @@ function summarizeActionResponse(response, fallback) {
     return fallback;
 }
 
+function getPlatformSaveSafetyNoticeText(notice) {
+    const title = normalizeText(notice?.title) || '请先确认已登录小号';
+    const description = normalizeText(notice?.description)
+        || '频繁保存内容可能触发平台风控，影响账号正常使用。请先在当前浏览器登录专门用于采集的小号，再继续保存。';
+    const confirmLabel = normalizeText(notice?.confirmLabel) || '我已登录小号，继续保存';
+    return `${title}\n\n${description}\n\n点击“确定”表示：${confirmLabel}`;
+}
+
+async function confirmPlatformSaveSafetyNotice(notice) {
+    return window.confirm(getPlatformSaveSafetyNoticeText(notice));
+}
+
+async function ensurePlatformSaveSafetyNotice(action) {
+    const requirement = await chrome.runtime.sendMessage({
+        type: 'capture:platform-save-safety-notice:get',
+        action,
+    });
+    if (!requirement?.success) {
+        throw new Error(requirement?.error || '无法读取账号安全提示');
+    }
+    if (!requirement.required) return true;
+    if (!await confirmPlatformSaveSafetyNotice(requirement.notice)) return false;
+    const acknowledgement = await chrome.runtime.sendMessage({
+        type: 'capture:platform-save-safety-notice:acknowledge',
+        platform: requirement.platform,
+    });
+    if (!acknowledgement?.success) {
+        throw new Error(acknowledgement?.error || '无法确认账号安全提示');
+    }
+    return true;
+}
+
 async function runXhsDomAction(action, options = {}) {
     if (!USER_PROFILE_FEATURE_ENABLED && (action === 'blogger' || action === 'bloggerNotes')) return;
     const actionMap = {
@@ -1212,6 +1244,11 @@ async function runXhsDomAction(action, options = {}) {
     const config = actionMap[action];
     if (!config) return;
     const statusTarget = options.statusTarget || null;
+    const canContinue = await ensurePlatformSaveSafetyNotice(config.type);
+    if (!canContinue) {
+        if (statusTarget) setXhsDomStatus(statusTarget, '已取消保存');
+        return;
+    }
     if (statusTarget) setXhsDomStatus(statusTarget, config.pending, 'pending');
     try {
         const message = action === 'collectLink'
@@ -1922,6 +1959,37 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             latestPageInfo = detectPageInfo();
         }
         sendResponse({ success: true, pageInfo: latestPageInfo });
+        return true;
+    }
+    if (message?.type === 'capture:platform-save-safety-notice:show') {
+        const continueAction = normalizeText(message?.continueAction);
+        if (continueAction !== 'save-page-auto') {
+            sendResponse({ success: false, error: '不支持的保存操作' });
+            return true;
+        }
+        void (async () => {
+            try {
+                const accepted = await confirmPlatformSaveSafetyNotice(message?.notice);
+                if (!accepted) {
+                    sendResponse({ success: true, cancelled: true });
+                    return;
+                }
+                const acknowledgement = await chrome.runtime.sendMessage({
+                    type: 'capture:platform-save-safety-notice:acknowledge',
+                    platform: message?.notice?.platform,
+                });
+                if (!acknowledgement?.success) {
+                    throw new Error(acknowledgement?.error || '无法确认账号安全提示');
+                }
+                const result = await chrome.runtime.sendMessage({ type: continueAction });
+                sendResponse(result || { success: false, error: '保存操作未返回结果' });
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+        })();
         return true;
     }
     return false;
