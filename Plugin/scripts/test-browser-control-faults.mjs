@@ -11,6 +11,9 @@ import {
   calculateNativeReconnectDelayMs,
   classifyNativeTransportFailure,
   classifyDesktopBridgeHandshake,
+  disconnectNativeTransport,
+  handleNativeReconnectAlarm,
+  NATIVE_RECONNECT_ALARM,
   normalizeProductVersion,
   shouldReportNativeConnectionFailure,
 } from '../src/background/nativeTransport.js';
@@ -30,6 +33,7 @@ try {
   testNativeReconnectBackoff();
   testNativeTransportFailureClassification();
   testDesktopBridgeHandshakeClassification();
+  await testNativeReconnectSingleFlight();
   console.log(JSON.stringify({
     ok: true,
     isolatedStateRoot: tempRoot,
@@ -41,6 +45,7 @@ try {
       'native_host_patch_update_compatible',
       'native_host_minor_mismatch_rejected',
       'native_host_reconnect_uses_capped_exponential_backoff',
+      'native_host_reconnect_is_single_flight',
       'native_host_exit_is_a_typed_recoverable_failure',
       'old_app_requires_upgrade',
       'bridge_error_is_reportable_but_app_not_running_is_suppressed',
@@ -56,6 +61,37 @@ function testNativeReconnectBackoff() {
   assert.equal(calculateNativeReconnectDelayMs(2, () => 0), 2_000);
   assert.equal(calculateNativeReconnectDelayMs(5, () => 0), 16_000);
   assert.equal(calculateNativeReconnectDelayMs(99, () => 1), 30_000);
+}
+
+async function testNativeReconnectSingleFlight() {
+  let connectCalls = 0;
+  globalThis.chrome = {
+    runtime: {
+      connectNative: () => {
+        connectCalls += 1;
+        throw new Error('Specified native messaging host not found.');
+      },
+    },
+    storage: {
+      local: {
+        get: async () => ({}),
+        set: async () => {},
+      },
+    },
+    alarms: {
+      get: async () => null,
+      create: async () => {},
+      clear: async () => {},
+    },
+  };
+  await Promise.all([
+    handleNativeReconnectAlarm({ name: NATIVE_RECONNECT_ALARM }),
+    handleNativeReconnectAlarm({ name: NATIVE_RECONNECT_ALARM }),
+    handleNativeReconnectAlarm({ name: NATIVE_RECONNECT_ALARM }),
+  ]);
+  assert.equal(connectCalls, 1);
+  await disconnectNativeTransport('test_cleanup');
+  delete globalThis.chrome;
 }
 
 function testNativeTransportFailureClassification() {

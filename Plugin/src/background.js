@@ -1,5 +1,5 @@
 import './browserControlBackground.js';
-import { getNativeStatus, requestNativeHost, shouldReportNativeConnectionFailure } from './background/nativeTransport.js';
+import { getNativeStatus, requestNativeHost } from './background/nativeTransport.js';
 import { reportPluginError } from './background/diagnostics.js';
 import { genericCaptureCoordinator, clearGenericCaptureCache } from './background/genericCaptureCoordinator.js';
 import {
@@ -1651,7 +1651,11 @@ function setActiveXhsTaskProgress(progressPatch = {}) {
 
 function ensureXhsTaskNotCancelled() {
   if (xhsActiveTask?.cancelRequested) {
-    throw new Error('采集任务已取消');
+    throw Object.assign(new Error('采集任务已取消'), {
+      code: 'OPERATION_CANCELLED',
+      expected: true,
+      retryable: false,
+    });
   }
 }
 
@@ -2478,21 +2482,6 @@ async function checkDesktopServer(forceRefresh = false) {
       retryable: error?.retryable === true,
       details: error?.details || error?.data || null,
     });
-    if (shouldReportNativeConnectionFailure(error, getNativeStatus())) {
-      queuePluginDiagnostic(error, {
-        category: 'plugin.connection',
-        event: 'plugin.connection.failed',
-        operation: 'desktop-health',
-        trigger: 'plugin_connection_error',
-        code: error?.code || 'NATIVE_REQUEST_FAILED',
-        phase: error?.phase || 'native_messaging',
-        retryable: error?.retryable === true,
-        fields: {
-          forceRefresh: forceRefresh === true,
-          details: error?.details || error?.data || null,
-        },
-      });
-    }
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
@@ -5750,7 +5739,12 @@ async function collectXhsBloggerNotesByMode(tabId, payload, options = {}) {
     : []));
   if (urls.length === 0) {
     const reason = normalizeText(payload?.apiError);
-    throw new Error(reason || '当前博主页未识别到可采集的笔记，请确认已登录并滚动加载主页笔记');
+    throw Object.assign(
+      new Error(reason || '当前博主页未识别到可采集的笔记，请确认已登录并滚动加载主页笔记'),
+      reason
+        ? { code: 'SOURCE_API_FAILED', retryable: true }
+        : { code: 'CAPTURE_NOT_APPLICABLE', expected: true, retryable: false },
+    );
   }
   if (normalizedOptions.mode === 'tab') {
     return await collectXhsBloggerNotesWithTabs(payload, urls, {

@@ -17,8 +17,8 @@ import { configureDynamicContentInjectionTelemetry, ensureContentScript, sendCon
 import { acceptFileChooser, configureFileChooserTelemetry, getFileChooserSnapshot, handleFileChooserCdpEvent, handleFileChooserDomEvent, setInputFiles, waitForFileChooser } from './background/fileChooserRuntime.js';
 import { listPageFrames } from './background/frameRuntime.js';
 import { CLIENT_HEARTBEAT_ALARM, TARGET_CLIENT_HEARTBEAT_ALARM, configureLifecycleGuard, ensureLifecycleInstallState, getBrowserClientHeartbeatState, getLifecycleStatus, handleLifecycleAlarm, maybeReloadForPendingUpdate, recordBrowserClientHeartbeat, recordLifecycleCleanupResult, registerLifecycleUpdateListener, restorePendingUpdate, startClientHeartbeat } from './background/lifecycleGuard.js';
-import { NATIVE_HOST_DEFAULT, classifyNativeTransportFailure, configureNativeTransport, connectNativeTransport as connectNativeTransportRaw, disconnectNativeTransport, getNativeStatus, handleNativeReconnectAlarm, postNativeMessage, refreshNativeStatus, requestNativeHost as requestNativeHostRaw, restoreNativeStatus, sendNativeNotification, shouldReportNativeConnectionFailure } from './background/nativeTransport.js';
-import { PLUGIN_DIAGNOSTICS_RETRY_ALARM, drainPluginDiagnostics, reportPluginError, reportPluginRecovery } from './background/diagnostics.js';
+import { NATIVE_HOST_DEFAULT, configureNativeTransport, connectNativeTransport as connectNativeTransportRaw, disconnectNativeTransport, getNativeStatus, handleNativeReconnectAlarm, postNativeMessage, refreshNativeStatus, requestNativeHost as requestNativeHostRaw, restoreNativeStatus, sendNativeNotification, shouldReportNativeConnectionFailure } from './background/nativeTransport.js';
+import { PLUGIN_DIAGNOSTICS_RETRY_ALARM, drainPluginDiagnostics, reportPluginError } from './background/diagnostics.js';
 import { CONTENT_PAGE_ASSETS_TYPE, bundlePageAssets, readPageAssetInventory } from './background/pageAssetRuntime.js';
 import { exportPage } from './background/pageExportRuntime.js';
 import { evaluatePageScript } from './background/pageScriptRuntime.js';
@@ -77,7 +77,6 @@ let activeRun = null;
 let activeBrowserSession = null;
 let initializePromise = null;
 let nativeStatus = getNativeStatus();
-let activeNativeConnectionDiagnostic = null;
 let lastClientHeartbeatState = null;
 const activeTabObserver = createActiveTabObserver({
   onChanged: handleObservedActiveTabsChanged,
@@ -563,27 +562,7 @@ configureLifecycleGuard({
 configureNativeTransport({
   onMessage: handleNativeMessage,
   onStatusChange: (status) => {
-    const previousStatus = nativeStatus;
     nativeStatus = status;
-    const currentDiagnostic = buildNativeTransportDiagnostic(status, previousStatus);
-    if (status?.state === 'connected') {
-      queuePluginRecovery(activeNativeConnectionDiagnostic || currentDiagnostic);
-      activeNativeConnectionDiagnostic = null;
-      return;
-    }
-    if (shouldReportNativeConnectionFailure(status?.error ? new Error(status.error) : null, status, previousStatus)) {
-      activeNativeConnectionDiagnostic = currentDiagnostic;
-      queuePluginDiagnostic(status?.error || new Error(`Native transport ${status?.state || 'failed'}`), {
-        category: 'plugin.connection',
-        event: 'plugin.connection.failed',
-        operation: 'native-transport',
-        trigger: 'plugin_connection_error',
-        code: currentDiagnostic.code,
-        phase: 'native_transport',
-        retryable: currentDiagnostic.fields.retryable === true,
-        fields: currentDiagnostic.fields,
-      });
-    }
   },
   onTelemetry: (event) => browserEventBridge.publishNativeTransportEvent(event),
   getRegistration: async () => {
@@ -610,54 +589,6 @@ function queuePluginDiagnostic(error, options = {}) {
   void reportPluginError(error, options).catch((reportError) => {
     console.warn('[redbox-plugin][diagnostics] report failed', reportError);
   });
-}
-
-function queuePluginRecovery(options = {}) {
-  void reportPluginRecovery({
-    category: 'plugin.connection',
-    event: 'plugin.connection.recovered',
-    operation: 'native-transport',
-    trigger: 'plugin_connection_recovered',
-    phase: 'native_transport',
-    ...options,
-  }).catch((reportError) => {
-    console.warn('[redbox-plugin][diagnostics] recovery report failed', reportError);
-  });
-}
-
-function buildNativeTransportDiagnostic(status = {}, previousStatus = {}) {
-  const bridge = status?.handshake?.desktopBridge && typeof status.handshake.desktopBridge === 'object'
-    ? status.handshake.desktopBridge
-    : {};
-  const previousBridge = previousStatus?.handshake?.desktopBridge
-    && typeof previousStatus.handshake.desktopBridge === 'object'
-    ? previousStatus.handshake.desktopBridge
-    : {};
-  const code = status?.state === 'upgrade_required'
-    ? 'NATIVE_HOST_UPGRADE_REQUIRED'
-    : status?.state === 'bridge_error'
-      ? bridge.errorCode || 'DESKTOP_BRIDGE_ERROR'
-      : status?.errorCode || previousStatus?.errorCode || previousBridge.errorCode || classifyNativeTransportFailure(status?.error);
-  return {
-    code,
-    fields: {
-      previousState: previousStatus?.state || 'unknown',
-      state: status?.state || 'unknown',
-      availability: bridge.availability || '',
-      bridgeErrorCode: bridge.errorCode || previousBridge.errorCode || '',
-      bridgePhase: bridge.phase || previousBridge.phase || '',
-      bridgeReconnectAttempt: Math.max(0, Number(bridge.bridgeReconnectAttempt || 0)),
-      descriptorAgeMs: Math.max(0, Number(bridge.details?.descriptorAgeMs || 0)),
-      nativeHostVersion: status?.handshake?.appVersion || '',
-      desktopAppVersion: bridge.appVersion || '',
-      nativeErrorCode: status?.errorCode || classifyNativeTransportFailure(status?.error),
-      reconnectAttempt: Number(status?.reconnectAttempt || 0),
-      retryable: bridge.retryable === true
-        || status?.state === 'bridge_error'
-        || status?.state === 'reconnecting'
-        || status?.state === 'disconnected',
-    },
-  };
 }
 
 registerLifecycleUpdateListener();
@@ -2293,6 +2224,9 @@ function reportBrowserActionFailure(error, action = {}, browserError = {}) {
       browserErrorCode: browserError?.code || 'BROWSER_ACTION_FAILED',
       retryable: browserError?.retryable === true,
       userActionRequired: browserError?.userActionRequired === true,
+      expected: browserError?.userActionRequired === true
+        || browserError?.details?.decision?.allowed === false
+        || error?.details?.decision?.allowed === false,
       tabId: Number.isInteger(Number(action?.tabId)) ? Number(action.tabId) : null,
       targetPresent: Boolean(action?.targetId),
     },

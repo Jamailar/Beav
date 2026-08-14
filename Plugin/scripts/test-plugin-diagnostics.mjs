@@ -8,7 +8,7 @@ const fetchCalls = [];
 
 globalThis.chrome = {
   runtime: {
-    getManifest: () => ({ version_name: '2.6.19' }),
+    getManifest: () => ({ version_name: '2.7.0' }),
   },
   storage: {
     local: {
@@ -40,10 +40,10 @@ const {
   PLUGIN_DIAGNOSTICS_QUEUE_KEY,
   PLUGIN_FEEDBACK_ENDPOINT,
   buildPluginDiagnosticPayload,
+  classifyPluginDiagnosticSubmission,
   classifyPluginFeedbackPriority,
   drainPluginDiagnostics,
   reportPluginError,
-  reportPluginRecovery,
 } = await import('../src/background/diagnostics.js');
 
 const payload = buildPluginDiagnosticPayload(
@@ -83,13 +83,62 @@ assert.deepEqual(payload.fields.failureBuckets, {
   source_auth_required: 1,
 });
 
-const first = await reportPluginError(new Error('native host disconnected'), {
+const passiveConnection = await reportPluginError(new Error('native host disconnected'), {
   category: 'plugin.connection',
   event: 'plugin.connection.failed',
   operation: 'native-transport',
   trigger: 'plugin_connection_error',
-  code: 'NATIVE_HOST_DISCONNECTED',
+  code: 'NATIVE_HOST_EXITED',
   phase: 'native_messaging',
+  retryable: true,
+});
+assert.equal(passiveConnection.skipped, true);
+assert.equal(passiveConnection.reason, 'connection_telemetry');
+assert.equal(fetchCalls.length, 0);
+assert.equal(retryAlarmCreates, 0);
+
+storage[PLUGIN_DIAGNOSTICS_QUEUE_KEY] = [{
+  id: 'legacy-connection-report',
+  lastAttemptAt: 0,
+  attempts: 0,
+  payload: buildPluginDiagnosticPayload(new Error('legacy connection failure'), {
+    category: 'plugin.connection',
+    event: 'plugin.connection.failed',
+    operation: 'native-transport',
+    code: 'DESKTOP_BRIDGE_DISCONNECTED',
+    phase: 'native_transport',
+    retryable: true,
+  }),
+}];
+const legacyDrain = await drainPluginDiagnostics();
+assert.equal(legacyDrain.dropped, 1);
+assert.equal(legacyDrain.sent, 0);
+assert.equal(storage[PLUGIN_DIAGNOSTICS_QUEUE_KEY].length, 0);
+assert.equal(fetchCalls.length, 0);
+
+const expectedCancellation = await reportPluginError(
+  Object.assign(new Error('capture cancelled'), { expected: true }),
+  {
+    category: 'plugin.capture',
+    event: 'plugin.capture.failed',
+    operation: 'task:capture-page',
+    trigger: 'plugin_capture_error',
+    code: 'OPERATION_CANCELLED',
+    phase: 'capture',
+  },
+);
+assert.equal(expectedCancellation.skipped, true);
+assert.equal(expectedCancellation.reason, 'expected_outcome');
+assert.equal(fetchCalls.length, 0);
+
+const first = await reportPluginError(new Error('source API failed'), {
+  category: 'plugin.capture',
+  event: 'plugin.capture.failed',
+  operation: 'task:capture-page',
+  trigger: 'plugin_capture_error',
+  code: 'SOURCE_API_FAILED',
+  phase: 'capture',
+  retryable: true,
 });
 assert.equal(first.sent, 1);
 assert.equal(first.queued, 0);
@@ -99,40 +148,27 @@ assert.equal(fetchCalls[0].url, PLUGIN_FEEDBACK_ENDPOINT);
 const firstRequest = JSON.parse(fetchCalls[0].options.body);
 assert.equal(firstRequest.request_kind, 'plugin_error');
 assert.equal(firstRequest.source, 'browser_extension');
-assert.equal(firstRequest.category, 'plugin_connection');
+assert.equal(firstRequest.category, 'plugin_capture');
 assert.equal(firstRequest.context.schema, 'redbox.browserPluginDiagnostic.v1');
 assert.equal(firstRequest.context.automatic, true);
 assert.equal(firstRequest.priority, 'normal');
-assert(!JSON.stringify(firstRequest).includes('native host disconnected at https://'));
+assert(!JSON.stringify(firstRequest).includes('capture failed at https://'));
 
-const duplicate = await reportPluginError(new Error('native host disconnected'), {
-  category: 'plugin.connection',
-  event: 'plugin.connection.failed',
-  operation: 'native-transport',
-  trigger: 'plugin_connection_error',
-  code: 'NATIVE_HOST_DISCONNECTED',
-  phase: 'native_messaging',
+const duplicate = await reportPluginError(new Error('source API failed'), {
+  category: 'plugin.capture',
+  event: 'plugin.capture.failed',
+  operation: 'message:capture-page',
+  trigger: 'plugin_capture_error',
+  code: 'SOURCE_API_FAILED',
+  phase: 'capture',
+  retryable: true,
 });
 assert.equal(duplicate.skipped, true);
 assert.equal(duplicate.reason, 'active_episode');
 assert.equal(duplicate.occurrences, 2);
 assert.equal(storage[PLUGIN_DIAGNOSTICS_QUEUE_KEY].length, 0);
 assert.equal(retryAlarmCreates, 1);
-
-const recovery = await reportPluginRecovery({
-  category: 'plugin.connection',
-  event: 'plugin.connection.recovered',
-  operation: 'native-transport',
-  trigger: 'plugin_connection_recovered',
-  code: 'NATIVE_HOST_DISCONNECTED',
-  phase: 'native_messaging',
-});
-assert.equal(recovery.sent, 1);
-assert.equal(fetchCalls.length, 2);
-const recoveryRequest = JSON.parse(fetchCalls.at(-1).options.body);
-assert.equal(recoveryRequest.context.event, 'plugin.connection.recovered');
-assert.equal(recoveryRequest.context.fields.recovered, true);
-assert.equal(recoveryRequest.context.fields.occurrences, 2);
+assert.equal(fetchCalls.length, 1);
 
 globalThis.fetch = async () => {
   throw new Error('network offline');
@@ -186,6 +222,22 @@ assert.equal(classifyPluginFeedbackPriority({
 assert.equal(classifyPluginFeedbackPriority({
   fields: { code: 'WRITE_OUTCOME_UNKNOWN' },
 }), 'high');
+assert.deepEqual(classifyPluginDiagnosticSubmission({
+  category: 'plugin.connection',
+  fields: { code: 'NATIVE_REQUEST_TIMEOUT', retryable: true },
+}), { submit: false, reason: 'connection_telemetry' });
+assert.deepEqual(classifyPluginDiagnosticSubmission({
+  category: 'plugin.connection',
+  fields: { code: 'DESKTOP_BRIDGE_PROTOCOL_MISMATCH', retryable: false },
+}), { submit: true, reason: 'actionable_connection_failure' });
+assert.deepEqual(classifyPluginDiagnosticSubmission({
+  category: 'plugin.capture',
+  fields: { code: 'APP_BRIDGE_UNAVAILABLE', retryable: true },
+}), { submit: false, reason: 'connection_unavailable' });
+assert.deepEqual(classifyPluginDiagnosticSubmission({
+  category: 'plugin.capture',
+  fields: { code: 'CAPTURE_FAILED', expected: true },
+}), { submit: false, reason: 'expected_outcome' });
 
 console.log(JSON.stringify({
   ok: true,

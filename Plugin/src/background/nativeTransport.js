@@ -22,6 +22,7 @@ let nativePort = null;
 let nativeRequestSeq = 0;
 let nativeReconnectAttempt = 0;
 let nativeReconnectPending = false;
+let nativeReconnectPromise = null;
 let nativeReconnectTimeoutId = null;
 let nativeDisconnectRequested = false;
 let lastNativeLifecycle = null;
@@ -499,7 +500,7 @@ async function scheduleNativeReconnect(options = {}) {
   if (nativePort) return;
   if (!nativeReconnectPending) {
     nativeReconnectPending = true;
-    nativeReconnectAttempt = Math.max(1, nativeReconnectAttempt + 1);
+    nativeReconnectAttempt = Math.min(999, Math.max(1, nativeReconnectAttempt + 1));
   }
   const delayMs = options.immediate === true ? 0 : nextNativeReconnectDelayMs();
   recordNativeTelemetry('reconnect_scheduled', {
@@ -513,6 +514,14 @@ async function scheduleNativeReconnect(options = {}) {
 }
 
 async function runNativeReconnectAttempt(hostName = '') {
+  if (nativeReconnectPromise) return await nativeReconnectPromise;
+  nativeReconnectPromise = performNativeReconnectAttempt(hostName).finally(() => {
+    nativeReconnectPromise = null;
+  });
+  return await nativeReconnectPromise;
+}
+
+async function performNativeReconnectAttempt(hostName = '') {
   if (nativePort) {
     try {
       const handshake = await requestNativeHost('ping', {}, NATIVE_HANDSHAKE_TIMEOUT_MS);
@@ -561,7 +570,7 @@ async function runNativeReconnectAttempt(hostName = '') {
   clearNativeReconnectTimeout();
   if (!nativeReconnectPending) {
     nativeReconnectPending = true;
-    nativeReconnectAttempt = Math.max(1, nativeReconnectAttempt + 1);
+    nativeReconnectAttempt = Math.min(999, Math.max(1, nativeReconnectAttempt + 1));
   }
   recordNativeTelemetry('reconnect_attempt', { hostName: hostName || nativeStatus.hostName || NATIVE_HOST_DEFAULT });
   const status = await connectNativeTransport({ silent: true, hostName: hostName || nativeStatus.hostName || NATIVE_HOST_DEFAULT });

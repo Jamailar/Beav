@@ -8,7 +8,7 @@ export const PLUGIN_FEEDBACK_ENDPOINT = 'https://api.ziz.hk/beav/v1/public-feedb
 
 const QUEUE_LIMIT = 40;
 const RECENT_LIMIT = 120;
-const ACTIVE_EPISODE_IDLE_MS = 30 * 60_000;
+const SAME_INCIDENT_COOLDOWN_MS = 24 * 60 * 60_000;
 const RETRY_COOLDOWN_MS = 30_000;
 const DRAIN_BATCH_LIMIT = 4;
 const MAX_MESSAGE_CHARS = 600;
@@ -26,14 +26,17 @@ export async function reportPluginError(error, options = {}) {
   return await next;
 }
 
-export async function reportPluginRecovery(options = {}) {
-  const next = enqueuePromise.then(() => enqueuePluginRecovery(options));
-  enqueuePromise = next.catch(() => {});
-  return await next;
-}
-
 async function enqueuePluginError(error, options = {}) {
   const payload = buildPluginDiagnosticPayload(error, options);
+  const submission = classifyPluginDiagnosticSubmission(payload);
+  if (!submission.submit) {
+    return {
+      success: true,
+      skipped: true,
+      reason: submission.reason,
+      queued: 0,
+    };
+  }
   const installationIdHash = await resolveInstallationFingerprint();
   if (installationIdHash) payload.fields.installationIdHash = installationIdHash;
   const dedupeKey = buildDedupeKey(payload);
@@ -42,7 +45,7 @@ async function enqueuePluginError(error, options = {}) {
   const recent = pruneRecentReports(store.recent, now);
   const previousEpisode = readEpisode(recent[dedupeKey]);
 
-  if (previousEpisode && now - previousEpisode.lastSeenAt < ACTIVE_EPISODE_IDLE_MS) {
+  if (previousEpisode && now - previousEpisode.lastSeenAt < SAME_INCIDENT_COOLDOWN_MS) {
     const episode = nextEpisode(previousEpisode, now);
     recent[dedupeKey] = episode;
     const queue = updateQueuedEpisode(store.queue, dedupeKey, episode);
@@ -102,55 +105,6 @@ async function enqueuePluginError(error, options = {}) {
   return await drainPluginDiagnostics();
 }
 
-async function enqueuePluginRecovery(options = {}) {
-  const code = safeToken(options.code || 'PLUGIN_ERROR', 'PLUGIN_ERROR');
-  const payload = buildPluginDiagnosticPayload(
-    new Error(options.message || 'Browser plugin connection recovered'),
-    {
-      ...options,
-      event: options.event || 'plugin.connection.recovered',
-      trigger: options.trigger || 'plugin_connection_recovered',
-      code,
-    },
-  );
-  const installationIdHash = await resolveInstallationFingerprint();
-  if (installationIdHash) payload.fields.installationIdHash = installationIdHash;
-  const dedupeKey = buildDedupeKey(payload);
-  const now = Date.now();
-  const store = await readDiagnosticStore();
-  const recent = pruneRecentReports(store.recent, now);
-  const episode = readEpisode(recent[dedupeKey]);
-  if (!episode) {
-    return { success: true, skipped: true, reason: 'no_active_episode' };
-  }
-
-  delete recent[dedupeKey];
-  const completedEpisode = closeEpisode(episode, now);
-  payload.fields = {
-    ...withEpisodeFields(payload.fields, dedupeKey, completedEpisode),
-    recovered: true,
-    recoveredAt: new Date(now).toISOString(),
-    durationMs: Math.max(0, now - completedEpisode.firstSeenAt),
-  };
-  const queue = Array.isArray(store.queue) ? store.queue.slice() : [];
-  queue.push({
-    id: `plugin-diagnostic-${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-    dedupeKey: `${dedupeKey}:recovered`,
-    queuedAt: now,
-    lastSeenAt: now,
-    lastAttemptAt: 0,
-    attempts: 0,
-    occurrences: completedEpisode.occurrences,
-    payload,
-  });
-  await writeDiagnosticStore({
-    queue: queue.filter((entry) => entry && entry.payload).slice(-QUEUE_LIMIT),
-    recent: pruneRecentReports(recent, now),
-  });
-  await schedulePluginDiagnosticsRetry();
-  return await drainPluginDiagnostics();
-}
-
 export async function drainPluginDiagnostics() {
   if (drainPromise) return await drainPromise;
   drainPromise = (async () => {
@@ -166,6 +120,12 @@ export async function drainPluginDiagnostics() {
       ));
       if (!entry) break;
 
+      const submission = classifyPluginDiagnosticSubmission(entry.payload);
+      if (!submission.submit) {
+        await removeQueuedReport(entry.id);
+        dropped += 1;
+        continue;
+      }
       await markAttempt(entry.id, now);
       try {
         await submitPluginDiagnostic(entry.payload, entry.id);
@@ -272,9 +232,11 @@ export function classifyPluginFeedbackPriority(payload = {}) {
   const nativeStatus = fields.nativeStatus && typeof fields.nativeStatus === 'object'
     ? fields.nativeStatus
     : {};
-  const expectedDisconnect = nativeStatus.expectedDisconnect === true
+  const expectedDisconnect = fields.expected === true
+    || fields.userActionRequired === true
+    || nativeStatus.expectedDisconnect === true
     || nativeStatus.lifecycle?.expected === true;
-  const expectedCaptureFailure = /^(URL_NOT_BELONG_TO_XIAOHONGSHU|UNSUPPORTED_URL|UNSUPPORTED_PAGE|CAPTURE_NOT_APPLICABLE)$/.test(code)
+  const expectedCaptureFailure = /^(OPERATION_CANCELLED|POLICY_DENIED|URL_NOT_BELONG_TO_XIAOHONGSHU|UNSUPPORTED_URL|UNSUPPORTED_PAGE|CAPTURE_NOT_APPLICABLE)$/.test(code)
     || /^URL does not belong to (?:小红书|Xiaohongshu)$/i.test(message.trim());
   const expectedConnectionState = /^(APP_NOT_RUNNING|APP_BRIDGE_UNAVAILABLE|NATIVE_HOST_RESTARTING)$/.test(code);
   const protocolOrAuthorizationFailure = /(?:PROTOCOL_MISMATCH|AUTHENTICATION_FAILED|VERSION_STALE|UNTRUSTED_ORIGIN)/.test(code);
@@ -283,6 +245,33 @@ export function classifyPluginFeedbackPriority(payload = {}) {
   if (expectedDisconnect || expectedCaptureFailure || expectedConnectionState) return 'low';
   if (protocolOrAuthorizationFailure || outcomeUnknown) return 'high';
   return 'normal';
+}
+
+export function classifyPluginDiagnosticSubmission(payload = {}) {
+  const fields = payload.fields && typeof payload.fields === 'object' ? payload.fields : {};
+  const category = String(payload.category || '').trim().toLowerCase();
+  const event = String(payload.event || '').trim().toLowerCase();
+  const code = String(fields.code || '').trim().toUpperCase();
+  const priority = classifyPluginFeedbackPriority(payload);
+  const nativeStatus = fields.nativeStatus && typeof fields.nativeStatus === 'object'
+    ? fields.nativeStatus
+    : {};
+  const expected = fields.expected === true
+    || fields.userActionRequired === true
+    || nativeStatus.expectedDisconnect === true
+    || nativeStatus.lifecycle?.expected === true;
+  const expectedOutcome = /^(OPERATION_CANCELLED|POLICY_DENIED|URL_NOT_BELONG_TO_XIAOHONGSHU|UNSUPPORTED_URL|UNSUPPORTED_PAGE|CAPTURE_NOT_APPLICABLE)$/.test(code);
+  const unavailableConnection = /^(APP_NOT_RUNNING|APP_BRIDGE_UNAVAILABLE|NATIVE_HOST_EXITED|NATIVE_HOST_NOT_REGISTERED|NATIVE_HOST_RESTARTING|NATIVE_TRANSPORT_DISCONNECTED)$/.test(code);
+
+  if (event.endsWith('.recovered')) return { submit: false, reason: 'recovery_telemetry' };
+  if (expected || expectedOutcome) return { submit: false, reason: 'expected_outcome' };
+  if (category.includes('connection')) {
+    return priority === 'high' && fields.retryable !== true
+      ? { submit: true, reason: 'actionable_connection_failure' }
+      : { submit: false, reason: 'connection_telemetry' };
+  }
+  if (unavailableConnection) return { submit: false, reason: 'connection_unavailable' };
+  return { submit: true, reason: 'actionable_operation_failure' };
 }
 
 export async function schedulePluginDiagnosticsRetry() {
@@ -330,6 +319,7 @@ export function buildPluginDiagnosticPayload(error, options = {}) {
     code,
     phase: safeToken(options.phase || errorRecord.phase || '', ''),
     retryable: errorRecord.retryable === true || options.retryable === true,
+    expected: errorRecord.expected === true || options.expected === true,
     errorName: String(errorRecord.name || '').slice(0, 80),
     nativeStatus,
     ...(options.sourceOrigin ? { sourceOrigin: safeOrigin(options.sourceOrigin) } : {}),
@@ -351,10 +341,14 @@ function buildDedupeKey(payload) {
   const fields = payload.fields || {};
   return [
     payload.category,
-    fields.operation,
+    normalizeDiagnosticOperation(fields.operation),
     fields.code,
     fields.phase,
   ].map((value) => String(value || '').slice(0, 96)).join(':').slice(0, 320);
+}
+
+function normalizeDiagnosticOperation(value = '') {
+  return String(value).replace(/^(?:message|task):/, 'workflow:');
 }
 
 async function readDiagnosticStore() {
@@ -435,14 +429,6 @@ function nextEpisode(episode, now) {
     firstSeenAt: Number(episode.firstSeenAt || now),
     lastSeenAt: now,
     occurrences: Math.min(999, Math.max(1, Number(episode.occurrences || 1)) + 1),
-  };
-}
-
-function closeEpisode(episode, now) {
-  return {
-    firstSeenAt: Number(episode.firstSeenAt || now),
-    lastSeenAt: now,
-    occurrences: Math.min(999, Math.max(1, Number(episode.occurrences || 1))),
   };
 }
 
