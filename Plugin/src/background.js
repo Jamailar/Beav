@@ -14,6 +14,7 @@ const NATIVE_KNOWLEDGE_ENDPOINT = Object.freeze({
 const pageStateCache = new Map();
 const PAGE_STATE_NEGATIVE_TTL_MS = 350;
 const KNOWLEDGE_API_CACHE_TTL_MS = 30_000;
+const DESKTOP_CONTEXT_CACHE_TTL_MS = 1_500;
 const INLINE_ASSET_MAX_BYTES = 6 * 1024 * 1024;
 const UPDATE_STATE_KEY = 'pluginUpdateState';
 const UPDATE_ALARM_NAME = 'redbox-plugin-auto-update-check';
@@ -103,6 +104,9 @@ const USER_PROFILE_FEATURE_ENABLED = true;
 
 let cachedKnowledgeApi = null;
 let cachedKnowledgeApiAt = 0;
+let cachedDesktopContext = null;
+let cachedDesktopContextAt = 0;
+let desktopContextRefreshPromise = null;
 let xhsTaskSequence = 0;
 let xhsActiveTask = null;
 let xhsLastTask = null;
@@ -124,6 +128,8 @@ if (chrome.sidePanel?.setPanelBehavior) {
 function clearCachedKnowledgeApi() {
   cachedKnowledgeApi = null;
   cachedKnowledgeApiAt = 0;
+  cachedDesktopContext = null;
+  cachedDesktopContextAt = 0;
 }
 
 function describeError(error) {
@@ -379,7 +385,7 @@ async function handleMessage(message, sender) {
       }
       return { success: true };
     case 'healthcheck':
-      return await checkDesktopServer();
+      return await checkDesktopServer(message?.forceRefresh === true);
     case 'plugin-update:get-status':
       return await getPluginUpdateStatus(message?.refresh === true);
     case 'plugin-update:check':
@@ -2458,6 +2464,7 @@ async function checkDesktopServer(forceRefresh = false) {
   try {
     if (forceRefresh) clearCachedKnowledgeApi();
     const result = await requestDesktopHealth();
+    const context = await refreshDesktopContext({ force: forceRefresh });
     const response = result?.knowledge || result;
     cachedKnowledgeApi = NATIVE_KNOWLEDGE_ENDPOINT;
     cachedKnowledgeApiAt = Date.now();
@@ -2469,6 +2476,7 @@ async function checkDesktopServer(forceRefresh = false) {
       success: true,
       endpoint: 'native://beav/knowledge',
       health: response,
+      context,
       bridge: {
         appVersion: result?.appVersion || '',
         protocolVersion: Number(result?.bridgeProtocolVersion || 0),
@@ -2485,21 +2493,29 @@ async function checkDesktopServer(forceRefresh = false) {
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
+      code: normalizeText(error?.code) || 'NATIVE_REQUEST_FAILED',
+      phase: normalizeText(error?.phase) || 'native_messaging',
+      retryable: error?.retryable === true,
+      details: error?.details || error?.data || null,
     };
   }
 }
 
 async function requestDesktopHealth() {
+  await requestDesktopBridgeHost();
+  return await requestNativeHost('desktop.health', {}, 2_000);
+}
+
+async function requestDesktopBridgeHost() {
   const host = await requestNativeHost('ping', {}, 1_500);
   const bridge = host?.desktopBridge && typeof host.desktopBridge === 'object'
     ? host.desktopBridge
     : null;
   if (!bridge?.connected) {
     const error = new Error('Beav desktop bridge is not connected');
-    error.code = bridge?.availability === 'bridge_error'
-      ? bridge.errorCode || 'DESKTOP_BRIDGE_ERROR'
-      : 'APP_BRIDGE_UNAVAILABLE';
-    error.phase = 'bridge';
+    error.code = normalizeText(bridge?.errorCode)
+      || (bridge?.availability === 'bridge_error' ? 'DESKTOP_BRIDGE_ERROR' : 'APP_BRIDGE_UNAVAILABLE');
+    error.phase = normalizeText(bridge?.phase) || 'bridge';
     error.retryable = true;
     error.details = {
       nativeHostReachable: host?.nativeConnected === true,
@@ -2511,7 +2527,77 @@ async function requestDesktopHealth() {
     };
     throw error;
   }
-  return await requestNativeHost('desktop.health', {}, 2_000);
+  return host;
+}
+
+async function refreshDesktopContext(options = {}) {
+  const force = options?.force === true;
+  const now = Date.now();
+  if (!force && cachedDesktopContext && (now - cachedDesktopContextAt) < DESKTOP_CONTEXT_CACHE_TTL_MS) {
+    return cachedDesktopContext;
+  }
+  if (desktopContextRefreshPromise) return await desktopContextRefreshPromise;
+  desktopContextRefreshPromise = (async () => {
+    const host = await requestDesktopBridgeHost();
+    const hostMethods = Array.isArray(host?.capabilities?.hostMethods)
+      ? host.capabilities.hostMethods.map((value) => normalizeText(value))
+      : [];
+    if (!hostMethods.includes('desktop.context')) {
+      return {
+        supported: false,
+        ingest: { allowed: true, reason: 'LEGACY_COMPATIBILITY' },
+      };
+    }
+    const context = normalizeDesktopContext(await requestNativeHost('desktop.context', {}, 2_000));
+    cachedDesktopContext = context;
+    cachedDesktopContextAt = Date.now();
+    return context;
+  })().finally(() => {
+    desktopContextRefreshPromise = null;
+  });
+  return await desktopContextRefreshPromise;
+}
+
+function normalizeDesktopContext(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const space = source.space && typeof source.space === 'object' ? source.space : null;
+  const initialization = source.initialization && typeof source.initialization === 'object'
+    ? source.initialization
+    : {};
+  const ingest = source.ingest && typeof source.ingest === 'object' ? source.ingest : {};
+  return {
+    supported: true,
+    schemaVersion: Number(source.schemaVersion || 0),
+    revision: normalizeText(source.revision),
+    space: space ? {
+      id: normalizeText(space.id),
+      name: normalizeText(space.name),
+    } : null,
+    initialization: {
+      state: normalizeText(initialization.state) || 'unavailable',
+    },
+    ingest: {
+      allowed: ingest.allowed === true,
+      reason: normalizeText(ingest.reason) || 'UNAVAILABLE',
+    },
+  };
+}
+
+async function assertDesktopWriteAvailable() {
+  const context = await refreshDesktopContext({ force: true });
+  if (!context.supported || context.ingest.allowed) return context;
+  const spaceName = normalizeText(context.space?.name);
+  const error = new Error(
+    context.ingest.reason === 'SPACE_INITIALIZING'
+      ? `正在初始化${spaceName ? `「${spaceName}」` : '当前空间'}，完成后即可保存`
+      : '当前空间暂时无法保存，请稍候重试',
+  );
+  error.code = context.ingest.reason;
+  error.phase = 'space_context';
+  error.retryable = true;
+  error.expected = context.ingest.reason === 'SPACE_INITIALIZING';
+  error.details = { desktopContext: context };
+  throw error;
 }
 
 async function resolveKnowledgeApiEndpoint(forceRefresh = false) {
@@ -2544,12 +2630,16 @@ async function fetchKnowledgeJson(endpoint, path, init = {}) {
     path,
     operationId,
   });
-  const result = nativeMethod === 'desktop.health'
-    ? await requestDesktopHealth()
-    : await requestNativeHost(nativeMethod, {
+  let result;
+  if (nativeMethod === 'desktop.health') {
+    result = await requestDesktopHealth();
+  } else {
+    await assertDesktopWriteAvailable();
+    result = await requestNativeHost(nativeMethod, {
       operationId,
       payload,
     }, method === 'GET' ? 5_000 : 35_000);
+  }
   return nativeMethod === 'desktop.health'
     ? (result?.knowledge || result)
     : (result || { success: true });
@@ -5397,6 +5487,7 @@ async function fetchAccountsJson(path, init = {}) {
     path,
     operationId,
   });
+  await assertDesktopWriteAvailable();
   return await requestNativeHost(route.method, {
     operationId,
     payload: nativePayload,

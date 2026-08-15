@@ -257,11 +257,11 @@ export function assertNativeHostVersionCompatibility(handshake = {}) {
   const hostVersion = String(handshake.appVersion || '');
   const expected = normalizeProductVersion(extensionVersion);
   const actual = normalizeProductVersion(hostVersion);
-  const expectedCompatibility = expected.split('.').slice(0, 2).join('.');
-  const actualCompatibility = actual.split('.').slice(0, 2).join('.');
+  const expectedCompatibility = expected.split('.')[0];
+  const actualCompatibility = actual.split('.')[0];
   if (!expected || !actual || expectedCompatibility !== actualCompatibility) {
     throw new Error(
-      `Native host version mismatch: extension ${expected || 'unknown'}, host ${actual || 'unknown'}. Restart Beav and reload the extension.`,
+      `Native host major version mismatch: extension ${expected || 'unknown'}, host ${actual || 'unknown'}. Restart Beav and reload the extension.`,
     );
   }
   return true;
@@ -271,10 +271,17 @@ export function classifyDesktopBridgeHandshake(handshake = {}) {
   if (!handshake?.desktopBridge || typeof handshake.desktopBridge !== 'object') {
     return 'upgrade_required';
   }
-  if (handshake.desktopBridge.availability === 'bridge_error') {
+  const bridge = handshake.desktopBridge;
+  if (bridge.availability === 'bridge_error') {
     return 'bridge_error';
   }
-  return handshake.desktopBridge.connected === true ? 'connected' : 'app_not_running';
+  if (bridge.connected === true) return 'connected';
+  const errorCode = String(bridge.errorCode || '').trim().toUpperCase();
+  const phase = String(bridge.phase || '').trim().toLowerCase();
+  if (bridge.availability === 'app_starting' || errorCode === 'APP_STARTING' || phase === 'bridge_reconnect') {
+    return 'app_starting';
+  }
+  return 'app_not_running';
 }
 
 export function shouldReportNativeConnectionFailure(error = null, status = nativeStatus, previousStatus = null) {
@@ -289,8 +296,11 @@ export function shouldReportNativeConnectionFailure(error = null, status = nativ
 
   if (
     currentState === 'app_not_running'
+    || currentState === 'app_starting'
     || (availability === 'app_not_running' && currentState !== 'connected')
+    || (availability === 'app_starting' && currentState !== 'connected')
     || (code === 'APP_NOT_RUNNING' && currentState !== 'connected')
+    || (code === 'APP_STARTING' && currentState !== 'connected')
     || (code === 'APP_BRIDGE_UNAVAILABLE' && currentState !== 'connected')
   ) {
     return false;

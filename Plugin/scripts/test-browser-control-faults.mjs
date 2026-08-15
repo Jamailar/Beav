@@ -43,7 +43,8 @@ try {
       'late_response_preserves_timeout',
       'oversized_response_rejected',
       'native_host_patch_update_compatible',
-      'native_host_minor_mismatch_rejected',
+      'native_host_minor_upgrade_is_compatible',
+      'native_host_major_mismatch_rejected',
       'native_host_reconnect_uses_capped_exponential_backoff',
       'native_host_reconnect_is_single_flight',
       'native_host_exit_is_a_typed_recoverable_failure',
@@ -116,9 +117,13 @@ function testNativeHostVersionCompatibility() {
     assertNativeHostVersionCompatibility({ appVersion: '2.6.10' }),
     true,
   );
+  assert.equal(
+    assertNativeHostVersionCompatibility({ appVersion: '2.5.99' }),
+    true,
+  );
   assert.throws(
-    () => assertNativeHostVersionCompatibility({ appVersion: '2.5.99' }),
-    /Native host version mismatch/,
+    () => assertNativeHostVersionCompatibility({ appVersion: '3.0.0' }),
+    /Native host major version mismatch/,
   );
   delete globalThis.chrome;
 }
@@ -128,6 +133,17 @@ function testDesktopBridgeHandshakeClassification() {
   assert.equal(
     classifyDesktopBridgeHandshake({ desktopBridge: { connected: false } }),
     'app_not_running',
+  );
+  assert.equal(
+    classifyDesktopBridgeHandshake({
+      desktopBridge: {
+        connected: false,
+        availability: 'app_not_running',
+        errorCode: 'APP_STARTING',
+        phase: 'bridge_reconnect',
+      },
+    }),
+    'app_starting',
   );
   assert.equal(
     classifyDesktopBridgeHandshake({
@@ -147,6 +163,14 @@ function testDesktopBridgeHandshakeClassification() {
     shouldReportNativeConnectionFailure(
       new Error('Beav desktop app is not connected'),
       { state: 'app_not_running' },
+    ),
+    false,
+  );
+  assert.equal(
+    shouldReportNativeConnectionFailure(
+      Object.assign(new Error('Beav desktop bridge is reconnecting'), { code: 'APP_STARTING' }),
+      { state: 'app_starting' },
+      { state: 'connected' },
     ),
     false,
   );

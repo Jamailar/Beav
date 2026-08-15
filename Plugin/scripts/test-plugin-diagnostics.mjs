@@ -131,6 +131,22 @@ assert.equal(expectedCancellation.skipped, true);
 assert.equal(expectedCancellation.reason, 'expected_outcome');
 assert.equal(fetchCalls.length, 0);
 
+const initializingSpace = await reportPluginError(
+  Object.assign(new Error('space is initializing'), { expected: true }),
+  {
+    category: 'plugin.capture',
+    event: 'plugin.capture.failed',
+    operation: 'message:save-page-link',
+    trigger: 'plugin_capture_error',
+    code: 'SPACE_INITIALIZING',
+    phase: 'space_context',
+    retryable: true,
+  },
+);
+assert.equal(initializingSpace.skipped, true);
+assert.equal(initializingSpace.reason, 'expected_outcome');
+assert.equal(fetchCalls.length, 0);
+
 const first = await reportPluginError(new Error('source API failed'), {
   category: 'plugin.capture',
   event: 'plugin.capture.failed',
@@ -237,6 +253,10 @@ assert.deepEqual(classifyPluginDiagnosticSubmission({
 assert.deepEqual(classifyPluginDiagnosticSubmission({
   category: 'plugin.capture',
   fields: { code: 'CAPTURE_FAILED', expected: true },
+}), { submit: false, reason: 'expected_outcome' });
+assert.deepEqual(classifyPluginDiagnosticSubmission({
+  category: 'plugin.capture',
+  fields: { code: 'SPACE_INITIALIZING', retryable: true },
 }), { submit: false, reason: 'expected_outcome' });
 
 console.log(JSON.stringify({

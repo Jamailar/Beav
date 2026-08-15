@@ -17,7 +17,14 @@ const actionSupport = { primary: false };
 let primaryActionType = 'save-page-link';
 let captureTypeEl = null;
 let refreshTimer = null;
+let connectionRefreshTimer = null;
 let popupOpenedAt = Date.now();
+let primaryBusy = false;
+let desktopConnection = {
+  state: 'checking',
+  ingestAllowed: false,
+  context: null,
+};
 
 init().catch((error) => {
   showResult(error instanceof Error ? error.message : String(error), 'error');
@@ -35,24 +42,21 @@ async function init() {
     ? `${title || '未命名页面'}\n${host}`
     : '未检测到可操作页面';
 
-  const health = await sendMessage({ type: 'healthcheck' });
-  if (health?.success) {
-    serverStatusEl.textContent = '本地知识库已链接 ✅';
-    serverStatusEl.className = 'status ok';
-  } else {
-    serverStatusEl.textContent = '未链接，请打开Beav';
-    serverStatusEl.className = 'status error';
-  }
+  await refreshConnectionStatus();
 
   ensureCaptureTypeElement();
   await refreshUpdateStatus(false);
   await refreshPageInfo();
   startRefreshLoop();
+  startConnectionRefreshLoop();
 
   buttons.primary.addEventListener('click', () => runAction(primaryActionType));
   buttons.checkUpdate.addEventListener('click', () => void runUpdateCheck());
   buttons.openUpdateSource.addEventListener('click', () => void openUpdateSource());
-  window.addEventListener('unload', stopRefreshLoop, { once: true });
+  window.addEventListener('unload', () => {
+    stopRefreshLoop();
+    stopConnectionRefreshLoop();
+  }, { once: true });
 }
 
 function inferPageInfoFromUrl(rawUrl) {
@@ -118,6 +122,8 @@ async function runAction(type) {
     showResult('没有可用的当前标签页', 'error');
     return;
   }
+  await refreshConnectionStatus(true);
+  if (!desktopConnection.ingestAllowed) return;
   setBusy(true);
   showResult('正在保存...', 'success');
   try {
@@ -162,11 +168,19 @@ function setUpdateButtonsBusy(busy) {
 }
 
 function setBusy(busy) {
-  applyButtonState(buttons.primary, !busy && actionSupport.primary);
+  primaryBusy = busy;
+  applyPrimaryButtonState();
 }
 
 function applyButtonState(button, enabled) {
   button.disabled = !enabled;
+}
+
+function applyPrimaryButtonState() {
+  applyButtonState(
+    buttons.primary,
+    !primaryBusy && actionSupport.primary && desktopConnection.ingestAllowed,
+  );
 }
 
 function ensureCaptureTypeElement() {
@@ -225,7 +239,7 @@ async function refreshPageInfo() {
   }
 
   captureTypeEl.textContent = pageInfo.description || '';
-  applyButtonState(buttons.primary, actionSupport.primary);
+  applyPrimaryButtonState();
 }
 
 function startRefreshLoop() {
@@ -242,10 +256,93 @@ function startRefreshLoop() {
   refreshTimer = window.setTimeout(tick, 120);
 }
 
+function startConnectionRefreshLoop() {
+  stopConnectionRefreshLoop();
+  const tick = async () => {
+    await refreshConnectionStatus().catch(() => {});
+    connectionRefreshTimer = window.setTimeout(tick, 2_000);
+  };
+  connectionRefreshTimer = window.setTimeout(tick, 2_000);
+}
+
 function stopRefreshLoop() {
   if (!refreshTimer) return;
   window.clearTimeout(refreshTimer);
   refreshTimer = null;
+}
+
+function stopConnectionRefreshLoop() {
+  if (!connectionRefreshTimer) return;
+  window.clearTimeout(connectionRefreshTimer);
+  connectionRefreshTimer = null;
+}
+
+async function refreshConnectionStatus(forceRefresh = false) {
+  const health = await sendMessage({ type: 'healthcheck', forceRefresh }).catch((error) => ({
+    success: false,
+    error: error instanceof Error ? error.message : String(error),
+  }));
+  desktopConnection = normalizeDesktopConnection(health);
+  renderDesktopConnection();
+  applyPrimaryButtonState();
+  return desktopConnection;
+}
+
+function normalizeDesktopConnection(health) {
+  if (health?.success) {
+    const context = health.context && typeof health.context === 'object' ? health.context : null;
+    if (context?.supported !== false && context?.ingest?.allowed !== true) {
+      return { state: 'initializing', ingestAllowed: false, context };
+    }
+    return { state: 'ready', ingestAllowed: true, context };
+  }
+
+  const code = normalizeText(health?.code).toUpperCase();
+  const availability = normalizeText(health?.details?.availability).toLowerCase();
+  const phase = normalizeText(health?.phase).toLowerCase();
+  if (
+    code === 'APP_STARTING'
+    || code === 'APP_SHUTTING_DOWN'
+    || availability === 'app_starting'
+    || availability === 'app_shutting_down'
+    || phase === 'bridge_reconnect'
+  ) {
+    return { state: 'recovering', ingestAllowed: false, context: null };
+  }
+  if (/UPGRADE|PROTOCOL_MISMATCH|AUTHENTICATION_FAILED|VERSION_STALE/.test(code)) {
+    return { state: 'attention', ingestAllowed: false, context: null };
+  }
+  return { state: 'offline', ingestAllowed: false, context: null };
+}
+
+function renderDesktopConnection() {
+  const spaceName = normalizeText(desktopConnection.context?.space?.name);
+  if (desktopConnection.state === 'ready') {
+    serverStatusEl.textContent = desktopConnection.context?.supported === false
+      ? '已连接 · 可保存到知识库'
+      : (spaceName ? `已连接 · 当前空间：${spaceName}` : '已连接 · 当前空间已准备就绪');
+    serverStatusEl.className = 'status ok';
+    return;
+  }
+  if (desktopConnection.state === 'initializing') {
+    serverStatusEl.textContent = spaceName
+      ? `已连接 · 正在初始化「${spaceName}」`
+      : '已连接 · 正在初始化当前空间';
+    serverStatusEl.className = 'status waiting';
+    return;
+  }
+  if (desktopConnection.state === 'recovering') {
+    serverStatusEl.textContent = 'Beav 正在恢复连接，请稍候…';
+    serverStatusEl.className = 'status';
+    return;
+  }
+  if (desktopConnection.state === 'attention') {
+    serverStatusEl.textContent = '连接需要处理，请升级 Beav 或重新加载插件';
+    serverStatusEl.className = 'status error';
+    return;
+  }
+  serverStatusEl.textContent = '未连接 · 请打开 Beav';
+  serverStatusEl.className = 'status error';
 }
 
 function normalizePageInfo(pageInfo) {

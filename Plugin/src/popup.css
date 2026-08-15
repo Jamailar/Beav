@@ -79,6 +79,10 @@ h1 {
   color: #15803d;
 }
 
+.status.waiting {
+  color: #a16207;
+}
+
 .status.error {
   color: #b91c1c;
 }

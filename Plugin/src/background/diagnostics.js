@@ -236,9 +236,9 @@ export function classifyPluginFeedbackPriority(payload = {}) {
     || fields.userActionRequired === true
     || nativeStatus.expectedDisconnect === true
     || nativeStatus.lifecycle?.expected === true;
-  const expectedCaptureFailure = /^(OPERATION_CANCELLED|POLICY_DENIED|URL_NOT_BELONG_TO_XIAOHONGSHU|UNSUPPORTED_URL|UNSUPPORTED_PAGE|CAPTURE_NOT_APPLICABLE)$/.test(code)
+  const expectedCaptureFailure = /^(OPERATION_CANCELLED|POLICY_DENIED|URL_NOT_BELONG_TO_XIAOHONGSHU|UNSUPPORTED_URL|UNSUPPORTED_PAGE|CAPTURE_NOT_APPLICABLE|SPACE_INITIALIZING)$/.test(code)
     || /^URL does not belong to (?:小红书|Xiaohongshu)$/i.test(message.trim());
-  const expectedConnectionState = /^(APP_NOT_RUNNING|APP_BRIDGE_UNAVAILABLE|NATIVE_HOST_RESTARTING)$/.test(code);
+  const expectedConnectionState = /^(APP_NOT_RUNNING|APP_STARTING|APP_SHUTTING_DOWN|APP_BRIDGE_UNAVAILABLE|NATIVE_HOST_RESTARTING)$/.test(code);
   const protocolOrAuthorizationFailure = /(?:PROTOCOL_MISMATCH|AUTHENTICATION_FAILED|VERSION_STALE|UNTRUSTED_ORIGIN)/.test(code);
   const outcomeUnknown = /(?:WRITE_OUTCOME_UNKNOWN|OPERATION_OUTCOME_UNKNOWN)/.test(code);
 
@@ -260,8 +260,8 @@ export function classifyPluginDiagnosticSubmission(payload = {}) {
     || fields.userActionRequired === true
     || nativeStatus.expectedDisconnect === true
     || nativeStatus.lifecycle?.expected === true;
-  const expectedOutcome = /^(OPERATION_CANCELLED|POLICY_DENIED|URL_NOT_BELONG_TO_XIAOHONGSHU|UNSUPPORTED_URL|UNSUPPORTED_PAGE|CAPTURE_NOT_APPLICABLE)$/.test(code);
-  const unavailableConnection = /^(APP_NOT_RUNNING|APP_BRIDGE_UNAVAILABLE|NATIVE_HOST_EXITED|NATIVE_HOST_NOT_REGISTERED|NATIVE_HOST_RESTARTING|NATIVE_TRANSPORT_DISCONNECTED)$/.test(code);
+  const expectedOutcome = /^(OPERATION_CANCELLED|POLICY_DENIED|URL_NOT_BELONG_TO_XIAOHONGSHU|UNSUPPORTED_URL|UNSUPPORTED_PAGE|CAPTURE_NOT_APPLICABLE|SPACE_INITIALIZING)$/.test(code);
+  const unavailableConnection = /^(APP_NOT_RUNNING|APP_STARTING|APP_SHUTTING_DOWN|APP_BRIDGE_UNAVAILABLE|NATIVE_HOST_EXITED|NATIVE_HOST_NOT_REGISTERED|NATIVE_HOST_RESTARTING|NATIVE_TRANSPORT_DISCONNECTED)$/.test(code);
 
   if (event.endsWith('.recovered')) return { submit: false, reason: 'recovery_telemetry' };
   if (expected || expectedOutcome) return { submit: false, reason: 'expected_outcome' };
