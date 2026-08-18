@@ -143,9 +143,25 @@ IPWO 提供全球住宅IP资源，支持多地区 IP 环境访问，为自动化
 - **发布透明**：安装包、扩展、更新资产和签名均通过 GitHub Releases 发布。
 - **边界公开**：许可证、[更新日志](./CHANGELOG.md)、[路线图](./ROADMAP.md) 和 [Issues](https://github.com/Jamailar/Beav/issues) 均可查。
 
-## Agent 接入
+## Agent 插件
 
-Codex、Hermes、OpenClaw 等外部 Agent 可通过本地 ACP Agent Gateway 复用 Beav 的会话、素材、任务状态和稿件引用。Beav 也支持作为 DeepSeek Harness 插件安装，在用户授权后连接本机知识库与创作能力。
+Beav Creator 插件让 Codex Desktop 或 WorkBuddy 通过 MCP 连接本机 Beav，把创作任务交给 Beav 内部 Agent；用户仍在 Beav UI 中查看、审批和编辑结果。
+
+先安装并启动 Beav（CLI 用户运行 `beav open`），再把对应指令发给宿主 Agent：
+
+**Codex**
+
+```text
+/goal Read https://beav.ziz.hk/agent to install the Beav Creator plugin and set up a new task for me.
+```
+
+**WorkBuddy**
+
+```text
+Read https://beav.ziz.hk/workbuddy to install the Beav Creator plugin and connect it to my local Beav workspace.
+```
+
+安装完成后，直接在 Codex 或 WorkBuddy 中描述任务即可；浏览器 UI 只供用户操作，不作为 Agent 控制通道。
 
 ## 社区
 
