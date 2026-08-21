@@ -7320,35 +7320,11 @@ async function extractCurrentPageLinkPayload() {
     ]);
     const richWechatSnapshot = buildWechatRichHtmlDocument(root);
     const wechatImageEntries = richWechatSnapshot.imageMap.slice(0, 80);
-    const localizedWechatImageMap = [];
-    if (wechatImageEntries.length > 0) {
-      const maxInlineImages = 12;
-      const maxInlineChars = 4 * 1024 * 1024;
-      const inlineCandidates = await Promise.all(
-        wechatImageEntries.slice(0, maxInlineImages).map(async (entry) => ({
-          token: entry.token,
-          sourceUrl: entry.url,
-          dataUrl: await fetchBinaryAsDataUrl(entry.url),
-        }))
-      );
-      const inlineByToken = new Map();
-      let inlineChars = 0;
-      for (const candidate of inlineCandidates) {
-        const dataUrl = candidate.dataUrl || '';
-        if (dataUrl && inlineChars + dataUrl.length <= maxInlineChars) {
-          inlineByToken.set(candidate.token, dataUrl);
-          inlineChars += dataUrl.length;
-        } else {
-          inlineByToken.set(candidate.token, candidate.sourceUrl);
-        }
-      }
-      for (const entry of wechatImageEntries) {
-        localizedWechatImageMap.push({
-          token: entry.token,
-          url: inlineByToken.get(entry.token) || entry.url,
-        });
-      }
-    }
+    const localizedWechatImageMap = wechatImageEntries.map((entry) => ({
+      token: entry.token,
+      sourceUrl: entry.url,
+      url: entry.url,
+    }));
 
     const images = richWechatSnapshot.imageMap.length > 0
       ? richWechatSnapshot.imageMap.map((item) => item.url).filter(Boolean).slice(0, 8)

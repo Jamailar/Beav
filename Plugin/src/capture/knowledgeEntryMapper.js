@@ -28,13 +28,15 @@ function fallbackDomain(value) {
   }
 }
 
-function replaceTokens(html, replacements, normalizeText) {
+function replaceTokens(html, replacements, normalizeText, useKnowledgeAssetTokens = false) {
   let output = String(html || '');
-  for (const item of Array.isArray(replacements) ? replacements : []) {
+  for (const [index, item] of (Array.isArray(replacements) ? replacements : []).entries()) {
     const token = normalizeText(item?.token);
-    const url = normalizeText(item?.url);
-    if (!token || !url) continue;
-    output = output.split(token).join(url);
+    const replacement = useKnowledgeAssetTokens
+      ? `__REDBOX_ASSET_image-${index + 1}__`
+      : normalizeText(item?.url);
+    if (!token || !replacement) continue;
+    output = output.split(token).join(replacement);
   }
   return output;
 }
@@ -62,9 +64,18 @@ export function buildKnowledgeEntryFromPagePayload(payload = {}, helpers = {}) {
   const sourceUrl = normalizeText(payload?.url);
   const sourceDomain = extractDomainFromUrl(sourceUrl);
   const title = normalizeText(payload?.title) || '网页收藏';
-  const richHtmlDocument = replaceTokens(payload?.richHtmlDocument, payload?.richHtmlImageMap, normalizeText);
   const kind = normalizeText(payload?.captureKind)
     || (payload?.type === 'link-article' ? 'link-article' : 'webpage');
+  const richHtmlImageMap = Array.isArray(payload?.richHtmlImageMap) ? payload.richHtmlImageMap : [];
+  const richHtmlDocument = replaceTokens(
+    payload?.richHtmlDocument,
+    richHtmlImageMap,
+    normalizeText,
+    kind === 'wechat-article',
+  );
+  const richHtmlImageUrls = richHtmlImageMap
+    .map((item) => normalizeText(item?.sourceUrl || item?.url))
+    .filter((url) => /^https:\/\//i.test(url));
   const text = normalizeText(payload?.text)
     || normalizeText(payload?.excerpt)
     || sourceUrl;
@@ -90,7 +101,9 @@ export function buildKnowledgeEntryFromPagePayload(payload = {}, helpers = {}) {
     },
     assets: {
       coverUrl: normalizeText(payload?.coverUrl) || undefined,
-      imageUrls: Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [],
+      imageUrls: kind === 'wechat-article'
+        ? richHtmlImageUrls.slice(0, 80)
+        : (Array.isArray(payload?.images) ? payload.images.filter(Boolean) : []),
     },
     options: {
       dedupeKey: undefined,

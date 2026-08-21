@@ -91,6 +91,28 @@ test('legacy page payload retains the existing Knowledge-entry contract', () => 
   });
 });
 
+test('WeChat payload keeps remote sources separate from local HTML asset tokens', () => {
+  const entry = buildKnowledgeEntryFromPagePayload({
+    type: 'link-article',
+    captureKind: 'wechat-article',
+    title: '公众号文章',
+    url: 'https://mp.weixin.qq.com/s/example',
+    text: '正文',
+    richHtmlDocument: '<article><img src="__WECHAT_ONE__"><img src="__WECHAT_TWO__"></article>',
+    richHtmlImageMap: [
+      { token: '__WECHAT_ONE__', url: 'data:image/png;base64,legacy', sourceUrl: 'https://mmbiz.qpic.cn/one/640' },
+      { token: '__WECHAT_TWO__', url: 'https://mmbiz.qpic.cn/two/640', sourceUrl: 'https://mmbiz.qpic.cn/two/640' },
+    ],
+    images: ['https://mmbiz.qpic.cn/cover/640'],
+  }, mappingHelpers);
+  assert.equal(entry.content.html, '<article><img src="__REDBOX_ASSET_image-1__"><img src="__REDBOX_ASSET_image-2__"></article>');
+  assert.deepEqual(entry.assets.imageUrls, [
+    'https://mmbiz.qpic.cn/one/640',
+    'https://mmbiz.qpic.cn/two/640',
+  ]);
+  assert.doesNotMatch(entry.content.html, /data:image|https:\/\/mmbiz/);
+});
+
 test('capture documents normalize unsafe resource URLs and preserve the source URL', () => {
   const document = normalizeCaptureDocument({
     engine: 'defuddle',
