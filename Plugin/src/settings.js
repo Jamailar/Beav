@@ -1,4 +1,5 @@
 const DEFAULT_SETTINGS = {
+  actionLaunchMode: 'popup',
   xhsSaveCommentsWithNote: true,
   saveToRedboxByDefault: true,
   autoUpdateCheck: true,
@@ -6,6 +7,8 @@ const DEFAULT_SETTINGS = {
 
 const elements = {
   form: document.getElementById('settings-form'),
+  actionLaunchPopup: document.getElementById('action-launch-popup'),
+  actionLaunchSidePanel: document.getElementById('action-launch-sidepanel'),
   xhsSaveComments: document.getElementById('xhs-save-comments'),
   saveDefault: document.getElementById('save-default'),
   autoUpdate: document.getElementById('auto-update'),
@@ -52,6 +55,7 @@ function sendMessage(message) {
 
 function normalizeFormSettings() {
   return {
+    actionLaunchMode: elements.actionLaunchSidePanel.checked ? 'sidepanel' : 'popup',
     xhsSaveCommentsWithNote: elements.xhsSaveComments.checked,
     saveToRedboxByDefault: elements.saveDefault.checked,
     autoUpdateCheck: elements.autoUpdate.checked,
@@ -60,6 +64,8 @@ function normalizeFormSettings() {
 
 function renderSettings(settings) {
   const next = { ...DEFAULT_SETTINGS, ...(settings || {}) };
+  elements.actionLaunchPopup.checked = next.actionLaunchMode !== 'sidepanel';
+  elements.actionLaunchSidePanel.checked = next.actionLaunchMode === 'sidepanel';
   elements.xhsSaveComments.checked = next.xhsSaveCommentsWithNote !== false;
   elements.saveDefault.checked = next.saveToRedboxByDefault !== false;
   elements.autoUpdate.checked = next.autoUpdateCheck !== false;

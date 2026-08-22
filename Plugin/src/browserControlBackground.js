@@ -604,10 +604,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
-if (chrome.sidePanel?.setPanelBehavior) {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
-}
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!isBrowserControlRuntimeMessage(message)) return false;
   void (async () => {

@@ -89,6 +89,7 @@ const PLUGIN_CAPTURE_MESSAGE_TYPES = new Set([
   'save-drag-image',
 ]);
 const DEFAULT_PLUGIN_SETTINGS = {
+  actionLaunchMode: 'popup',
   xhsIntervalMinSeconds: 3,
   xhsIntervalMaxSeconds: 6,
   xhsBloggerNoteLimit: 50,
@@ -116,14 +117,6 @@ let xhsTaskLogs = [];
 
 void hydrateXhsTaskLogs();
 void hydrateXhsTaskState();
-
-if (chrome.sidePanel?.setPanelBehavior) {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error) => {
-    pluginWarn('side-panel-behavior-failed', {
-      error: describeError(error),
-    });
-  });
-}
 
 function clearCachedKnowledgeApi() {
   cachedKnowledgeApi = null;
@@ -226,13 +219,19 @@ function ensureContextMenus() {
   });
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   ensureContextMenus();
+  void initializeActionLaunchMode(details?.reason);
   void initializeUpdateChecks(true);
 });
 
 chrome.runtime.onStartup.addListener(() => {
   ensureContextMenus();
+  void configureActionLaunchMode().catch((error) => {
+    pluginWarn('action-launch-mode-startup-failed', {
+      error: describeError(error),
+    });
+  });
   void initializeUpdateChecks(false);
 });
 
@@ -977,6 +976,7 @@ function normalizePluginSettings(input = {}) {
     [intervalMin, intervalMax] = [intervalMax, intervalMin];
   }
   return {
+    actionLaunchMode: normalizeActionLaunchMode(source.actionLaunchMode),
     xhsIntervalMinSeconds: Math.round(intervalMin * 10) / 10,
     xhsIntervalMaxSeconds: Math.round(intervalMax * 10) / 10,
     xhsBloggerNoteLimit: normalizePositiveInteger(source.xhsBloggerNoteLimit, DEFAULT_PLUGIN_SETTINGS.xhsBloggerNoteLimit),
@@ -987,6 +987,52 @@ function normalizePluginSettings(input = {}) {
     saveToRedboxByDefault: source.saveToRedboxByDefault !== false,
     autoUpdateCheck: source.autoUpdateCheck !== false,
   };
+}
+
+function normalizeActionLaunchMode(value) {
+  return normalizeText(value) === 'sidepanel' ? 'sidepanel' : 'popup';
+}
+
+async function initializeActionLaunchMode(installReason) {
+  const stored = await getStorageLocal([REDBOX_PLUGIN_SETTINGS_KEY]);
+  const rawSettings = stored?.[REDBOX_PLUGIN_SETTINGS_KEY];
+  const hasStoredLaunchMode = rawSettings
+    && typeof rawSettings === 'object'
+    && ['popup', 'sidepanel'].includes(normalizeText(rawSettings.actionLaunchMode));
+  const settings = hasStoredLaunchMode
+    ? await readPluginSettings()
+    : await writePluginSettings({
+      ...(rawSettings && typeof rawSettings === 'object' ? rawSettings : {}),
+      actionLaunchMode: installReason === 'install' ? 'popup' : 'sidepanel',
+    }, { applyLaunchMode: false });
+  await applyActionLaunchMode(settings.actionLaunchMode);
+  return settings;
+}
+
+async function configureActionLaunchMode() {
+  const settings = await readPluginSettings();
+  await applyActionLaunchMode(settings.actionLaunchMode);
+  return settings;
+}
+
+async function applyActionLaunchMode(modeInput) {
+  const mode = normalizeActionLaunchMode(modeInput);
+  try {
+    if (mode === 'popup') {
+      await chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: false });
+      await chrome.action?.setPopup?.({ popup: 'popup.html' });
+    } else {
+      await chrome.action?.setPopup?.({ popup: '' });
+      await chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true });
+    }
+  } catch (error) {
+    pluginWarn('action-launch-mode-apply-failed', {
+      mode,
+      error: describeError(error),
+    });
+    throw error;
+  }
+  return mode;
 }
 
 function resolveXhsCollectionMode(modeInput, fallback = DEFAULT_PLUGIN_SETTINGS.xhsBloggerCollectionMode) {
@@ -1039,7 +1085,7 @@ async function readPluginSettings() {
   });
 }
 
-async function writePluginSettings(nextSettings) {
+async function writePluginSettings(nextSettings, options = {}) {
   const settings = normalizePluginSettings({
     ...DEFAULT_PLUGIN_SETTINGS,
     ...(nextSettings || {}),
@@ -1047,6 +1093,9 @@ async function writePluginSettings(nextSettings) {
   await setStorageLocal({ [REDBOX_PLUGIN_SETTINGS_KEY]: settings });
   clearCachedKnowledgeApi();
   await configureUpdateAlarm(settings);
+  if (options.applyLaunchMode !== false) {
+    await applyActionLaunchMode(settings.actionLaunchMode);
+  }
   return settings;
 }
 

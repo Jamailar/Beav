@@ -9,6 +9,8 @@ const updateMetaEl = document.getElementById('update-meta');
 const buttons = {
   checkUpdate: document.getElementById('check-update'),
   openUpdateSource: document.getElementById('open-update-source'),
+  openWorkbench: document.getElementById('open-workbench'),
+  openSettings: document.getElementById('open-settings'),
   primary: document.getElementById('save-primary'),
 };
 
@@ -51,6 +53,8 @@ async function init() {
   startConnectionRefreshLoop();
 
   buttons.primary.addEventListener('click', () => runAction(primaryActionType));
+  buttons.openWorkbench.addEventListener('click', () => void openWorkbench());
+  buttons.openSettings.addEventListener('click', () => chrome.runtime.openOptionsPage());
   buttons.checkUpdate.addEventListener('click', () => void runUpdateCheck());
   buttons.openUpdateSource.addEventListener('click', () => void openUpdateSource());
   window.addEventListener('unload', () => {
@@ -159,6 +163,21 @@ async function openUpdateSource() {
     await sendMessage({ type: 'plugin-update:open-source' });
   } finally {
     buttons.openUpdateSource.disabled = false;
+  }
+}
+
+async function openWorkbench() {
+  buttons.openWorkbench.disabled = true;
+  try {
+    const response = await sendMessage({ type: 'sidepanel:open' });
+    if (!response?.success) {
+      throw new Error(response?.error || '无法打开侧边栏工作台');
+    }
+    window.close();
+  } catch (error) {
+    showResult(error instanceof Error ? error.message : String(error), 'error');
+  } finally {
+    buttons.openWorkbench.disabled = false;
   }
 }
 

@@ -136,6 +136,7 @@ assert.equal(
   packageJson.version,
   'Manifest version_name must preserve the release version shown to users',
 );
+assert.equal(outputManifest.action?.default_popup, 'popup.html', 'Manifest must provide the popup launch fallback');
 assert.equal(siteResearchCapabilities.schemaVersion, 1, 'Site research capability schema must be versioned');
 assert.equal(siteResearchCapabilities.contractVersion, 6, 'Site research capability contract must match Desktop');
 for (const capability of siteResearchCapabilities.capabilities || []) {
@@ -178,6 +179,8 @@ for (const cssFile of ['popup.css', 'settings.css', 'sidepanel.css']) {
 }
 
 const backgroundSource = await readText(path.join(sourceDir, 'background.js'));
+assert.match(backgroundSource, /function applyActionLaunchMode\(/, 'Background must centrally apply the action launch mode');
+assert.match(backgroundSource, /actionLaunchMode: 'popup'/, 'New installs must default to popup launch mode');
 for (const file of collectDynamicScriptFiles(backgroundSource)) {
   await assertOutputFile(file);
 }
@@ -215,6 +218,11 @@ const configuredBrowserTools = browserMcpConfig.mcpServers?.['browser-control']?
 assert(configuredBrowserTools.length > 0, 'Browser MCP config must expose enabledTools');
 
 const browserControlBackgroundSource = await readText(path.join(sourceDir, 'browserControlBackground.js'));
+assert.doesNotMatch(
+  browserControlBackgroundSource,
+  /setPanelBehavior\(\{ openPanelOnActionClick: true \}\)/,
+  'Browser-control runtime must not override the configured action launch mode',
+);
 const backgroundBrowserTools = extractBackgroundMcpTools(browserControlBackgroundSource);
 const jsFallbackBrowserTools = extractJsFallbackTools(await readText(path.join(pluginRoot, 'mcp-server.mjs')));
 const rustBrowserMcpSource = await readText(path.join(repositoryRoot, 'desktop/src-tauri/src/browser_control_mcp.rs'));
