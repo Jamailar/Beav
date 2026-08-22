@@ -106,6 +106,10 @@ export function extractSiteResearch(input = {}) {
   const limit = clamp(input.limit, 1, 100, DEFAULT_ITEM_LIMIT);
   const commentLimit = clamp(input.commentLimit, 0, 100, DEFAULT_COMMENT_LIMIT);
   const pageState = readPageState(site);
+  if (operation === 'search') {
+    const inputSelector = SITE_SEARCH_UI[site]?.inputs.find((selector) => firstVisible([selector])) || '';
+    pageState.search = readSearchSubmissionState(site, inputSelector, input.query || input.keyword || '');
+  }
   const base = {
     success: true,
     site,
@@ -154,6 +158,7 @@ export async function submitSiteResearchSearch(input = {}) {
   if (!inputSelector) {
     return { success: false, reason: 'search_input_unavailable', message: 'platform search input is not visible', sourceUrl: location.href };
   }
+  const before = readSearchSubmissionState(site, inputSelector, query);
   const typed = await typeElement({ selector: inputSelector, text: query, replace: true, timeoutMs: 3_000 });
   if (typed?.success !== true) {
     return { success: false, reason: 'search_input_failed', message: typed?.error || 'platform search input failed', sourceUrl: location.href };
@@ -163,7 +168,10 @@ export async function submitSiteResearchSearch(input = {}) {
   if (submitSelector) {
     const clicked = await clickElement({ selector: submitSelector });
     if (clicked?.success === true) {
-      return { success: true, submitted: true, method: 'click', inputSelector, submitSelector, sourceUrl: location.href };
+      return searchSubmissionReceipt(site, inputSelector, query, before, {
+        method: 'click',
+        submitSelector,
+      });
     }
   }
   const inputNode = firstVisible([inputSelector]);
@@ -180,7 +188,26 @@ export async function submitSiteResearchSearch(input = {}) {
       cancelable: true,
     }));
   }
-  return { success: true, submitted: true, method: 'enter', inputSelector, sourceUrl: location.href };
+  return searchSubmissionReceipt(site, inputSelector, query, before, { method: 'enter' });
+}
+
+export function assessSearchSubmissionReadiness(before = {}, current = {}) {
+  const queryMatched = current.queryMatched === true;
+  const resultChanged = Boolean(current.resultFingerprint)
+    && current.resultFingerprint !== before.resultFingerprint;
+  const repeatedReadyQuery = before.queryMatched === true
+    && Boolean(current.resultFingerprint)
+    && current.resultFingerprint === before.resultFingerprint;
+  const explicitlyEmpty = current.explicitlyEmpty === true;
+  const onResultSurface = current.surface === 'search_results';
+  return {
+    ready: queryMatched && onResultSurface && (resultChanged || repeatedReadyQuery || explicitlyEmpty),
+    queryMatched,
+    resultChanged,
+    repeatedReadyQuery,
+    explicitlyEmpty,
+    onResultSurface,
+  };
 }
 
 export async function prepareSiteResearchItemClick(input = {}) {
@@ -346,6 +373,71 @@ function isVisible(node) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function searchSubmissionReceipt(site, inputSelector, query, before, details = {}) {
+  return {
+    success: true,
+    submitted: true,
+    ...details,
+    inputSelector,
+    query: String(query || '').trim(),
+    before,
+    sourceUrl: location.href,
+  };
+}
+
+function readSearchSubmissionState(site, inputSelector, requestedQuery) {
+  const inputNode = inputSelector ? firstVisible([inputSelector]) : null;
+  const observedQuery = String(inputNode?.value || inputNode?.textContent || '').trim();
+  const query = normalizeSearchQuery(requestedQuery);
+  const normalizedObserved = normalizeSearchQuery(observedQuery);
+  const normalizedUrl = normalizeSearchQuery(readSearchQueryFromUrl(location.href));
+  return {
+    requestedQuery: String(requestedQuery || '').trim(),
+    observedQuery,
+    queryMatched: Boolean(query) && (normalizedObserved === query || normalizedUrl === query),
+    surface: detectSiteSurface(site, null),
+    url: location.href,
+    resultFingerprint: readResultFingerprint(site),
+    explicitlyEmpty: detectExplicitEmptyResults(),
+  };
+}
+
+function readSearchQueryFromUrl(value) {
+  try {
+    const url = new URL(value, location.href);
+    for (const key of ['keyword', 'query', 'q', 'search_query']) {
+      const candidate = url.searchParams.get(key);
+      if (candidate) return candidate;
+    }
+    const parts = decodeURIComponent(url.pathname).split('/').filter(Boolean);
+    const searchIndex = parts.findIndex((part) => /^search(?:_result)?$/i.test(part));
+    return searchIndex >= 0 ? parts[searchIndex + 1] || '' : '';
+  } catch {
+    return '';
+  }
+}
+
+function normalizeSearchQuery(value) {
+  return String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function readResultFingerprint(site) {
+  const urls = [];
+  const seen = new Set();
+  for (const selector of SITE_CARD_SELECTORS[site] || []) {
+    for (const anchor of document.querySelectorAll(selector)) {
+      const href = normalizeUrl(anchor.href || anchor.getAttribute('href') || '');
+      if (!href || seen.has(href)) continue;
+      seen.add(href);
+      urls.push(href);
+      if (urls.length >= 30) break;
+    }
+    if (urls.length >= 30) break;
+  }
+  if (!urls.length) return '';
+  return stableStringId(urls.join('\n'), 'results');
 }
 
 function extractXiaohongshu(operation, limit, commentLimit, detailOpenMode) {
@@ -590,12 +682,16 @@ function extractMedia(limit, options = {}) {
 }
 
 function stableMediaId(sourceUrl) {
+  return stableStringId(sourceUrl, 'media');
+}
+
+function stableStringId(value, prefix) {
   let hash = 2166136261;
-  for (let index = 0; index < sourceUrl.length; index += 1) {
-    hash ^= sourceUrl.charCodeAt(index);
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return `media-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+  return `${prefix}-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 function readPageState(site) {

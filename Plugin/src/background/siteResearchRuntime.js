@@ -111,6 +111,7 @@ export async function runSiteResearch(requestInput, deps = {}) {
   }
   await deps.claimTab(tab.id, request.operation === 'search' ? 'research_search' : 'research_source');
   if (typeof deps.waitForTabComplete === 'function') await deps.waitForTabComplete(tab.id, request.timeoutMs);
+  let searchSubmission = null;
   if (request.operation === 'search') {
     if (request.site.searchViaPageUi !== true || typeof deps.submitSearch !== 'function') {
       return researchSearchFailure(request, tab, targetUrl, {
@@ -118,9 +119,9 @@ export async function runSiteResearch(requestInput, deps = {}) {
         message: `${request.site.displayName} page UI search is unavailable`,
       });
     }
-    const submitted = unwrapContentDelivery(await deps.submitSearch(tab.id, extractorRequest(request)));
-    if (submitted?.success !== true) {
-      return researchSearchFailure(request, tab, targetUrl, submitted);
+    searchSubmission = unwrapContentDelivery(await deps.submitSearch(tab.id, extractorRequest(request)));
+    if (searchSubmission?.success !== true) {
+      return researchSearchFailure(request, tab, targetUrl, searchSubmission);
     }
     if (typeof deps.waitForTabComplete === 'function') await deps.waitForTabComplete(tab.id, request.timeoutMs);
   }
@@ -145,6 +146,12 @@ export async function runSiteResearch(requestInput, deps = {}) {
       };
     }
     return result;
+  }
+  if (request.operation === 'search' && searchSubmission?.before) {
+    extracted = await waitForBoundSearchResults(tab.id, request, searchSubmission, extracted, deps);
+    if (!searchResultsBound(searchSubmission, extracted)) {
+      return researchCardsFailure(request, current, targetUrl, markSearchResultsUnbound(extracted));
+    }
   }
   let filterResult = null;
   if (Object.keys(request.filters).length) {
@@ -596,6 +603,53 @@ async function collectBoundedCards(tabId, request, first, deps) {
     }
   }
   return { ...first, ...latest, items: [...collected.values()].slice(0, request.limit) };
+}
+
+async function waitForBoundSearchResults(tabId, request, submission, first, deps) {
+  let latest = first || {};
+  const readyTimeoutMs = Math.min(request.timeoutMs, RESULT_READY_TIMEOUT_MS);
+  let waitedMs = 0;
+  while (!searchResultsBound(submission, latest) && waitedMs < readyTimeoutMs) {
+    const waitMs = Math.min(RESULT_READY_POLL_MS, readyTimeoutMs - waitedMs);
+    await delayWithDeps(waitMs, deps);
+    waitedMs += waitMs;
+    latest = unwrapContentDelivery(await deps.readSiteEvidence(tabId, extractorRequest(request)));
+    if (latest?.success === false) break;
+  }
+  return latest;
+}
+
+function searchResultsBound(submission, extracted) {
+  if (!submission?.before) return true;
+  const before = submission.before;
+  const current = extracted?.pageState?.search;
+  if (!current) return false;
+  const resultChanged = Boolean(current.resultFingerprint)
+    && current.resultFingerprint !== before.resultFingerprint;
+  const repeatedReadyQuery = before.queryMatched === true
+    && Boolean(current.resultFingerprint)
+    && current.resultFingerprint === before.resultFingerprint;
+  return current.queryMatched === true
+    && current.surface === 'search_results'
+    && (resultChanged || repeatedReadyQuery || current.explicitlyEmpty === true);
+}
+
+function markSearchResultsUnbound(extracted = {}) {
+  return {
+    ...extracted,
+    items: [],
+    pageState: {
+      ...(extracted.pageState || {}),
+      results: {
+        ...(extracted.pageState?.results || {}),
+        status: 'loading',
+      },
+      search: {
+        ...(extracted.pageState?.search || {}),
+        bindingStatus: 'unbound',
+      },
+    },
+  };
 }
 
 function appendCollectedItems(collected, items, limit) {

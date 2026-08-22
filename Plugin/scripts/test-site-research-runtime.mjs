@@ -10,6 +10,7 @@ import {
   buildBrowserPolicyDecision,
   resolveBrowserPolicyPageUrl,
 } from '../src/background/browserPolicy.js';
+import { assessSearchSubmissionReadiness } from '../src/content/siteResearchExtractor.js';
 
 test('allows a leased page action while a new HTTP tab only exposes pendingUrl', () => {
   const action = {
@@ -172,6 +173,69 @@ test('waits for typed card readiness before attempting result-page scrolling', a
   assert.equal(result.success, true);
   assert.equal(result.counts.cards, 1);
   assert.deepEqual(waits, [750]);
+});
+
+test('does not accept stale recommendation cards before results bind to the submitted query', async () => {
+  let reads = 0;
+  const waits = [];
+  const stale = {
+    success: true,
+    pageState: {
+      search: { queryMatched: true, surface: 'search_results', resultFingerprint: 'results-old' },
+      results: { status: 'ready', candidateCount: 1, interactableCount: 1 },
+    },
+    items: [{ id: 'old', sourceUrl: 'https://www.xiaohongshu.com/explore/old' }],
+  };
+  const fresh = {
+    success: true,
+    pageState: {
+      search: { queryMatched: true, surface: 'search_results', resultFingerprint: 'results-new' },
+      results: { status: 'ready', candidateCount: 1, interactableCount: 1 },
+    },
+    items: [{ id: 'new', sourceUrl: 'https://www.xiaohongshu.com/explore/new' }],
+  };
+  const result = await runSiteResearch({
+    operation: 'search',
+    site: 'xhs',
+    query: 'AI 芯片',
+    depth: 'preview',
+    limit: 1,
+    maxScrolls: 0,
+  }, {
+    createControlledTab: async ({ url }) => ({ tab: { id: 12, url, title: 'fixture' } }),
+    getTab: async () => ({ id: 12, url: 'https://www.xiaohongshu.com/search_result', title: 'fixture' }),
+    claimTab: async () => {},
+    waitForTabComplete: async () => {},
+    submitSearch: async () => ({
+      success: true,
+      submitted: true,
+      before: { queryMatched: false, resultFingerprint: 'results-old' },
+    }),
+    readSnapshot: async () => ({ snapshot: '' }),
+    delay: async (ms) => { waits.push(ms); },
+    readSiteEvidence: async () => {
+      reads += 1;
+      return reads === 1 ? stale : fresh;
+    },
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.items[0].id, 'new');
+  assert.deepEqual(waits, [750]);
+});
+
+test('search binding readiness requires the requested query and a settled result surface', () => {
+  const before = { queryMatched: false, resultFingerprint: 'results-old' };
+  assert.equal(assessSearchSubmissionReadiness(before, {
+    queryMatched: true,
+    surface: 'search_results',
+    resultFingerprint: 'results-old',
+  }).ready, false);
+  assert.equal(assessSearchSubmissionReadiness(before, {
+    queryMatched: true,
+    surface: 'search_results',
+    resultFingerprint: 'results-new',
+  }).ready, true);
 });
 
 test('fails closed when a requested filter is not visible', async () => {
