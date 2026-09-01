@@ -5,11 +5,14 @@ const actionHintEl = document.getElementById('action-hint');
 const updatePanelEl = document.getElementById('update-panel');
 const updateStatusEl = document.getElementById('update-status');
 const updateMetaEl = document.getElementById('update-meta');
+const platformSafetyNoticeDialogEl = document.getElementById('platform-safety-notice-dialog');
+const platformSafetyNoticeTitleEl = document.getElementById('platform-safety-notice-title');
+const platformSafetyNoticeDescriptionEl = document.getElementById('platform-safety-notice-description');
+const platformSafetyNoticeConfirmEl = document.getElementById('platform-safety-notice-confirm');
 
 const buttons = {
   checkUpdate: document.getElementById('check-update'),
   openUpdateSource: document.getElementById('open-update-source'),
-  openWorkbench: document.getElementById('open-workbench'),
   openSettings: document.getElementById('open-settings'),
   primary: document.getElementById('save-primary'),
 };
@@ -22,6 +25,7 @@ let refreshTimer = null;
 let connectionRefreshTimer = null;
 let popupOpenedAt = Date.now();
 let primaryBusy = false;
+let resolvePlatformSafetyNoticeDialog = null;
 let desktopConnection = {
   state: 'checking',
   ingestAllowed: false,
@@ -53,10 +57,14 @@ async function init() {
   startConnectionRefreshLoop();
 
   buttons.primary.addEventListener('click', () => runAction(primaryActionType));
-  buttons.openWorkbench.addEventListener('click', () => void openWorkbench());
   buttons.openSettings.addEventListener('click', () => chrome.runtime.openOptionsPage());
   buttons.checkUpdate.addEventListener('click', () => void runUpdateCheck());
   buttons.openUpdateSource.addEventListener('click', () => void openUpdateSource());
+  platformSafetyNoticeDialogEl.addEventListener('close', () => {
+    const resolve = resolvePlatformSafetyNoticeDialog;
+    resolvePlatformSafetyNoticeDialog = null;
+    resolve?.(platformSafetyNoticeDialogEl.returnValue === 'confirm');
+  });
   window.addEventListener('unload', () => {
     stopRefreshLoop();
     stopConnectionRefreshLoop();
@@ -129,8 +137,9 @@ async function runAction(type) {
   await refreshConnectionStatus(true);
   if (!desktopConnection.ingestAllowed) return;
   setBusy(true);
-  showResult('正在保存...', 'success');
   try {
+    if (!await ensurePlatformSaveSafetyNotice(type)) return;
+    showResult('正在保存...', 'success');
     const result = await sendMessage({ type, tabId: activeTab.id });
     if (!result?.success) {
       throw new Error(result?.error || '保存失败');
@@ -144,6 +153,43 @@ async function runAction(type) {
   } finally {
     setBusy(false);
   }
+}
+
+function showPlatformSaveSafetyNotice(notice) {
+  const title = String(notice?.title || '请先确认已登录小号');
+  const description = String(notice?.description || '频繁保存内容可能触发平台风控，影响账号正常使用。请先在当前浏览器登录专门用于采集的小号，再继续保存。');
+  const confirmLabel = String(notice?.confirmLabel || '我已登录小号，继续保存');
+  if (!platformSafetyNoticeDialogEl?.showModal) {
+    return Promise.resolve(window.confirm(`${title}\n\n${description}\n\n点击“确定”表示：${confirmLabel}`));
+  }
+  platformSafetyNoticeTitleEl.textContent = title;
+  platformSafetyNoticeDescriptionEl.textContent = description;
+  platformSafetyNoticeConfirmEl.textContent = confirmLabel;
+  return new Promise((resolve) => {
+    resolvePlatformSafetyNoticeDialog = resolve;
+    platformSafetyNoticeDialogEl.showModal();
+  });
+}
+
+async function ensurePlatformSaveSafetyNotice(action) {
+  const requirement = await sendMessage({
+    type: 'capture:platform-save-safety-notice:get',
+    action,
+    tabId: activeTab?.id || 0,
+  });
+  if (!requirement?.success) {
+    throw new Error(requirement?.error || '无法读取账号安全提示');
+  }
+  if (!requirement.required) return true;
+  if (!await showPlatformSaveSafetyNotice(requirement.notice)) return false;
+  const acknowledgement = await sendMessage({
+    type: 'capture:platform-save-safety-notice:acknowledge',
+    platform: requirement.platform,
+  });
+  if (!acknowledgement?.success) {
+    throw new Error(acknowledgement?.error || '无法确认账号安全提示');
+  }
+  return true;
 }
 
 async function runUpdateCheck() {
@@ -163,21 +209,6 @@ async function openUpdateSource() {
     await sendMessage({ type: 'plugin-update:open-source' });
   } finally {
     buttons.openUpdateSource.disabled = false;
-  }
-}
-
-async function openWorkbench() {
-  buttons.openWorkbench.disabled = true;
-  try {
-    const response = await sendMessage({ type: 'sidepanel:open' });
-    if (!response?.success) {
-      throw new Error(response?.error || '无法打开侧边栏工作台');
-    }
-    window.close();
-  } catch (error) {
-    showResult(error instanceof Error ? error.message : String(error), 'error');
-  } finally {
-    buttons.openWorkbench.disabled = false;
   }
 }
 

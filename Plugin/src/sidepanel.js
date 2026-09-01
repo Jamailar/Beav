@@ -64,7 +64,7 @@ let currentSettings = {
   xhsBloggerNoteLimit: 50,
   xhsIntervalMaxSeconds: 6,
   xhsBloggerCollectionMode: 'api',
-  xhsSaveCommentsWithNote: true,
+  xhsSaveCommentsWithNote: false,
 };
 
 function debugLog(scope, details) {
@@ -399,7 +399,7 @@ function renderCaptureActions(nextContext) {
     const checkbox = document.createElement('input');
     checkbox.id = 'xhs-save-comments-inline';
     checkbox.type = 'checkbox';
-    checkbox.checked = currentSettings?.xhsSaveCommentsWithNote !== false;
+    checkbox.checked = currentSettings?.xhsSaveCommentsWithNote === true;
     checkbox.disabled = Boolean(capturePendingAction) || platformSafetyNoticePending || !isHealthy;
     const text = document.createElement('span');
     text.textContent = '保存评论区';
@@ -420,7 +420,7 @@ function renderCaptureActions(nextContext) {
 }
 
 async function updateXhsSaveCommentsSetting(enabled) {
-  const previous = currentSettings?.xhsSaveCommentsWithNote !== false;
+  const previous = currentSettings?.xhsSaveCommentsWithNote === true;
   currentSettings = {
     ...currentSettings,
     xhsSaveCommentsWithNote: enabled,

@@ -1,6 +1,6 @@
 const DEFAULT_SETTINGS = {
   actionLaunchMode: 'popup',
-  xhsSaveCommentsWithNote: true,
+  xhsSaveCommentsWithNote: false,
   saveToRedboxByDefault: true,
   autoUpdateCheck: true,
 };
@@ -66,7 +66,7 @@ function renderSettings(settings) {
   const next = { ...DEFAULT_SETTINGS, ...(settings || {}) };
   elements.actionLaunchPopup.checked = next.actionLaunchMode !== 'sidepanel';
   elements.actionLaunchSidePanel.checked = next.actionLaunchMode === 'sidepanel';
-  elements.xhsSaveComments.checked = next.xhsSaveCommentsWithNote !== false;
+  elements.xhsSaveComments.checked = next.xhsSaveCommentsWithNote === true;
   elements.saveDefault.checked = next.saveToRedboxByDefault !== false;
   elements.autoUpdate.checked = next.autoUpdateCheck !== false;
 }

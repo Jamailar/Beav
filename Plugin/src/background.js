@@ -96,7 +96,7 @@ const DEFAULT_PLUGIN_SETTINGS = {
   xhsKeywordNoteLimit: 20,
   xhsLinkBatchLimit: 50,
   xhsBloggerCollectionMode: 'api',
-  xhsSaveCommentsWithNote: true,
+  xhsSaveCommentsWithNote: false,
   saveToRedboxByDefault: true,
   autoUpdateCheck: true,
 };
@@ -983,7 +983,7 @@ function normalizePluginSettings(input = {}) {
     xhsKeywordNoteLimit: Math.round(clampNumber(source.xhsKeywordNoteLimit, 1, 50, DEFAULT_PLUGIN_SETTINGS.xhsKeywordNoteLimit)),
     xhsLinkBatchLimit: Math.round(clampNumber(source.xhsLinkBatchLimit, 1, 50, DEFAULT_PLUGIN_SETTINGS.xhsLinkBatchLimit)),
     xhsBloggerCollectionMode: normalizeText(source.xhsBloggerCollectionMode) === 'tab' ? 'tab' : 'api',
-    xhsSaveCommentsWithNote: source.xhsSaveCommentsWithNote !== false,
+    xhsSaveCommentsWithNote: source.xhsSaveCommentsWithNote === true,
     saveToRedboxByDefault: source.saveToRedboxByDefault !== false,
     autoUpdateCheck: source.autoUpdateCheck !== false,
   };
@@ -4677,7 +4677,7 @@ async function saveXhsNoteFromTab(tabId, options = {}) {
     throw new Error('当前页面未识别到可保存的小红书笔记或文章');
   }
   let commentsPayload = {};
-  if (settings.xhsSaveCommentsWithNote !== false) {
+  if (settings.xhsSaveCommentsWithNote === true) {
     await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
       source: payload?.source,
       noteId: payload?.noteId,
@@ -4730,7 +4730,7 @@ async function saveXhsNoteFromTab(tabId, options = {}) {
       });
     }
   } catch (error) {
-    if (settings.xhsSaveCommentsWithNote !== false) {
+    if (settings.xhsSaveCommentsWithNote === true) {
       await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
         source: commentsPayload?.source || payload?.source,
         sourceId: commentsPayload?.noteId || payload?.noteId,

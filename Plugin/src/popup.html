@@ -31,12 +31,25 @@
     <section class="panel actions">
       <div id="action-hint" class="action-hint hidden"></div>
       <button id="save-primary" class="btn btn-primary">正在识别当前页面...</button>
-      <button id="open-workbench" class="btn btn-ghost">打开侧边栏工作台</button>
       <button id="open-settings" class="btn btn-ghost">设置</button>
     </section>
 
     <section id="result" class="panel result hidden"></section>
   </main>
+
+  <dialog id="platform-safety-notice-dialog" class="platform-safety-notice-dialog" aria-labelledby="platform-safety-notice-title">
+    <form method="dialog" class="platform-safety-notice-card">
+      <div class="platform-safety-notice-copy">
+        <h2 id="platform-safety-notice-title">请先确认已登录小号</h2>
+        <p id="platform-safety-notice-description">频繁保存内容可能触发平台风控，影响账号正常使用。请先在当前浏览器登录专门用于采集的小号，再继续保存。</p>
+      </div>
+      <div class="platform-safety-notice-actions">
+        <button type="submit" value="cancel">暂不保存</button>
+        <button id="platform-safety-notice-confirm" type="submit" value="confirm" class="primary">我已登录小号，继续保存</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="popup.js"></script>
 </body>
 </html>
