@@ -101,6 +101,16 @@ Beav 因此而生：把 AI 变成自媒体工作者真正可持续使用的素�
 | ✅ 图片 / 视频 / 素材包 | ✅ 真实来源引用 | ✅ 可编辑稿件项目 | ✅ 媒体库复用 | ✅ 外部 Agent 接入 |
 | ✅ 自动社媒调研、博主订阅与每日更新保存知识库 |  |  |  |  |
 
+## 合作伙伴
+
+### 商务合作
+
+如有品牌合作、行业方案、产品集成或其他商务合作意向，欢迎发送邮件至 [huaqiang1121@gmail.com](mailto:huaqiang1121@gmail.com)。
+
+### 经销代理
+
+如希望成为 Beav 的经销或代理合作伙伴，请填写 [Beav 经销代理合作申请表](https://my.feishu.cn/share/base/form/shrcnYe6rZBbfQNvgeDIEHClWUc)。
+
 ## 友情赞助
 
 <p>
