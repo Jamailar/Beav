@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <a href="https://redbox.ziz.hk"><strong><big>下载 Beav</big></strong></a>
+  <a href="https://redbox.ziz.hk/download"><strong><big>官网高速下载（中国大陆网络推荐）</big></strong></a>
 </p>
 
 <p align="center">
