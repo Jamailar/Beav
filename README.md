@@ -8,6 +8,19 @@
   <strong>AI 自媒体工作台</strong>
 </p>
 
+<p align="center">
+  <!-- maintenance-days:start -->
+  <img src="https://img.shields.io/badge/%E8%87%AA%202025%20%E5%B9%B4%206%20%E6%9C%88%E8%B5%B7-%E5%B7%B2%E6%8C%81%E7%BB%AD%E7%BB%B4%E6%8A%A4%20473%20%E5%A4%A9-EA580C?style=flat-square&amp;labelColor=9A3412" alt="本项目自 2025 年 6 月起，已持续维护 473 天">
+  <!-- maintenance-days:end -->
+</p>
+
+<p align="center">
+  <!-- release-stats:start -->
+  <a href="https://github.com/Jamailar/Beav/releases"><img src="https://img.shields.io/badge/%E5%B7%B2%E5%8F%91%E5%B8%83%20Release-75%20%E4%B8%AA-2563EB?style=flat-square&amp;labelColor=1D4ED8" alt="已发布 75 个 Release 版本"></a>
+  <a href="https://github.com/Jamailar/Beav/releases"><img src="https://img.shields.io/badge/%E7%B4%AF%E8%AE%A1%E5%AE%89%E8%A3%85%E5%8C%85-592%20%E4%B8%AA-14B8A6?style=flat-square&amp;labelColor=0F766E" alt="累计 592 个安装包"></a>
+  <!-- release-stats:end -->
+</p>
+
 <p align="center">从资讯与选题，到图文创作、口播剪辑和持续运营的一站式 AI 工作空间。</p>
 
 <p align="center">本地优先 · 账号长期记忆 · AI 图片与视频剪辑 · macOS / Windows / Linux</p>
@@ -17,9 +30,6 @@
   <a href="https://github.com/Jamailar/Beav"><img src="https://img.shields.io/github/stars/Jamailar/Beav?style=flat-square&color=C56F2C" alt="GitHub Stars"></a>
   <a href="https://github.com/Jamailar/Beav/releases"><img src="https://img.shields.io/github/downloads/Jamailar/Beav/total?style=flat-square&color=C56F2C" alt="Total Downloads"></a>
   <a href="https://github.com/Jamailar/Beav/releases/latest"><img src="https://img.shields.io/github/release-date/Jamailar/Beav?style=flat-square&color=6C757D" alt="Release Date"></a>
-  <!-- maintenance-days:start -->
-  <img src="https://img.shields.io/badge/%E8%87%AA%202025%20%E5%B9%B4%206%20%E6%9C%88%E8%B5%B7-%E5%B7%B2%E6%8C%81%E7%BB%AD%E7%BB%B4%E6%8A%A4%20473%20%E5%A4%A9-6C757D?style=flat-square" alt="本项目自 2025 年 6 月起，已持续维护 473 天">
-  <!-- maintenance-days:end -->
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT--NC-6C757D?style=flat-square" alt="License"></a>
   <a href="https://redbox.ziz.hk/download"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-6C757D?style=flat-square" alt="Platform"></a>
 </p>
