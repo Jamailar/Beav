@@ -2,9 +2,10 @@ const serverStatusEl = document.getElementById('server-status');
 const pageMetaEl = document.getElementById('page-meta');
 const resultEl = document.getElementById('result');
 const actionHintEl = document.getElementById('action-hint');
+const xhsSaveCommentsOptionEl = document.getElementById('xhs-save-comments-option');
+const xhsSaveCommentsEl = document.getElementById('xhs-save-comments');
 const updatePanelEl = document.getElementById('update-panel');
 const updateStatusEl = document.getElementById('update-status');
-const updateMetaEl = document.getElementById('update-meta');
 const platformSafetyNoticeDialogEl = document.getElementById('platform-safety-notice-dialog');
 const platformSafetyNoticeTitleEl = document.getElementById('platform-safety-notice-title');
 const platformSafetyNoticeDescriptionEl = document.getElementById('platform-safety-notice-description');
@@ -134,20 +135,26 @@ async function runAction(type) {
     showResult('没有可用的当前标签页', 'error');
     return;
   }
+  const includeComments = type === 'save-xhs' && xhsSaveCommentsEl.checked;
   await refreshConnectionStatus(true);
   if (!desktopConnection.ingestAllowed) return;
   setBusy(true);
   try {
     if (!await ensurePlatformSaveSafetyNotice(type)) return;
     showResult('正在保存...', 'success');
-    const result = await sendMessage({ type, tabId: activeTab.id });
+    const result = await sendMessage({
+      type,
+      tabId: activeTab.id,
+      ...(type === 'save-xhs' ? { includeComments } : {}),
+    });
     if (!result?.success) {
       throw new Error(result?.error || '保存失败');
     }
     const detail = result.duplicate
       ? (result.updated ? '已存在于知识库，已更新已有内容。' : '已存在于知识库，已跳过重复保存。')
       : `保存成功${result.noteId ? `：${result.noteId}` : ''}`;
-    showResult(detail, 'success');
+    showResult(includeComments ? `${detail} 已保存评论 ${Number(result.comments || 0)} 条。` : detail, 'success');
+    if (type === 'save-xhs') xhsSaveCommentsEl.checked = false;
   } catch (error) {
     showResult(error instanceof Error ? error.message : String(error), 'error');
   } finally {
@@ -194,7 +201,7 @@ async function ensurePlatformSaveSafetyNotice(action) {
 
 async function runUpdateCheck() {
   setUpdateButtonsBusy(true);
-  updateStatusEl.textContent = '正在检查插件更新...';
+  updateStatusEl.textContent = '检查中…';
   updateStatusEl.className = 'status';
   try {
     await refreshUpdateStatus(true);
@@ -219,6 +226,7 @@ function setUpdateButtonsBusy(busy) {
 
 function setBusy(busy) {
   primaryBusy = busy;
+  xhsSaveCommentsEl.disabled = busy;
   applyPrimaryButtonState();
 }
 
@@ -249,26 +257,13 @@ async function refreshUpdateStatus(forceRefresh) {
   const update = normalizeUpdateState(response?.update);
   if (!update.hasUpdate) {
     updatePanelEl?.classList.add('hidden');
-    updateMetaEl.classList.add('hidden');
-    updateMetaEl.textContent = '';
     return;
   }
 
   updatePanelEl?.classList.remove('hidden');
-  updateStatusEl.textContent = `发现新版本 ${update.latestVersion}，当前版本 ${update.currentVersion}`;
-  updateStatusEl.className = 'status error';
-
-  const lines = [
-    `当前版本：${update.currentVersion}`,
-    `更新源版本：${update.latestVersion}`,
-  ];
-  if (update.lastCheckedAt) {
-    lines.push(`最近检查：${formatDateTime(update.lastCheckedAt)}`);
-  }
-  lines.push('更新方式：打开更新页下载安装包，重新加载扩展。');
-
-  updateMetaEl.textContent = lines.join('\n');
-  updateMetaEl.classList.remove('hidden');
+  updateStatusEl.textContent = `v${update.latestVersion}`;
+  updateStatusEl.className = 'status';
+  updateStatusEl.title = `当前版本 v${update.currentVersion}`;
 }
 
 async function refreshPageInfo() {
@@ -277,6 +272,7 @@ async function refreshPageInfo() {
   const pageInfo = normalizePageInfo(inspect?.pageInfo || inferPageInfoFromUrl(url));
 
   primaryActionType = pageInfo.action || 'save-page-link';
+  xhsSaveCommentsOptionEl.classList.toggle('hidden', primaryActionType !== 'save-xhs');
   actionSupport.primary = Boolean(activeTab?.id) && pageInfo.primaryEnabled !== false;
 
   buttons.primary.textContent = pageInfo.label || '保存到知识库';
@@ -466,17 +462,6 @@ function normalizeUpdateState(value) {
 
 function normalizeText(value) {
   return String(value || '').trim();
-}
-
-function formatDateTime(value) {
-  const date = new Date(String(value || ''));
-  if (Number.isNaN(date.getTime())) {
-    return '未知';
-  }
-  return new Intl.DateTimeFormat('zh-CN', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  }).format(date);
 }
 
 function showResult(message, type) {

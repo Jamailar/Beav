@@ -1,4 +1,4 @@
-RedBox Browser Extension — third-party notices
+Beav Browser Extension — third-party notices
 
 This distribution includes the following runtime dependencies in
 genericCaptureContent.js.

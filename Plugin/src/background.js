@@ -428,7 +428,7 @@ async function handleMessage(message, sender) {
         type: message.type,
         title: createXhsTaskTitle(message.type, message, tabId),
         tabId,
-        execute: () => saveXhsNoteFromTab(tabId),
+        execute: () => saveXhsNoteFromTab(tabId, { includeComments: message?.includeComments === true }),
       });
     }
     case 'xhs:download-current-note':
@@ -4684,7 +4684,9 @@ async function saveZhihuArticleFromTab(tabId) {
 
 async function saveXhsNoteFromTab(tabId, options = {}) {
   const payload = await runExtraction(tabId, extractXhsNotePayload, { world: 'MAIN' });
-  const settings = await readPluginSettings();
+  const includeComments = typeof options.includeComments === 'boolean'
+    ? options.includeComments
+    : (await readPluginSettings()).xhsSaveCommentsWithNote === true;
   console.log('[redbox-plugin][xhs] payload', {
     title: payload?.title || '',
     imageCount: Array.isArray(payload?.images) ? payload.images.length : 0,
@@ -4696,7 +4698,7 @@ async function saveXhsNoteFromTab(tabId, options = {}) {
     throw new Error('当前页面未识别到可保存的小红书笔记或文章');
   }
   let commentsPayload = {};
-  if (settings.xhsSaveCommentsWithNote === true) {
+  if (includeComments) {
     await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
       source: payload?.source,
       noteId: payload?.noteId,
@@ -4706,21 +4708,37 @@ async function saveXhsNoteFromTab(tabId, options = {}) {
     })).catch((error) => {
       pluginWarn('xhs-comments-checkpoint-start-failed', { error: describeError(error) });
     });
-    commentsPayload = await runExtraction(tabId, extractXhsCommentsPayload, { world: 'MAIN', captureRuntime: true })
-      .catch((error) => {
-        pluginWarn('xhs-comments-inline-extract-failed', {
-          error: describeError(error),
-        });
-        void upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
-          source: payload?.source,
-          noteId: payload?.noteId,
-          total: Number(payload?.stats?.comments || 0),
-        }, {
-          status: 'failed',
-          error: error instanceof Error ? error.message : String(error),
-        })).catch(() => {});
-        return {};
+    try {
+      commentsPayload = await runExtraction(tabId, extractXhsCommentsPayload, { world: 'MAIN', captureRuntime: true });
+    } catch (error) {
+      pluginWarn('xhs-comments-inline-extract-failed', {
+        error: describeError(error),
       });
+      await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint({
+        source: payload?.source,
+        noteId: payload?.noteId,
+        total: Number(payload?.stats?.comments || 0),
+      }, {
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      })).catch(() => {});
+      throw new Error(`评论采集失败，笔记未保存：${error instanceof Error ? error.message : String(error)}`);
+    }
+    const capturedComments = Array.isArray(commentsPayload?.comments) ? commentsPayload.comments : [];
+    const noteId = normalizeText(payload?.noteId);
+    const commentsNoteId = normalizeText(commentsPayload?.noteId);
+    if (capturedComments.length === 0 || (noteId && commentsNoteId && noteId !== commentsNoteId)) {
+      const message = capturedComments.length === 0
+        ? '评论区未采集到内容，请打开笔记详情并等待评论显示后重试'
+        : '采集期间当前笔记已切换，请返回目标笔记后重试';
+      await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
+        source: commentsPayload?.source || payload?.source,
+        sourceId: commentsNoteId || noteId,
+        status: 'failed',
+        error: message,
+      })).catch(() => {});
+      throw new Error(`${message}；笔记未保存`);
+    }
     if (Array.isArray(commentsPayload?.captureDiagnostics)) {
       pluginLog('xhs-comments-capture-diagnostics', {
         count: Array.isArray(commentsPayload?.comments) ? commentsPayload.comments.length : 0,
@@ -4739,6 +4757,9 @@ async function saveXhsNoteFromTab(tabId, options = {}) {
   let response;
   try {
     response = await postKnowledgeXhsEntryV2(buildXhsEntryV2Request(payload, commentsPayload, options.metadata));
+    if (includeComments && Number(response?.comments?.captured || 0) !== commentsPayload.comments.length) {
+      throw new Error('笔记已提交，但评论写入数量未得到确认，请检查知识库后重试');
+    }
     if (Array.isArray(commentsPayload?.comments) && commentsPayload.comments.length > 0) {
       await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
         source: commentsPayload?.source || payload?.source,
@@ -4749,7 +4770,7 @@ async function saveXhsNoteFromTab(tabId, options = {}) {
       });
     }
   } catch (error) {
-    if (settings.xhsSaveCommentsWithNote === true) {
+    if (includeComments) {
       await upsertCaptureCheckpoint(buildXhsCommentsCheckpoint(commentsPayload, {
         source: commentsPayload?.source || payload?.source,
         sourceId: commentsPayload?.noteId || payload?.noteId,
@@ -4767,6 +4788,7 @@ async function saveXhsNoteFromTab(tabId, options = {}) {
     noteId: response.entryId || '',
     duplicate: Boolean(response.duplicate),
     comments: Number(response?.comments?.captured || 0),
+    commentsIncluded: includeComments,
     storageStatus: response?.storageStatus || (response?.persisted === true ? 'stored' : ''),
     readBack: response?.readBack || null,
     sourceUrl: normalizeText(payload?.source),
@@ -8427,7 +8449,7 @@ async function extractXhsCommentsPayload() {
     const root = getCommentsRoot() || document;
     return await clickVisibleButtons({
       root,
-      selectors: ['button', '.show-more', '.more', '[role="button"]', 'span', 'div'],
+      selectors: ['.show-more', 'button', '[role="button"]'],
       pattern: /展开|全部回复|条回复|查看更多|更多回复/i,
       limit: 18,
       delayMs: 180,

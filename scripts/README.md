@@ -46,6 +46,7 @@ node scripts/redbox-release-download-stats.mjs --output ./release-downloads.csv 
 ```
 
 默认仓库为 `Jamailar/RedBox`，可用 `--repo owner/name` 覆盖。
+默认表格只显示各版本与总体下载量；需要资产明细时使用 `--format json` 或 `--format csv`。
 
 ## `app-daily-report.mjs`
 

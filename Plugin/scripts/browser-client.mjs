@@ -299,7 +299,7 @@ class BrowserCollection {
         const id = extensionInstanceId || host?.instanceId || endpoint.instanceId || endpoint.socketPath;
         return {
           id,
-          name: data?.name || 'RedBox Browser Control',
+          name: data?.name || 'Beav Browser Control',
           type: 'extension',
           metadata: {
             backend: 'native-host',

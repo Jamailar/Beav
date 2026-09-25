@@ -57,6 +57,7 @@ let refreshing = false;
 let capturePendingAction = '';
 let captureFeedback = null;
 let captureSignature = '';
+let xhsSaveComments = false;
 let updateChecking = false;
 let platformSafetyNoticePending = false;
 let resolvePlatformSafetyNoticeDialog = null;
@@ -119,8 +120,9 @@ function bindEvents() {
     void runCaptureAction(button.dataset.action || '');
   });
   elements.captureOptions.addEventListener('change', (event) => {
-    if (event.target?.id !== 'xhs-save-comments-inline') return;
-    void updateXhsSaveCommentsSetting(Boolean(event.target.checked));
+    if (event.target?.id === 'xhs-save-comments-inline') {
+      xhsSaveComments = Boolean(event.target.checked);
+    }
   });
   elements.platformIcon.addEventListener('error', () => {
     elements.platformIcon.classList.add('hidden');
@@ -367,6 +369,7 @@ function renderCaptureActions(nextContext) {
   const nextSignature = `${config.variant}:${nextContext?.tab?.id || 0}:${nextContext?.tab?.url || ''}`;
   if (captureSignature !== nextSignature) {
     captureFeedback = null;
+    xhsSaveComments = false;
     captureSignature = nextSignature;
   }
 
@@ -399,7 +402,7 @@ function renderCaptureActions(nextContext) {
     const checkbox = document.createElement('input');
     checkbox.id = 'xhs-save-comments-inline';
     checkbox.type = 'checkbox';
-    checkbox.checked = currentSettings?.xhsSaveCommentsWithNote === true;
+    checkbox.checked = xhsSaveComments;
     checkbox.disabled = Boolean(capturePendingAction) || platformSafetyNoticePending || !isHealthy;
     const text = document.createElement('span');
     text.textContent = '保存评论区';
@@ -417,40 +420,6 @@ function renderCaptureActions(nextContext) {
     return;
   }
   renderCaptureStatus(config.hint || '点击按钮后任务会进入下方队列', 'idle');
-}
-
-async function updateXhsSaveCommentsSetting(enabled) {
-  const previous = currentSettings?.xhsSaveCommentsWithNote === true;
-  currentSettings = {
-    ...currentSettings,
-    xhsSaveCommentsWithNote: enabled,
-  };
-  renderCaptureActions(context);
-  try {
-    const response = await sendMessage({
-      type: 'settings:update',
-      settings: {
-        ...currentSettings,
-        xhsSaveCommentsWithNote: enabled,
-      },
-    });
-    currentSettings = {
-      ...currentSettings,
-      ...(response?.settings || {}),
-    };
-    captureFeedback = null;
-    renderCaptureActions(context);
-  } catch (error) {
-    currentSettings = {
-      ...currentSettings,
-      xhsSaveCommentsWithNote: previous,
-    };
-    captureFeedback = {
-      status: 'error',
-      message: `设置保存失败：${error instanceof Error ? error.message : String(error)}`,
-    };
-    renderCaptureActions(context);
-  }
 }
 
 function showPlatformSaveSafetyNotice(notice) {
@@ -494,6 +463,7 @@ async function runCaptureAction(action) {
   if (!action || capturePendingAction || platformSafetyNoticePending) return;
   const meta = getCaptureActionMeta(action);
   if (!meta.type) return;
+  const includeComments = meta.type === 'save-xhs' && xhsSaveComments;
   const tabId = Number(context?.tab?.id || 0);
   if (!tabId) {
     captureFeedback = { status: 'error', message: '未识别到当前标签页，请刷新侧栏后重试' };
@@ -533,6 +503,7 @@ async function runCaptureAction(action) {
       tabId,
       tabUrl: tab.url || '',
       windowId: Number(tab.windowId || 0) || undefined,
+      ...(meta.type === 'save-xhs' ? { includeComments } : {}),
     });
     if (response.taskQueue) {
       renderTaskQueue(response.taskQueue);
@@ -546,6 +517,7 @@ async function runCaptureAction(action) {
       status: 'success',
       message: summarizeActionResponse(response, meta.done),
     };
+    if (meta.type === 'save-xhs') xhsSaveComments = false;
     await refreshTaskQueue(false);
   } catch (error) {
     debugWarn('capture-action-failed', {
@@ -919,6 +891,7 @@ function getCaptureActionMeta(action) {
 
 function summarizeActionResponse(response, fallback) {
   if (response?.noteId) {
+    if (response.commentsIncluded === true) return `已保存笔记及评论 ${Number(response.comments || 0)} 条`;
     return response.duplicate ? '知识库中已存在' : '已保存到 Beav';
   }
   if (response?.mode === 'xhs-blogger-notes') {
@@ -1116,7 +1089,7 @@ function getPlatformMeta(platform) {
     x: { platform: 'x', name: 'X', logo: 'X', icon: 'assets/platforms/x.svg' },
     instagram: { platform: 'instagram', name: 'Instagram', logo: 'I', icon: 'assets/platforms/instagram.svg' },
     wechat: { platform: 'wechat', name: '微信公众号', logo: '微' },
-    zhihu: { platform: 'zhihu', name: '知乎', logo: '知', icon: 'assets/platforms/zhihu.svg' },
+    zhihu: { platform: 'zhihu', name: '知乎', logo: '知', icon: 'assets/platforms/zhihu.png' },
     redbox: { platform: 'redbox', name: 'Beav', logo: 'B' },
     web: { platform: 'web', name: '网页', logo: 'W' },
   };

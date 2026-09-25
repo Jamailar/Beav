@@ -1443,7 +1443,7 @@ async function waitUrl(url, options = {}) {
 async function runInternalSubscriptionAction(type, payload) {
   const handler = globalThis.__redboxSubscriptionCapture;
   if (typeof handler !== 'function') {
-    throw new Error('Subscription capture runtime is unavailable; reload the RedBox extension');
+    throw new Error('Subscription capture runtime is unavailable; reload the Beav extension');
   }
   return await handler(type, payload);
 }
@@ -4093,7 +4093,7 @@ function researchDownloadStaging(asset = {}, options = {}) {
     extension = asset.type === 'video' ? 'mp4' : asset.type === 'audio' ? 'bin' : 'jpg';
   }
   return {
-    filename: `RedBox/research/${runId}/${mediaId}.${extension}`,
+    filename: `Beav/research/${runId}/${mediaId}.${extension}`,
     runId,
     mediaId,
   };
