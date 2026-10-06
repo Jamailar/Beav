@@ -1,404 +1,245 @@
+[English](./readme_en.md) | 简体中文
+
+# Beav
+
+本地优先的 AI 内容创作工作台：采集资料、整理素材、撰写图文与剪辑视频。
+
+> **源码快照 ≠ 最新正式版**：本仓库提供 Tauri + Rust 2.5.0 源码快照，并分发持续更新的 Beav 正式安装包。最新正式版采用 Tauri + Rust，其功能和源码公开范围与 2.5.0 不同。公开源码按非商业许可提供（source-available），不是标准 MIT 开源；详见 [LICENSE](./LICENSE)。
+
+![Beav 浏览器插件操作演示：保存小红书笔记与评论](./images/plugin-save-xiaohongshu.gif)
+
+[下载正式版](https://beav.pro/download) · [演示视频](https://www.bilibili.com/video/BV12LNn6nEem/) · [使用指南](https://beav.pro/docs) · [最新 Release](https://github.com/Jamailar/Beav/releases/latest)
+
+## 三个核心使用场景
+
+以下场景介绍持续更新的正式版；公开源码范围见下方对照。
+
+- **积累创作资料**：保存网页、小红书笔记和评论，在知识库中检索、引用与复用。
+- **持续经营内容账号**：结合参考资料、选题和账号规划，撰写并修改图文稿、脚本与口播稿。
+- **制作图片与视频**：复用图片模板，剪辑口播、编辑字幕、补充画面并导出成片。
+
+## 源码与正式版范围
+
+| 项目 | 公开源码快照 | 持续更新的正式版 |
+| --- | --- | --- |
+| 版本与技术栈 | Tauri + Rust 2.5.0；公开仓库的 `desktop/` | Tauri + Rust；版本以最新 Release 为准 |
+| 功能范围 | 以快照中的代码与历史说明为准 | 本文下方的 2.8 功能介绍与当前使用指南 |
+| 2.8 新实现 | 不包含下述 2.8 媒体工坊、剪辑、模板、日报等实现与改进，也不包含当前 Tauri MCP 宿主实现 | 随正式安装包提供；受平台、权限和配置影响 |
+| 许可 | 自定义非商业源码许可；商业使用需书面授权 | 适用安装版用户协议及所购服务权益；不由源码许可授予使用权 |
+
+公开仓库不提供最新正式版的完整源码，不能用 2.5.0 快照复现 2.8 安装包。浏览器扩展等公开组件可能单独更新，其版本不代表桌面源码也同步更新。
+
+## 工作流
+
+| 运营动作 | 使用入口 |
+| --- | --- |
+| **采集与调研**：保存网页、社媒内容和评论，让 AI 检索公开资料 | Chrome / Edge 插件、对话、知识库 |
+| **关注与选题**：阅读运营日报，结合热点、订阅和已有资料寻找方向 | 主页“从选题开始”、日报 |
+| **维护账号规划**：整理定位、受众、内容方向和更新节奏 | 主页小工具“账号运营规划” |
+| **写稿与改稿**：从目标和参考资料形成图文稿、脚本与口播稿 | 对话、稿件 |
+| **制作图片**：填写模板变量、上传参考图，生成并复用视觉素材 | 媒体工坊、图片模板、资产库 |
+| **剪辑口播**：分析删减、编辑字幕、补充画中画与动画、导出成片 | 媒体工坊“智能剪口播”、视频编辑器 |
+| **安排运营任务**：设置计划，查看执行状态并继续处理结果 | 运营日历、对话 |
+
+## 2.8 正式版功能介绍
+
+以下介绍 **Tauri + Rust 正式版**。这里列出的 2.8 实现与改进不包含在公开的 Tauri + Rust 2.5.0 源码快照中；即使旧版有同名入口，也不代表实现和能力相同。可用功能以所安装版本、账号权限、模型配置和操作系统为准。完整版本变化见[更新日志](./CHANGELOG.md)。
+
+### 媒体工坊与智能口播剪辑
+
+导入口播视频后，Beav 结合逐词转录、语义和声音停顿分析冗余片段，辅助处理重说、口头语和接缝。基础剪辑可应用到时间线，随后检查剪辑记录、直接修改字幕，并补充画中画、花字与镜头动效。可选人声降噪支持开关，方便比较处理前后的声音。
+
+视频工程在独立窗口中编辑，提供多轨时间线、画布变换、关键帧、转场、调色、蒙版和音频调整。右侧 AI 助手可结合当前工程继续修改，操作进入撤销历史。导出时可选择目标目录，查看渲染进度和失败原因，也可单独导出 SRT / WebVTT 字幕。
+
+画中画占位表示待补素材；动画方案需要确认制作，不能把方案当作已经完成的画面。查看时间线、播放效果与实际导出文件后，再使用成片。
+
+### 内置动画与独立特效轨道
+
+使用重点大字、人物介绍、一问一答、数字强调、章节标题等口播叠加预设，填写短文案、主题色和时长后加入时间线；也可添加箭头、圈画等图形装饰与推近、呼吸等镜头动效。内置预设可离线使用。
+
+画面特效拥有独立轨道，可以拖动位置、调整生效范围，并指定作用片段。AI 动画助手可按讲述内容安排辅助画面，后续仍可在编辑器中调整。
+
+### 图片创作与可复用模板
+
+在图片创作工作区管理参考图、画幅、生成进度和结果。模板支持可编辑文字变量与指定参考图；也可以上传图片，让 AI 拆解并保存为自己的模板，再用于不同主题的创作。创建模板和提交图片生成是两个独立操作，在线生成取决于账号权限与模型配置。
+
+### 运营日报与账号长期规划
+
+主页日报结合当前账号方向整理新闻、热点和可借鉴内容，附带来源链接，支持按周翻阅、未读标记和来源预览。可以从日报加入选题、继续创作，或直接讨论本期内容。关注清单可手动编辑，后续生成会结合运营规划、已保存的长期兴趣和反馈调整。
+
+“账号运营规划”小工具用于阅读与编辑定位、受众、栏目方向和更新节奏，保留未保存草稿，并在 AI 同时更新时提供对照合并。长期偏好按通用、平台与账号范围使用，让后续任务能延续适用的创作要求。
+
+### 热点
+
+热点页面把适合当前账号的内容与各平台热榜放在一起查看。账号热点会展示匹配账号方向的内容，并标出来源平台和榜单位置；平台热榜按来源分栏呈现，方便横向浏览小红书、知乎、V2EX 等平台的热门话题。遇到值得跟进的内容，可以直接发起 AI 讨论，将热点继续转成选题或创作思路。
+
 <p align="center">
-  <img src="./images/brand-hero.png" alt="Beav（原RedBox）" width="100%">
+  <img src="./images/hotspots-page.jpg" alt="Beav 热点页面：账号热点与多平台热榜" width="90%">
+</p>
+
+### 随手可用的小工具
+
+- **字幕提取器**：提取字幕，在工具中查看结果并继续处理。
+- **图片去 AI 元数据**：查看并清理 PNG、JPEG、WebP 的可移除文件元数据，保留原图并输出独立副本；不处理画面中的 Logo 或像素水印。
+- **图片转 Live 图**：选择图片与轻微推拉、平移动效，生成配对照片和视频。2.8 正式版的实现面向 macOS 与 Windows，Linux 暂不支持；Windows 实机与手机导入仍待验收，传输时需同时保留配对文件。
+- **账号运营规划**：在当前账号空间中持续维护同一份规划。
+
+小工具从主页打开，按需授权；图片工具支持从素材库选择或从电脑导入。
+
+### 边聊边用的工作区
+
+聊天右侧可用标签页打开浏览器、知识库、资产和文件详情，并调整侧栏宽度。把知识或素材拖入输入框即可作为引用或附件继续讨论。页面返回时优先显示当前空间已有内容，再后台刷新；长任务也改进了上下文衔接、工具结果保存和停止处理。
+
+## 自动社媒调研
+
+围绕你的账号定位、选题目标和已有素材，Beav 会自主检索多个社交平台的公开内容，先筛选候选素材，再深读高价值内容。调研结果可直接沉淀到知识库，成为后续选题、写稿和创作时可检索、可复用的依据。
+
+![Beav 自动检索并深读社媒内容](./images/automated-social-research.jpg)
+
+## 跨平台博主订阅
+
+订阅受支持平台的博主或创作者主页，Beav 可每日自动刷新最新内容，并保存到知识库；可用平台与抓取结果取决于当前数据来源和配置。你可以像追踪一个持续更新的素材源一样，随时检索、筛选和复用这些内容，不必反复手动打开各个平台查看更新。
+
+![订阅博主后每日自动同步到知识库](./images/creator-subscription-daily-sync.jpg)
+
+## 精选自媒体技能市场
+
+在精选自媒体技能市场中，按调研与选题、文案风格、脚本优化、图片制作、视频制作等方向搜索和筛选技能；找到合适的能力后一键安装，直接用于你的内容创作工作流。每个技能都清楚标注用途与分类，让 AI 更贴近具体的运营任务。
+
+![精选自媒体技能市场](./images/curated-creator-skills-marketplace.jpg)
+
+## 功能矩阵
+
+以下仅描述正式版，不是公开源码功能清单。主要能力按正式版入口归纳；在线服务、外部平台及部分媒体格式受账号配置和操作系统支持范围影响。
+
+| 采集与知识 | 选题与运营 | 写作与协作 | 图片与小工具 | 视频剪辑 |
+| --- | --- | --- | --- | --- |
+| 网页、社媒与评论采集 | 首页选题与灵感 | 图文稿、脚本与口播稿 | AI 图片创作 | 智能口播分析与剪辑 |
+| 公开社媒调研 | 运营日报与来源预览 | 可编辑稿件 | 文字变量与参考图模板 | 字幕编辑与样式同步 |
+| 博主订阅与每日刷新 | 关注清单与反馈 | 账号规划与长期偏好 | 从图片创建模板 | 画中画与口播叠加动画 |
+| 本地文件、文件夹、Obsidian | 运营日历与定时任务 | 多标签侧栏与拖入引用 | 图片元数据清理 | 独立特效轨道与关键帧 |
+| 检索与来源引用 | 历史日报与执行记录 | 技能市场与子任务协作 | Live Photo（macOS / Windows） | 人声降噪、转场与音频调整 |
+| 素材与资产复用 | 从资讯继续创作 | 外部 Agent 接入 | 字幕提取器 | 成片、字幕与便携工程导出 |
+
+## 产品截图
+
+### 知识库
+
+![知识库与素材沉淀](./images/knowledge.png)
+
+### 评论区洞察（2.3.0 历史截图）
+
+![评论区洞察](https://github.com/Jamailar/Beav/releases/download/v2.3.0/redbox-2.3.0-comment-insights.png)
+
+## 正式版快速开始
+
+1. 前往 [下载页](https://beav.pro/download) 安装 Beav。
+2. 为一个账号或品牌创建一个工作空间。
+3. 在 `设置 → AI` 使用官方 AI，或配置自己的 Endpoint、API Key 和模型。
+4. 如需网页采集，从 [最新 Release](https://github.com/Jamailar/Beav/releases/latest) 获取 Chrome / Edge 扩展。
+5. 从主页选题或日报开始创作；已有视频可进入媒体工坊进行剪辑，图片处理和账号规划从主页小工具打开。
+
+不确定某个功能怎么用时，可在对话中让 Beav 查询内置使用指南，再按当前版本的入口操作。
+
+## 信任与边界
+
+- **本地优先**：素材、稿件和项目以本地工作空间为核心组织。
+- **模型可选**：支持官方 AI 和 OpenAI-compatible 模型服务。
+- **发布透明**：安装包、扩展、更新资产和签名均通过 GitHub Releases 发布。
+- **边界公开**：许可证、[更新日志](./CHANGELOG.md)、[路线图](./ROADMAP.md) 和 [Issues](https://github.com/Jamailar/Beav/issues) 均可查。
+
+## Agent 插件（正式版）
+
+Beav Creator 插件让 Codex Desktop 或 WorkBuddy 通过 MCP 连接本机 Beav，调用已开放的工作区与媒体工具，也可把任务交给 Beav 内部 Agent；用户仍在 Beav UI 中查看、审批和编辑结果。
+
+先安装并启动 Beav（CLI 用户运行 `beav open`），再把对应指令发给宿主 Agent：
+
+**Codex**
+
+```text
+/goal Read https://beav.pro/agent to install the Beav Creator plugin and set up a new task for me.
+```
+
+**WorkBuddy**
+
+```text
+Read https://beav.pro/workbuddy to install the Beav Creator plugin and connect it to my local Beav workspace.
+```
+
+安装完成后，直接在 Codex 或 WorkBuddy 中描述任务即可。宿主与 Beav 须运行在同一台电脑；浏览器 UI 只供用户操作，不作为 Agent 控制通道。以上入口面向正式版，不适用于 2.5.0 源码快照。
+
+## 项目历史与维护
+
+RedBox 已更名为 **Beav**；原有本地数据和工作空间不受影响。公开源码基线为 Tauri + Rust 2.5.0；后续正式版继续在私有仓库中迭代。公开仓库保留清理后的开发历史，后续公开内容通过 PR 审查合并。
+
+<p align="center">
+  <!-- maintenance-days:start -->
+  <img src="https://img.shields.io/badge/%E8%87%AA%202025%20%E5%B9%B4%206%20%E6%9C%88%E8%B5%B7-%E5%B7%B2%E6%8C%81%E7%BB%AD%E7%BB%B4%E6%8A%A4%20492%20%E5%A4%A9-EA580C?style=flat-square&amp;labelColor=9A3412" alt="本项目自 2025 年 6 月起，已持续维护 492 天">
+  <!-- maintenance-days:end -->
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/github/v/release/Jamailar/RedBox?style=flat-square&color=E11D48" alt="Version">
-  &nbsp;
-  <img src="https://img.shields.io/badge/license-MIT--NC-E11D48?style=flat-square" alt="License">
-  &nbsp;
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-6C757D?style=flat-square" alt="Platform">
-</p>
-
----
-
-<p align="center">
-  <strong>面向通用 AI Agent 的自媒体素材库与创作工具</strong><br>
-  <em>Codex / Hermes / OpenClaw 接入 | 素材采集 | 多模态资产管理 | 稿件与封面 | 视频处理</em>
+  <!-- release-stats:start -->
+  <a href="https://github.com/Jamailar/Beav/releases"><img src="https://img.shields.io/badge/%E5%B7%B2%E5%8F%91%E5%B8%83%20Release-84%20%E4%B8%AA-2563EB?style=flat-square&amp;labelColor=1D4ED8" alt="已发布 84 个 Release 版本"></a>
+  <a href="https://github.com/Jamailar/Beav/releases"><img src="https://img.shields.io/badge/%E7%B4%AF%E8%AE%A1%E5%AE%89%E8%A3%85%E5%8C%85-668%20%E4%B8%AA-14B8A6?style=flat-square&amp;labelColor=0F766E" alt="累计 668 个安装包"></a>
+  <!-- release-stats:end -->
 </p>
 
 <p align="center">
-  <a href="https://redbox.ziz.hk/download">
-    <img src="https://img.shields.io/badge/⬇️%20立即下载-最新版本-E11D48?style=for-the-badge&logo=github&logoColor=white" alt="Download" height="46">
+  <a href="https://github.com/Jamailar/Beav/releases/latest"><img src="https://img.shields.io/github/v/release/Jamailar/Beav?style=flat-square&color=C56F2C" alt="Latest Release"></a>
+  <a href="https://github.com/Jamailar/Beav"><img src="https://img.shields.io/github/stars/Jamailar/Beav?style=flat-square&color=C56F2C" alt="GitHub Stars"></a>
+  <a href="https://github.com/Jamailar/Beav/releases"><img src="https://img.shields.io/github/downloads/Jamailar/Beav/total?style=flat-square&color=C56F2C" alt="Release 文件下载次数（非用户数）"></a>
+  <a href="https://github.com/Jamailar/Beav/releases/latest"><img src="https://img.shields.io/github/release-date/Jamailar/Beav?style=flat-square&color=6C757D" alt="Release Date"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Source--available-6C757D?style=flat-square" alt="License"></a>
+  <a href="https://beav.pro/download"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-6C757D?style=flat-square" alt="Platform"></a>
+</p>
+
+安装包统计指发布资产文件数量，下载统计指 Release 文件下载次数，均不代表用户数或活跃用户数。
+
+## 社区与媒体资料
+
+- [官网](https://beav.pro/) · [下载](https://beav.pro/download) · [使用指南](https://beav.pro/docs)
+- [GitHub Releases](https://github.com/Jamailar/Beav/releases) · [问题反馈](https://github.com/Jamailar/Beav/issues)
+- [Bilibili 视频教程](https://www.bilibili.com/video/BV12LNn6nEem/)
+- 媒体介绍请统一使用 **Beav** 和 **https://beav.pro/**；注明“Tauri + Rust 2.5.0 源码快照 + 持续更新的桌面正式版”，不要将 2.8 功能写成公开源码能力。
+- 可引用本页的[采集演示](./images/plugin-save-xiaohongshu.gif)、[产品图标](./images/beav-icon.png)与产品截图；媒体及授权联系：[jambahailar@gmail.com](mailto:jambahailar@gmail.com)。
+
+Beav 由[第二定律工作室](https://hyperchaos.dev/)开发和维护，开发者：[JambaHailar](https://x.com/JambaHailar)。
+
+<p align="center">
+  <img src="./images/beav-discussion-group.jpg" alt="加入 Beav AI 创作交流群" width="30%">
+</p>
+
+## 许可证
+
+- **公开源码**：适用 [Beav 非商业源码许可](./LICENSE)。保留现有非商业限制；商业使用、商业分发或集成需事先联系 [jambahailar@gmail.com](mailto:jambahailar@gmail.com) 获得书面授权。这是 source-available 许可，不是标准 MIT，也不符合 [OSI 开源定义](https://opensource.org/osd)。
+- **正式安装版**：适用应用内《Beav 用户协议》以及购买页面所列的个人版、团队版和服务权益。安装包在 Releases 提供下载，不意味着受本仓库源码许可授权；源码非商业限制也不用于替代安装版的使用条款。内容及 AI 产物的商业使用仍须遵守素材授权和所用服务条款。
+- **第三方组件**：保留各自许可证与版权声明。
+
+## 合作伙伴
+
+### 商务合作
+
+如有品牌合作、行业方案、产品集成或其他商务合作意向，欢迎发送邮件至 [jambahailar@gmail.com](mailto:jambahailar@gmail.com)。
+
+### 经销代理
+
+如希望成为 Beav 的经销或代理合作伙伴，请填写 [Beav 经销代理合作申请表](https://my.feishu.cn/share/base/form/shrcnYe6rZBbfQNvgeDIEHClWUc)。
+
+## 友情赞助
+
+<p>
+  <a href="https://www.ipwo.net/?ref=githubJamailar">
+    <img src="./images/ipwo-sponsor.png" alt="IPWO 住宅代理" width="100%">
   </a>
 </p>
 
-<p align="center">
-  <strong>教程：</strong>
-  <a href="https://www.bilibili.com/video/BV1V3onBdEf9/?share_source=copy_web&vd_source=54733b01cc63209b4e5b5254537d4bab">Bilibili 视频教程</a>
-  ·
-  <a href="https://www.youtube.com/watch?v=9Glgg3naHbg">YouTube 视频教程</a>
-</p>
-
-<p align="center">
-  <a href="./readme_en.md">English</a> | <strong>简体中文</strong> | <a href="./readme_tw.md">繁體中文</a> | <a href="./readme_jp.md">日本語</a> | <a href="./readme_ko.md">한국어</a> | <a href="./readme_es.md">Español</a> | <a href="./readme_pt.md">Português</a> | <a href="./readme_tr.md">Türkçe</a>
-</p>
-
----
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=Jamailar%2FRedBox&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=Jamailar/RedBox&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=Jamailar/RedBox&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=Jamailar/RedBox&type=date&legend=top-left" />
- </picture>
-</a>
-## 📋 快速导航
-
-<p align="center">
-
-[项目概览](#项目概览) ·
-[核心功能](#核心功能) ·
-[推荐工作流程](#推荐工作流程) ·
-[Agent 接入](#agent-接入) ·
-[功能截图](#功能截图) ·
-[插件采集](#插件采集) ·
-[快速开始](#快速开始) ·
-[社区](#社区)
-
-</p>
-
----
-
-## 项目概览
-
-> **品牌更名说明**：从 **2.5.0** 开始，RedBox 正式更名为 **Beav（原RedBox）**。历史文档、旧版本下载包、仓库路径和部分协议名称中仍可能保留 RedBox / RedConvert 命名；它们指向的是同一款产品的不同阶段。
-
-**Beav（原RedBox）** 是一个面向 Codex、Hermes、OpenClaw 等通用 AI Agent 用户的本地自媒体素材库与创作工具。它不试图替代你正在使用的 Agent，而是为这些 Agent 提供可采集、可检索、可引用、可生成、可剪辑、可导出的创作资产底座。
-
-你可以把小红书、YouTube、网页、公众号、图片、视频、评论区和本地文档沉淀到 Beav（原RedBox），再让通用 Agent 通过本地工具接口检索素材、组织选题、写稿、生成封面、处理视频、导出项目包。内置 Chat / RedClaw 仍然可用，但新的核心定位是：**让任何通用 Agent 拥有一个面向自媒体创作的本地资产工作区**。
-
-## 核心功能
-
-### 给通用 Agent 使用的自媒体素材与创作底座
-
-围绕内容生产，把素材采集、资产管理、语义检索、项目组织、稿件、封面、视频处理和自动化执行放进同一条可被 Agent 调用的工作流。
-
-![评论区洞察](https://github.com/Jamailar/RedBox/releases/download/v2.3.0/redbox-2.3.0-comment-insights.png)
-
-1. **Agent 接入层**：面向 Codex、Hermes、OpenClaw 等通用 Agent 提供本地 MCP / CLI / API 接入方向，让外部 Agent 可以检索素材、读取资产、写入项目、提交生成任务和导出结果。
-2. **浏览器素材采集**：浏览器插件支持保存小红书笔记、评论区、YouTube 视频、公众号文章、网页链接、选中文字和网页图片，外部内容可以直接进入本地素材库。
-3. **多模态素材库**：统一管理文本、图片、视频、音频、评论、截图、AI 生成结果、导入素材和稿件关联资产，并保留来源、标签、缩略图、文件引用和项目绑定关系。
-4. **知识库与语义检索**：把采集内容、本地文档、视频转写、网页正文和图片信息沉淀为可搜索上下文，供 Agent 在写稿、选题、复盘和生成时引用。
-5. **选题中心与创作 brief**：从评论、网页、历史素材和用户输入中整理内容机会，把洞察转成结构化 brief，继续进入脚本、图文、封面和视频项目。
-6. **稿件与项目包**：支持图文稿、视频稿、音频稿、Remotion 场景、字幕、素材绑定和导出，让 Agent 的创作结果变成可编辑、可复用的内容项目。
-7. **媒体生成与视频处理**：支持图片、视频、音频等媒体生成，提供参考图、任务队列、成本预估、生成历史和结果回流，适合作为 Agent 的媒体处理运行时。
-8. **封面与平台视觉资产**：围绕标题、正文、参考图和平台目标生成封面图，沉淀模板、底图、标题组和历史封面资产。
-9. **主体库**：统一管理人物、商品、场景、品牌 IP、角色声音和参考素材，帮助系列内容在写稿、生图、封面和视频里保持一致性。
-10. **内置自动化入口**：RedClaw、Chat、Team 和后台 Runner 继续作为内置 Agent 入口，可处理长周期任务、定时任务、技能调用和自动化执行。
-
-## 推荐工作流程
-
-Beav（原RedBox）最适合被当成 Agent 友好的自媒体生产工作区：用户负责建立主题和边界，Beav（原RedBox）负责沉淀素材、组织上下文和执行媒体任务，外部 Agent 负责规划、判断和连续创作。推荐流程如下：
-
-1. **建立工作空间**：按账号、赛道、客户或项目创建工作空间，例如 `护理考研账号`、`AI 工具测评`、`跨境商品短视频`。把工作空间当成 Agent 后续读取素材、写稿和做图的默认上下文。
-2. **采集素材入库**：安装浏览器插件后，把小红书笔记、评论区、YouTube 视频、公众号文章、网页、图片和本地文件保存到对应工作空间。采集时尽量保留来源、标签和分类，让 Agent 后续能知道素材来自哪里、为什么重要。
-3. **沉淀知识与资产**：把采集内容进入知识库、媒体库和主体库。文本素材用于检索和引用，图片/视频/音频用于参考和复用，人物、商品、品牌、场景等稳定对象进入主体库，避免每次创作都从零描述。
-4. **自动选题与 brief**：让 Agent 基于素材、评论区、高赞内容、搜索结果和历史稿件生成选题 brief。一个合格 brief 应包含目标受众、痛点、观点、标题方向、素材引用、内容结构、平台风格和禁忌。
-5. **自动创作稿件**：在稿件工作台或外部 Agent 中调用 Beav（原RedBox）的素材上下文，生成图文稿、视频脚本、口播稿或多版本标题。稿件不要只是一段正文，应保留引用素材、封面需求、分镜/段落结构和待生成媒体清单。
-6. **自动做图与媒体生成**：进入自由创作、封面或媒体库，基于稿件、参考图、主体库和 brief 生成封面图、配图、视频片段或音频。生成结果回流到媒体库，继续作为下一轮 Agent 创作的可检索资产。
-7. **复盘与复用**：把最终稿件、封面、发布反馈、评论区和数据复盘继续保存回 Beav（原RedBox）。下一次选题时，Agent 可以直接比较历史表现、复用高转化结构，并围绕同一主体持续生产系列内容。
-
-这条流程对 Agent 友好的关键是：**不要只把任务写在聊天里，而是把素材、brief、稿件、图片、视频和反馈都保存成 Beav（原RedBox）里的结构化资产**。Agent 每次接手时可以先读取工作空间，再决定要采集、检索、写稿、做图还是导出。
-
-## Agent 接入
-
-Beav（原RedBox）的长期方向是成为通用 Agent 的本地自媒体创作资源层。外部 Agent 负责规划和推理，Beav（原RedBox）负责提供素材、上下文、媒体处理和创作产物管理。
-
-当前优先接入方式是本地 **ACP Agent Gateway**：外部 Agent 先通过本机 discovery 文件或 helper 发现当前端口，再读取 Beav（原RedBox）Creator Agent 的 manifest / guide，创建或复用 ACP 会话，把创作任务交给 Beav（原RedBox）AI，并通过事件轮询拿到状态和素材/稿件产物引用。详细方案见 [`desktop/docs/redbox-acp-agent-gateway-implementation-plan.md`](desktop/docs/redbox-acp-agent-gateway-implementation-plan.md)，使用说明见 [`desktop/docs/redbox-acp-agent-gateway-usage.md`](desktop/docs/redbox-acp-agent-gateway-usage.md)，命令行 helper 见 [`desktop/scripts/redbox-acp-client.mjs`](desktop/scripts/redbox-acp-client.mjs)。
-
-外部 Agent 的推荐发现顺序是：读取 `REDBOX_ACP_DISCOVERY_FILE` 或系统默认的 `RedBox/acp-gateway.json`，再访问其中的 `manifestUrl` / `guideUrl`；如果文件不存在，再回退到默认 `http://127.0.0.1:31937/acp/v1`。这些兼容名称仍会保留，方便 Codex、Hermes、OpenClaw 不依赖用户电脑上的固定端口或品牌目录变更。
-
-| 接入对象 | 使用 Beav（原RedBox）做什么 | 推荐能力形态 |
-| --- | --- | --- |
-| Codex | 读取本地素材、整理选题、生成稿件、调用媒体处理任务、导出创作包 | ACP Gateway / CLI helper / 后续 MCP |
-| Hermes | 把 Beav（原RedBox）作为长期素材库和创作上下文来源，结合记忆、技能和自动化流程执行内容任务 | ACP Gateway / workspace context |
-| OpenClaw | 通过本地素材、项目包和浏览器采集结果执行自媒体生产流程 | ACP Gateway / CLI helper |
-| 其他 AI Agent | 检索素材、读取文件、保存生成结果、复用封面模板和媒体任务 | ACP Gateway / 标准化工具协议 |
-
-推荐的工具边界是：Agent 调用结构化能力，Beav（原RedBox）保存真实素材和产物。不要让 Agent 只拿自然语言描述猜测文件，也不要把媒体生成、视频渲染、素材索引这类重任务塞进一次性聊天上下文里。
-
-## 功能截图
-
-### 评论区洞察
-![评论区洞察](https://github.com/Jamailar/RedBox/releases/download/v2.3.0/redbox-2.3.0-comment-insights.png)
-
-### 为笔记生成封面图
-![为笔记生成封面图](https://github.com/Jamailar/RedBox/releases/download/v2.3.0/redbox-2.3.0-cover-generation.png)
-
-### 评论区存档功能
-![评论区存档功能](https://github.com/Jamailar/RedBox/releases/download/v2.3.0/redbox-2.3.0-comment-archive.png)
-
-### 知识库与素材沉淀
-![Knowledge](./images/knowledge.png)
-
-### 选题中心
-![Wander](./images/wander.png)
-
-### 稿件工作台
-![Manuscripts](./images/manuscripts.png)
-
-### 自由创作（生图 / 生视频）
-![Creation Page](./images/creation-page.jpg)
-
-### RedClaw 自动化执行
-![RedClaw](./images/redclaw.png)
-
-### 主体库
-![Subjects](./images/subjects.png)
-
-### 团队协作
-![Team](./images/team.png)
-
-### 媒体库
-![Media Library](./images/media-library.png)
-
-### 封面图生成
-![Cover Generation](./images/gen_cover.jpg)
-
-## 插件采集
-
-浏览器插件负责把外部内容送进 Beav（原RedBox）。小红书笔记、评论区、YouTube 视频、公众号文章、网页链接、选中文字和网页图片都可以进入本地素材库，作为后续 Agent 检索、选题、分析、写稿、封面和视频创作的上下文。
-
-### 采集小红书笔记与评论区
-![Save Xiaohongshu](./images/plugin-save-xiaohongshu.gif)
-
-### 保存 YouTube 视频
-![Save YouTube](./images/plugin-save-youtube.gif)
-
-### 保存网页图片
-![Save Image](./images/plugin-save-image.gif)
-
-## 快速开始
-
-1. 在 [Beav（原RedBox）下载页](https://redbox.ziz.hk/download) 下载并安装。
-2. 选择或创建工作空间，用它存放素材、项目、稿件、媒体和生成结果。
-3. 打开 `设置 -> AI`，按需填写 Endpoint / Key / Model，或使用官方 AI 能力。
-4. 安装并加载 `Plugin/` 里的 Chrome / Edge 扩展，把网页、图片、视频和评论区保存进素材库。
-5. 从 `素材采集 -> 知识库 / 媒体库 -> 选题 brief -> 稿件 / 封面 / 视频 -> 导出` 跑通一次内容生产流程。
-6. 在 Codex、Hermes、OpenClaw 等通用 Agent 中接入 Beav（原RedBox）的本地工具能力，让外部 Agent 直接使用这些素材和创作工具。
-
-## 社区
-
-<a href="./images/wechat.png"><img src="./images/wechat.png" alt="加入微信交流群" width="280"></a>
-
-- [GitHub Issues](https://github.com/Jamailar/RedBox/issues)
-- [GitHub Discussions](https://github.com/Jamailar/RedBox/discussions)
-
-## 更新日志
-
-### v2.5.0
-
-从 2.5.0 开始，RedBox 正式更名为 **Beav（原RedBox）**。Beav（原RedBox）延续原 RedBox / RedConvert 的本地素材库、Agent 接入、媒体资产管理、稿件与封面、视频处理和自动化能力；旧名称仍会在历史版本、文档链接、仓库路径或兼容协议中保留一段时间。
-
-### v2.4.0 (2026-06-20)
-
-Beav（原RedBox）2.4.0 正式版把浏览器能力从“读网页内容”升级到“操作你正在使用的真实 Chrome”。AI 可以在你授权后接管已打开的后台、数据面板或网页工具，读取页面内容、点击筛选、输入搜索、滚动和截图，用来完成需要登录态和真实页面交互的任务。这一版也补上了 Task Brief、工具层瘦身和对话过程显示优化，长任务不再只靠聊天记录硬撑。
-
-#### 你现在可以用它做什么
-
-- 查看已登录后台的数据，例如 Umami、管理后台、运营面板，让 AI 直接读取当前页面里的表格和指标。
-- 操作网页工具，例如打开 Google Trends、切换地区或时间范围、搜索关键词并整理结果。
-- 在复杂网页里完成重复操作，例如点击按钮、填写输入框、滚动加载内容、截取页面证据。
-- 让 AI 区分网页搜索结果和真实浏览器页面，不再把普通网页读取误当成浏览器操作。
-
-#### Task Brief：让长任务有工作底稿
-
-- 长任务可以使用 Task Brief 保存目标、待办、关键事实、阶段结论、决策和验证要求，后续对话可以接着这个工作底稿继续。
-- 选题、调研、写作和运营任务可以把读者问题、内容打法、候选标题、引用事实和避坑要求写进 brief，减少上下文变长后丢重点。
-- Task Brief 也能记录目标状态和上下文余量估算，更适合跟踪多轮任务是否完成、卡住或需要压缩上下文。
-
-#### 更容易看清 AI 正在做什么
-
-- 被 Beav（原RedBox）接管或创建的标签页会显示 `Beav（原RedBox）控制中` 标识，释放后自动消失。
-- 对话里的阶段说明、工具调用和结果回放更稳定，长任务过程中更容易看清 AI 正在做什么、做到哪一步。
-- 运行日志会更稳定地保留浏览器操作过程和关键工具结果，恢复会话后也能复盘它做过什么。
-- 启动桌面端时会恢复上次使用的应用视图，减少回到错误页面的情况。
-
-#### 工具层瘦身
-
-- AI 可见的工具入口更少、更明确，网页搜索、真实浏览器、命令执行、Task Brief、会话资源等能力边界更清楚。
-- 低频或兼容性工具被收进兼容层，正常对话里不再暴露一堆相互重叠的工具名，减少 AI 选错工具或重复调用。
-- 命令执行能力更接近真实终端，适合让 AI 处理 CLI、构建、诊断和需要持续输入的本机任务。
-
-#### 隐私和安全
-
-- 默认使用用户已经安装插件的真实 Chrome，不再用临时 Chromium 代替真实验收。
-- 浏览器历史、剪贴板、浏览器上下文等敏感能力不会被静默读取，会进入更高风险授权路径。
-- 浏览器控制不需要读取 macOS Keychain / Chrome Safe Storage；如果系统弹出这类敏感授权，应该拒绝。
-
-#### 下载
-
-v2.4.0 已发布为正式版，提供 macOS、Windows 多架构安装包和浏览器插件包：
-
-- [查看 v2.4.0 Release](https://github.com/Jamailar/RedBox/releases/tag/v2.4.0)
-- macOS：`RedBox_2.4.0_aarch64.dmg`、`RedBox_2.4.0_x64.dmg`
-- Windows：`RedBox_2.4.0_x64-setup.exe`、`RedBox_2.4.0_arm64-setup.exe`、`RedBox_2.4.0_x86-setup.exe`
-- 浏览器插件：`RedBox_Browser_Extension_2.4.0.zip`
-
-### v2.3.0 (2026-06-17)
-
-Beav（原RedBox）2.3.0 重点增强小红书评论区采集与选题洞察能力。浏览器插件现在可以采集笔记评论区内容，并把评论沉淀到知识库中，后续可直接交给 AI 分析用户关注点、高频问题、购买顾虑和潜在内容选题。
-
-#### 小红书评论区采集与选题洞察
-
-- 浏览器插件支持采集小红书笔记评论区内容，并将评论保存到 Beav（原RedBox）知识库。
-- 评论区内容可以进入 AI 分析流程，帮助洞察用户真实需求、情绪反馈、高频问题和选题机会。
-- 选题中心支持基于评论区内容生成创作 brief，把用户讨论转化为内容选题、脚本方向和后续创作任务。
-- 优化小红书评论加载与采集稳定性，提升长评论区、分页评论和中断恢复场景下的可靠性。
-
-#### AI 与创作能力升级
-
-- 升级官方 OpenAI 调用链路，支持 Responses API、结构化上下文片段和 provider 级网页搜索能力。
-- 增强 Agent 网页搜索工具调用，搜索结果来源可以更稳定地进入最终回答。
-- 自由创作支持拖拽添加媒体参考图，图片编辑请求诊断更清楚，生成任务的媒体结果回流更稳定。
-- 生成工作台新增积分成本预估，提交前可以看到图片、视频等生成任务的大致消耗。
-
-#### 会员、插件与会话管理
-
-- 新增创始赞助会员入口和会员权益基础能力，优化官方账号、支付和权益同步链路。
-- 新增 Codex 插件市场基础能力，插件采集链路支持 checkpoint，长内容采集中断后更容易恢复。
-- 新增会话导入导出和会话列表右键菜单，历史会话管理更方便。
-- 优化选题中心和工作区入口，减少冗余入口，让选题、素材和创作路径更集中。
-
-#### 修复与稳定性
-
-- 修复 Windows 知识库文件导入路径诊断问题，路径过长、文件名异常或源文件缺失时更容易定位原因。
-- 修复生成工作台 Agent 媒体结果流、已完成占位项残留和生成 feed 初始化抖动问题。
-- 修复通知同步未正确触发官方账号认证刷新的问题，登录过期时能更稳定地进入重新登录流程。
-- 修复团队协作唤醒循环、团队 guide 创建路由、知识库健康统计、网页搜索透传和默认工作区显示等问题。
-
-#### 下载
-
-v2.3.0 当前为预发布版本，已提供 macOS、Windows 多架构安装包和浏览器插件包：
-
-- [查看 v2.3.0 Release](https://github.com/Jamailar/RedBox/releases/tag/v2.3.0)
-- macOS：`RedBox_2.3.0_aarch64.dmg`、`RedBox_2.3.0_x64.dmg`
-- Windows：`RedBox_2.3.0_x64-setup.exe`、`RedBox_2.3.0_arm64-setup.exe`、`RedBox_2.3.0_x86-setup.exe`
-- 浏览器插件：`RedBox_Browser_Extension_2.3.0.zip`
-
-### v2.2.1 (2026-05-30)
-
-Beav（原RedBox）2.2.1 重点修复浏览器插件文章采集入库，尤其是微信公众号文章。长文、多图公众号文章现在可以更稳定地保存到 app，知识库也能正确按链接文章、公众号文章、知乎回答和知乎文章分类展示。
-
-#### 插件采集与知识库
-
-- 修复微信公众号文章保存链路，避免多图文章因为请求体过大保存失败。
-- 公众号文章保留富文本阅读快照，正文图片继续进入知识库素材，方便后续复用。
-- 修复链接文章和公众号文章在知识库里的分类映射，保存后可以稳定在对应分类中看到。
-- 确认通用网页链接、微信公众号文章、知乎回答、知乎专栏文章都使用 app 端正式 Knowledge API 类型入库。
-
-#### 工作台与稳定性
-
-- 自由创作改为默认工作区视图，进入 app 后更快回到核心创作任务。
-- 拆分媒体生成任务队列，减少不同创作入口之间的状态互相影响。
-- 强化媒体任务超时处理、团队成员唤醒和官方微信登录 session 同步。
-- 补齐 TTS 模型能力识别，减少模型和音色选择不一致导致的失败。
-
-#### 下载
-
-v2.2.1 已发布为正式版，提供 macOS 与 Windows 安装包：
-
-- [查看 v2.2.1 Release](https://github.com/Jamailar/RedBox/releases/tag/v2.2.1)
-- macOS：`RedBox_2.2.1_aarch64.dmg`、`RedBox_2.2.1_x64.dmg`
-- Windows：`RedBox_2.2.1_x64-setup.exe`
-- 浏览器插件：`RedBox_Browser_Extension_2.2.1.zip`
-
-### v2.2.0 (2026-05-22)
-
-Beav（原RedBox）2.2.0 重点增强面向东南亚、欧洲和跨境电商平台的多国家、多语言商品详情页创作。现在可以围绕品牌、商品、平台版本和目标语言组织素材，由 AI Agent 生成适合不同市场的详情页图片，并把生成结果继续沉淀到商品素材工作区复用。
-
-#### 商品详情页创作
-
-- 新增品牌商品素材工作区，支持按品牌、商品、平台和详情页版本管理图片素材。
-- 商品详情页支持通过 AI Agent 生成，围绕当前商品资料、平台定位和版本要求自动产出详情页图片。
-- 平台版本会自动带入目标市场和语言要求，更适合东南亚、欧洲及跨境电商多国家铺货场景。
-- 支持从媒体库和生成结果中回收图片素材，生成后的图片可以直接进入商品详情页工作区继续编辑和复用。
-
-![Beav（原RedBox）2.2.0 多语言商品详情页创作](https://github.com/Jamailar/RedBox/releases/download/v2.2.0/redbox-2.2.0-multilingual-product-detail-pages.gif)
-
-#### 支持的电商平台
-
-淘宝 / 天猫、京东 JD、拼多多 Pinduoduo、抖音电商 / 抖店、快手小店、1688、小红书店铺、唯品会、Alibaba.com、Shopee、Lazada、TikTok Shop、Tokopedia、Bukalapak、Blibli、Tiki、Sendo、ZALORA、Amazon EU/UK、eBay、Etsy、Zalando、ABOUT YOU、Allegro、bol.com、Cdiscount / Octopia、OTTO Market、Kaufland Global Marketplace、eMAG、ManoMano、Temu、SHEIN Marketplace、AliExpress、Trendyol、Kaspi.kz、Ozon、Wildberries、Uzum Market、Satu.kz。
-
-#### 支持的详情页语言
-
-英语、德语、法语、西班牙语、马来语、泰语、繁体中文、印尼语、越南语、葡萄牙语、意大利语、日语、阿拉伯语、荷兰语、波兰语、瑞典语、丹麦语、芬兰语、挪威语、捷克语、斯洛伐克语、斯洛文尼亚语、克罗地亚语、匈牙利语、罗马尼亚语、爱沙尼亚语、拉脱维亚语、立陶宛语、保加利亚语、土耳其语、俄语、韩语、阿塞拜疆语、哈萨克语、亚美尼亚语、吉尔吉斯语、乌兹别克语、格鲁吉亚语、塔吉克语。
-
-#### 生成工作台与稳定性
-
-- 生成工作台拆分出更稳定的请求校验、提交 payload、Agent 上下文和数字人音频解析模块。
-- Agent 模式会带上更明确的当前请求、最近资产、可用音色和模糊引用策略，减少“上一张图”“刚才的音频”等上下文丢失。
-- 媒体任务支持归档删除，生成历史补齐 `video_sequence` 等任务类型识别，视频序列类结果可以更稳定地回到生成工作台。
-- 视频生成时长范围扩展到 1-15 秒，短片段和稍长片段都能走统一任务链路。
-- 官方 AI 默认模型缺失后会自动补齐，图片、视频、Embedding、转写、TTS、音色克隆等能力不再误用聊天模型兜底。
-- VideoRetalk 参考视频预处理拆分为独立模块，数字人流程的音频生成、参考视频准备和视频提交链路进一步收口。
-
-#### 下载
-
-v2.2.0 已发布为正式版，提供 macOS 与 Windows 安装包：
-
-- [查看 v2.2.0 Release](https://github.com/Jamailar/RedBox/releases/tag/v2.2.0)
-- macOS：`RedBox_2.2.0_aarch64.dmg`、`RedBox_2.2.0_x64.dmg`
-- Windows：`RedBox_2.2.0_x64-setup.exe`、`RedBox_2.2.0_arm64-setup.exe`、`RedBox_2.2.0_x86-setup.exe`
-
-### v2.0.0 (2026-05-14)
-
-Beav（原RedBox）2.0 是一次面向「AI 内容创作工作台」的重大升级。这个版本不再只是单点生成工具，而是把账号定位、角色克隆、角色卡片、素材理解、图文生成、视频生成、剪辑分析、音频克隆和 Agent 连续执行串成一条完整创作链路。
-
-#### 重大更新
-
-- 全新 AI 创作工作流：Agent 现在可以围绕账号、素材、稿件和媒体任务连续工作，自动拆解需求、调用工具、生成结果并汇总交付。
-- 视频生成全面升级到 Seedance 2.0：提升画面质感、运动连贯性、短视频生成稳定性和故事板执行能力。
-
-##### AI 视频理解与自动剪辑切片
-
-现在 AI 可以理解视频内容，分析视频的优点、结构节奏、画面亮点和可复用表达，并自动剪辑出适合二次创作、种草复盘和短视频分发的精彩切片。
-
-![Beav（原RedBox）2.0 AI 视频理解与自动剪辑切片](https://github.com/Jamailar/RedBox/releases/download/v2.0.0/redbox-2.0-video-understanding-auto-clips.gif)
-
-##### 自动字幕识别与视频加字幕
-
-支持自动识别视频中的语音内容，生成字幕并直接叠加到视频画面中，让口播、解说、带货和知识类视频更快完成字幕包装。
-
-![Beav（原RedBox）2.0 自动识别字幕并给视频加字幕](https://github.com/Jamailar/RedBox/releases/download/v2.0.0/redbox-2.0-auto-subtitles.gif)
-
-##### 角色克隆与角色音频克隆
-
-支持基于账号定位、人物设定和内容风格生成可复用的角色卡片，让固定账号、虚拟角色和品牌 IP 拥有稳定的人设、语气、表达边界和创作参考。角色还可以沉淀专属声音资产，让系列化视频、口播、旁白和虚拟角色内容保持更统一的声线识别度。
-
-![Beav（原RedBox）2.0 角色克隆与角色卡片预览](https://github.com/Jamailar/RedBox/releases/download/v2.0.0/redbox-2.0-character-clone-workflow.gif)
-
-##### 商品图智能创作
-
-上传一张商品图，即可自动扩展生成商品套图和短视频素材，帮助电商、种草和品牌内容更快完成从单图到成套内容的生产。
-
-![Beav（原RedBox）2.0 商品图自动生成套图与视频](https://github.com/Jamailar/RedBox/releases/download/v2.0.0/redbox-2.0-product-image-to-asset-video.gif)
-
-- 强化图文到视频链路：图片附件、参考素材、封面、分镜和视频任务之间的引用关系更稳定，减少重复上传和上下文丢失。
-- 新增封面创作能力：从选题、文案、图片生成到封面产出，进一步补齐小红书、短视频和账号内容生产的关键环节。
-- 升级 Agent 工具调用系统：媒体编辑、图片生成、视频生成、模型配置、附件引用等能力现在可以被 AI 更直接、更稳定地调用。
-- 优化 RedClaw 创作体验：稿件、对话、知识引用和任务执行的协作链路更清晰，更适合持续写作、改稿和内容策划。
-
-##### 全新桌面 UI
-
-收敛入口层级，降低视觉噪音，让素材、生成、任务、稿件和结果管理更直观。
-
-![Beav（原RedBox）2.0 全新桌面 UI 体验](https://github.com/Jamailar/RedBox/releases/download/v2.0.0/redbox-2.0-ui-refresh-workflow.gif)
-
-- 强化会话与素材持久化：聊天图片缩略图、媒体任务记录、视频生成历史、会话附件引用等数据保留更可靠。
-
-#### 稳定性与体验优化
-
-- 改进视频生成等待、历史记录、缩略图、播放状态和任务结果回填。
-- 优化媒体引用解析，减少视频任务找不到图片、封面或上下文素材的问题。
-- 改进 Agent 对视频导演、分镜、音频、时长和最终提示词的理解能力。
-- 优化模型配置管理，让不同生成场景可以更稳定地使用对应模型。
-- 修复语音、图片、视频、附件和兼容层之间的若干调用问题。
-- 调整桌面壳层、侧边栏和设置入口，让高频创作路径更轻、更直接。
-
-#### 这是一个大版本
-
-2.0.0 的重点不是增加几个按钮，而是把 Beav（原RedBox）从「AI 生成工具集合」升级为「自媒体创作 Agent 工作台」：它可以克隆角色、生成角色卡片、沉淀角色声音资产、理解素材、生成内容、处理媒体、维护角色一致性，并把多步创作任务尽可能交给 AI 连续完成。
+<p><small>
+IPWO 提供全球住宅IP资源，支持多地区 IP 环境访问，为自动化任务执行、海外服务测试等场景提供灵活的网络支持。<br>
+浏览器自动化与智能应用开发场景中，不同地区的网络环境适配是开发测试过程中的常见需求，IPWO全球代理支持免费测试，9折优惠码“0203”<br>
+<a href="https://www.ipwo.net/?ref=githubJamailar">访问IPWO入口</a>
+</small></p>
+
+## 友情链接
+
+- [Linux.do](https://linux.do/)

@@ -4,13 +4,13 @@
 
 ## Start Here
 
-1. 先读 [README.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/README.md) 了解工作区边界。
-2. 再读 [AGENTS.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/AGENTS.md) 和 [docs/README.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/README.md)。
+1. 先读 [README.md](/desktop/README.md) 了解工作区边界。
+2. 再读 [源码基线与历史说明](docs/source-baseline.md)。
 3. 改具体模块前，先打开该目录旁边的 `README.md` 或 `*.README.md`。
 
 ## Repository Rules
 
-- 产品统一命名为 `RedBox` / `redbox`。
+- 对外产品名为 Beav；历史源码中的 RedBox 标识保留兼容。
 - renderer 访问宿主能力统一走 `window.ipcRenderer`，不要在页面里散落原始 Tauri 调用。
 - `src-tauri/src/main.rs` 只做装配和注册，新增业务优先下沉到 `commands/`、`runtime/`、`persistence/`、`scheduler/` 等模块。
 - 页面切换和刷新默认遵守 stale-while-revalidate，不要把已有数据清空成全页 loading。
@@ -49,6 +49,6 @@
 
 ## Release Hygiene
 
-- 版本号以根 [package.json](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/package.json) 为准。
-- Rust 版本同步由 [scripts/sync-version.mjs](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/scripts/sync-version.mjs) 处理。
-- 打包和运行方式见 [docs/development/setup.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/development/setup.md)。
+- 版本号以根 [package.json](/desktop/package.json) 为准。
+- Rust 版本同步由 [scripts/sync-version.mjs](/desktop/scripts/sync-version.mjs) 处理。
+- 打包和运行方式见 [README.md](README.md)。

@@ -1,6 +1,6 @@
-MIT License – Non-Commercial Use Only
+Beav Source-Available License – Non-Commercial Use Only
 
-Copyright (c) 2025 [Your Name or Project Name]
+Copyright (c) 2025–2026 第二定律工作室 (https://hyperchaos.dev/)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the “Software”), to deal
@@ -12,7 +12,8 @@ The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 
 **Commercial use of the Software is strictly prohibited without prior written
-permission from the author.** For licensing inquiries, please contact the author.
+permission from the author.** For commercial licensing inquiries, contact jambahailar@gmail.com.
+Studio: https://hyperchaos.dev/ | Product: https://beav.pro/
 
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
 INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
@@ -20,3 +21,20 @@ PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIG
 HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+SCOPE
+
+This custom source-available license applies to the source code and associated
+documentation distributed under this LICENSE, including the public Tauri + Rust
+2.5.0 snapshot. It is not the standard MIT License and is not an OSI-approved
+open-source license. The non-commercial restriction remains in effect.
+
+Official Beav desktop releases based on Tauri + Rust are separately licensed
+under the Beav User Agreement presented in the application and the applicable
+product or service terms. Downloading an official installer from this repository's
+Releases does not grant rights to that product under this source-code license.
+The source-code non-commercial restriction does not replace the official
+product's usage terms. Refer to https://beav.pro/ or contact
+jambahailar@gmail.com for product and commercial licensing inquiries.
+
+Third-party components remain subject to their respective licenses and notices.

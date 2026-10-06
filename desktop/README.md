@@ -1,71 +1,37 @@
-# RedBox
+# Beav · Tauri 2.5.0 source
 
-`desktop/` 是 RedConvert 当前桌面端工作区，基于 Tauri v2 + Rust 宿主。
+本目录提供 Beav 2.5.0 的 Tauri v2 + Rust 源码。它不是当前正式安装版的完整源码。许可范围见仓库根目录 [LICENSE](../LICENSE)。
 
-## Boundaries
+## 文件结构
 
-- 只在 `desktop/` 内开发、运行和构建。
-- `archive/desktop-electron/` 只作为历史参考源，不参与当前桌面端运行时与构建。
-- 前端源码在 `desktop/src/` 独立维护。
-- 宿主源码在 `desktop/src-tauri/` 独立维护。
-- 前端兼容面仍暴露 `window.ipcRenderer`，内部统一路由到 Tauri command/event。
+- `src/`：React + TypeScript 前端，宿主调用入口为 `src/bridge/ipcRenderer.ts`。
+- `src-tauri/`：Rust 宿主、Cargo 锁文件、Tauri 配置、图标和运行资源。
+- `prompts/`、`builtin-skills/`、`skills/`：提示词和技能资源，属于源码的一部分。
+- `branding/`、`public/`、`shared/`、`remotion/`：品牌资源、静态文件、共享类型及视频渲染支持。
+- `scripts/`：开发、检查、构建和发布脚本。
+- 仓库根目录的 `Plugin/`：配套浏览器扩展及本地控制服务。
 
-## Commands
+## 本地构建
 
-- `pnpm install`
-- `pnpm build`
-- `pnpm tauri:dev`
-- `pnpm tauri:build`
-- `pnpm release:mac`
-- `pnpm release:mac:setup-notary`
-- `pnpm release:win`
-- `pnpm release:linux`
-- `pnpm release:all`
-- `pnpm release:oss`
-- 修改应用版本号时，只改根 `package.json` 的 `version`；Tauri 配置与 Rust 元数据会自动同步
-- `pnpm ipc:inventory`
+准备 Node.js 22、pnpm 10、Rust stable，以及对应平台的 Tauri v2 系统依赖。先在仓库根目录构建浏览器扩展：
 
-## Current Status
+```sh
+cd Plugin
+pnpm install --frozen-lockfile
+pnpm check
+cd ../desktop
+pnpm install --frozen-lockfile
+pnpm build
+```
 
-- 前端 IPC channel 已全量有 Rust host 路由。
-- Tauri debug build 已通过。
-- macOS `.app` bundle 已启用。
-- 发布脚本默认覆盖 macOS `arm64 + x64`、Windows `x64 + arm64 + x86`，以及 Linux `x64`。
-- `desktop/src-tauri/src/main.rs` 目前承载 Rust host 内核：
-  - app / settings / spaces / subjects
-  - manuscripts / media / cover / knowledge
-  - chat / runtime / sessions / tasks / background
-  - assistant daemon / RedClaw / MCP / skills / diagnostics
-  - Advisors / YouTube / yt-dlp
-  - WeChat official local binding and draft flow
-  - embedding / similarity / wander
+`pnpm build` 检查 TypeScript 并构建前端。启动桌面应用前，按 [FFmpeg 二进制说明](src-tauri/binaries/README.md) 准备本平台带 target triple 后缀的 FFmpeg 和 FFprobe；它们是未纳入 Git 的第三方构建资源，不是缺失的应用源码。Tauri 打包还会使用刚构建的 `Plugin/dist/extension`。
 
-## External Integrations
+```sh
+pnpm tauri:dev
+```
 
-很多外部能力现在已经有真实执行路径，但仍取决于本机配置和第三方账号：
+AI、发布及第三方平台能力需要自行配置账号、模型 endpoint 和密钥。仓库不提供生产凭证、签名私钥或公证账号。正式签名、跨平台安装包和线上服务兼容性不由前端构建通过来保证。
 
-- AI chat / image / video / transcription / embedding 需要可用 endpoint、model 和 key。
-- WeChat official draft publishing 需要公众号 AppID/Secret、有效 access token，以及封面素材 `thumb_media_id` 或可上传封面图。
-- Weixin sidecar 需要用户配置可执行的 `sidecarCommand`、args、cwd、env，并由该 sidecar 产出可读取的登录状态 JSON。
-- YouTube 字幕下载需要本机 `yt-dlp` 可用。
-- MCP stdio / SSE / streamable-http 需要对应 server 可启动或可访问。
+## 历史与验证范围
 
-## Verification
-
-已验证的基础链路：
-
-- `cargo fmt --check && cargo check`
-- `pnpm build`
-- `pnpm tauri build --debug`
-- 调试产物短时启动 smoke
-
-当前调试产物：
-
-- `desktop/src-tauri/target/debug/redbox`
-
-## Documentation
-
-- 开发文档总入口见 [docs/README.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/README.md)
-- 协作规则见 [CONTRIBUTING.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/CONTRIBUTING.md)
-- 发布与签名见 [docs/release-packaging.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/release-packaging.md)
-- 模块级说明优先查看对应目录旁边的 `README.md` 或 `*.README.md`
+详见 [源码基线与历史说明](docs/source-baseline.md)。模块说明保留在相邻目录；内部规划、事故复盘、本机 Agent 配置不属于公开源码文档。
