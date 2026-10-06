@@ -1,65 +1,33 @@
-<p align="center">
-  <img src="./images/beav-icon.png" alt="Beav" width="88">
-</p>
+[English](./readme_en.md) | 简体中文
 
-<h1 align="center">Beav</h1>
+# Beav
 
-<p align="center">
-  <strong>AI 自媒体工作台</strong>
-</p>
+本地优先的 AI 内容创作工作台：采集资料、整理素材、撰写图文与剪辑视频。
 
-<p align="center">
-  <!-- maintenance-days:start -->
-  <img src="https://img.shields.io/badge/%E8%87%AA%202025%20%E5%B9%B4%206%20%E6%9C%88%E8%B5%B7-%E5%B7%B2%E6%8C%81%E7%BB%AD%E7%BB%B4%E6%8A%A4%20492%20%E5%A4%A9-EA580C?style=flat-square&amp;labelColor=9A3412" alt="本项目自 2025 年 6 月起，已持续维护 492 天">
-  <!-- maintenance-days:end -->
-</p>
+> **源码快照 ≠ 最新正式版**：本仓库提供 Tauri + Rust 2.5.0 源码快照，并分发持续更新的 Beav 正式安装包。最新正式版采用 Tauri + Rust，其功能和源码公开范围与 2.5.0 不同。公开源码按非商业许可提供（source-available），不是标准 MIT 开源；详见 [LICENSE](./LICENSE)。
 
-<p align="center">
-  <!-- release-stats:start -->
-  <a href="https://github.com/Jamailar/Beav/releases"><img src="https://img.shields.io/badge/%E5%B7%B2%E5%8F%91%E5%B8%83%20Release-84%20%E4%B8%AA-2563EB?style=flat-square&amp;labelColor=1D4ED8" alt="已发布 84 个 Release 版本"></a>
-  <a href="https://github.com/Jamailar/Beav/releases"><img src="https://img.shields.io/badge/%E7%B4%AF%E8%AE%A1%E5%AE%89%E8%A3%85%E5%8C%85-668%20%E4%B8%AA-14B8A6?style=flat-square&amp;labelColor=0F766E" alt="累计 668 个安装包"></a>
-  <!-- release-stats:end -->
-</p>
+![Beav 浏览器插件操作演示：保存小红书笔记与评论](./images/plugin-save-xiaohongshu.gif)
 
-<p align="center">从资讯与选题，到图文创作、口播剪辑和持续运营的一站式 AI 工作空间。</p>
+[下载正式版](https://beav.pro/download) · [演示视频](https://www.bilibili.com/video/BV12LNn6nEem/) · [使用指南](https://beav.pro/docs) · [最新 Release](https://github.com/Jamailar/Beav/releases/latest)
 
-<p align="center">本地优先 · 账号长期记忆 · AI 图片与视频剪辑 · macOS / Windows / Linux</p>
+## 三个核心使用场景
 
-<p align="center">
-  <a href="https://github.com/Jamailar/Beav/releases/latest"><img src="https://img.shields.io/github/v/release/Jamailar/Beav?style=flat-square&color=C56F2C" alt="Latest Release"></a>
-  <a href="https://github.com/Jamailar/Beav"><img src="https://img.shields.io/github/stars/Jamailar/Beav?style=flat-square&color=C56F2C" alt="GitHub Stars"></a>
-  <a href="https://github.com/Jamailar/Beav/releases"><img src="https://img.shields.io/github/downloads/Jamailar/Beav/total?style=flat-square&color=C56F2C" alt="Total Downloads"></a>
-  <a href="https://github.com/Jamailar/Beav/releases/latest"><img src="https://img.shields.io/github/release-date/Jamailar/Beav?style=flat-square&color=6C757D" alt="Release Date"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT--NC-6C757D?style=flat-square" alt="License"></a>
-  <a href="https://redbox.ziz.hk/download"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-6C757D?style=flat-square" alt="Platform"></a>
-</p>
+以下场景介绍持续更新的正式版；公开源码范围见下方对照。
 
-<p align="center">
-  <a href="https://redbox.ziz.hk/download"><strong><big>官网高速下载（中国大陆网络推荐）</big></strong></a>
-</p>
+- **积累创作资料**：保存网页、小红书笔记和评论，在知识库中检索、引用与复用。
+- **持续经营内容账号**：结合参考资料、选题和账号规划，撰写并修改图文稿、脚本与口播稿。
+- **制作图片与视频**：复用图片模板，剪辑口播、编辑字幕、补充画面并导出成片。
 
-<p align="center">
-  <a href="https://www.bilibili.com/video/BV12LNn6nEem/">视频教程</a>
-</p>
+## 源码与正式版范围
 
-<p align="center">
-  <img src="./images/beav-agent-workflow-hero.png" alt="Beav AI 内容运营工作空间" width="50%">
-</p>
+| 项目 | 公开源码快照 | 持续更新的正式版 |
+| --- | --- | --- |
+| 版本与技术栈 | Tauri + Rust 2.5.0；公开仓库的 `desktop/` | Tauri + Rust；版本以最新 Release 为准 |
+| 功能范围 | 以快照中的代码与历史说明为准 | 本文下方的 2.8 功能介绍与当前使用指南 |
+| 2.8 新实现 | 不包含下述 2.8 媒体工坊、剪辑、模板、日报等实现与改进，也不包含当前 Tauri MCP 宿主实现 | 随正式安装包提供；受平台、权限和配置影响 |
+| 许可 | 自定义非商业源码许可；商业使用需书面授权 | 适用安装版用户协议及所购服务权益；不由源码许可授予使用权 |
 
-> RedBox 已更名为 **Beav**；原有本地数据和工作空间不受影响。
-
-<p align="center"><strong>加入讨论群</strong></p>
-
-<p align="center">
-  <img src="./images/beav-discussion-group.jpg" alt="加入 Beav AI 创作交流群" width="30%">
-</p>
-
-## 为什么需要这个项目？
-
-- **运营时间被素材吞噬**：内容运营每天都要审阅大量素材、追踪热点、寻找灵感。AI 已能显著加速这些高频工作，但缺少把采集、选题和创作串起来的专用工具。
-- **通用 AI 不懂内容资产**：Codex、Workbody 等工具主要面向程序员或通用办公，并非为自媒体工作者设计，难以同时承担长期素材库与持续创作工作台。
-
-Beav 因此而生：把 AI 变成自媒体工作者真正可持续使用的素材库和运营工作台。
+公开仓库不提供最新正式版的完整源码，不能用 2.5.0 快照复现 2.8 安装包。浏览器扩展等公开组件可能单独更新，其版本不代表桌面源码也同步更新。
 
 ## 工作流
 
@@ -73,9 +41,9 @@ Beav 因此而生：把 AI 变成自媒体工作者真正可持续使用的素�
 | **剪辑口播**：分析删减、编辑字幕、补充画中画与动画、导出成片 | 媒体工坊“智能剪口播”、视频编辑器 |
 | **安排运营任务**：设置计划，查看执行状态并继续处理结果 | 运营日历、对话 |
 
-## 2.8 创作体验
+## 2.8 正式版功能介绍
 
-以下介绍当前 2.8 代码中的主要能力；安装包与公开源码的更新进度可能不同，请以所安装版本的实际入口为准。完整版本变化见[更新日志](./CHANGELOG.md)。
+以下介绍 **Tauri + Rust 正式版**。这里列出的 2.8 实现与改进不包含在公开的 Tauri + Rust 2.5.0 源码快照中；即使旧版有同名入口，也不代表实现和能力相同。可用功能以所安装版本、账号权限、模型配置和操作系统为准。完整版本变化见[更新日志](./CHANGELOG.md)。
 
 ### 媒体工坊与智能口播剪辑
 
@@ -113,7 +81,7 @@ Beav 因此而生：把 AI 变成自媒体工作者真正可持续使用的素�
 
 - **字幕提取器**：提取字幕，在工具中查看结果并继续处理。
 - **图片去 AI 元数据**：查看并清理 PNG、JPEG、WebP 的可移除文件元数据，保留原图并输出独立副本；不处理画面中的 Logo 或像素水印。
-- **图片转 Live 图**：选择图片与轻微推拉、平移动效，生成配对照片和视频。当前源码支持 macOS 与 Windows，Linux 暂不支持；Windows 实机与手机导入仍待验收，传输时需同时保留配对文件。
+- **图片转 Live 图**：选择图片与轻微推拉、平移动效，生成配对照片和视频。2.8 正式版的实现面向 macOS 与 Windows，Linux 暂不支持；Windows 实机与手机导入仍待验收，传输时需同时保留配对文件。
 - **账号运营规划**：在当前账号空间中持续维护同一份规划。
 
 小工具从主页打开，按需授权；图片工具支持从素材库选择或从电脑导入。
@@ -140,16 +108,9 @@ Beav 因此而生：把 AI 变成自媒体工作者真正可持续使用的素�
 
 ![精选自媒体技能市场](./images/curated-creator-skills-marketplace.jpg)
 
-## 适合怎样的创作任务
-
-- **持续运营一个账号**：把定位、参考内容、日报与稿件放在同一空间，持续积累可复用的资料和偏好。
-- **制作一条口播视频**：从原片分析、删减和字幕出发，补充画面与动画，再检查和导出成片。
-- **批量复用视觉风格**：将参考图片沉淀为模板，替换文字和素材制作不同主题。
-- **减少资料来回搬运**：在对话旁阅读知识和素材，直接引用到当前任务，并保留产物供下次使用。
-
 ## 功能矩阵
 
-主要能力按当前产品入口归纳；在线服务、外部平台及部分媒体格式受账号配置和操作系统支持范围影响。
+以下仅描述正式版，不是公开源码功能清单。主要能力按正式版入口归纳；在线服务、外部平台及部分媒体格式受账号配置和操作系统支持范围影响。
 
 | 采集与知识 | 选题与运营 | 写作与协作 | 图片与小工具 | 视频剪辑 |
 | --- | --- | --- | --- | --- |
@@ -160,11 +121,106 @@ Beav 因此而生：把 AI 变成自媒体工作者真正可持续使用的素�
 | 检索与来源引用 | 历史日报与执行记录 | 技能市场与子任务协作 | Live Photo（macOS / Windows） | 人声降噪、转场与音频调整 |
 | 素材与资产复用 | 从资讯继续创作 | 外部 Agent 接入 | 字幕提取器 | 成片、字幕与便携工程导出 |
 
+## 产品截图
+
+### 知识库
+
+![知识库与素材沉淀](./images/knowledge.png)
+
+### 评论区洞察（2.3.0 历史截图）
+
+![评论区洞察](https://github.com/Jamailar/Beav/releases/download/v2.3.0/redbox-2.3.0-comment-insights.png)
+
+## 正式版快速开始
+
+1. 前往 [下载页](https://beav.pro/download) 安装 Beav。
+2. 为一个账号或品牌创建一个工作空间。
+3. 在 `设置 → AI` 使用官方 AI，或配置自己的 Endpoint、API Key 和模型。
+4. 如需网页采集，从 [最新 Release](https://github.com/Jamailar/Beav/releases/latest) 获取 Chrome / Edge 扩展。
+5. 从主页选题或日报开始创作；已有视频可进入媒体工坊进行剪辑，图片处理和账号规划从主页小工具打开。
+
+不确定某个功能怎么用时，可在对话中让 Beav 查询内置使用指南，再按当前版本的入口操作。
+
+## 信任与边界
+
+- **本地优先**：素材、稿件和项目以本地工作空间为核心组织。
+- **模型可选**：支持官方 AI 和 OpenAI-compatible 模型服务。
+- **发布透明**：安装包、扩展、更新资产和签名均通过 GitHub Releases 发布。
+- **边界公开**：许可证、[更新日志](./CHANGELOG.md)、[路线图](./ROADMAP.md) 和 [Issues](https://github.com/Jamailar/Beav/issues) 均可查。
+
+## Agent 插件（正式版）
+
+Beav Creator 插件让 Codex Desktop 或 WorkBuddy 通过 MCP 连接本机 Beav，调用已开放的工作区与媒体工具，也可把任务交给 Beav 内部 Agent；用户仍在 Beav UI 中查看、审批和编辑结果。
+
+先安装并启动 Beav（CLI 用户运行 `beav open`），再把对应指令发给宿主 Agent：
+
+**Codex**
+
+```text
+/goal Read https://beav.pro/agent to install the Beav Creator plugin and set up a new task for me.
+```
+
+**WorkBuddy**
+
+```text
+Read https://beav.pro/workbuddy to install the Beav Creator plugin and connect it to my local Beav workspace.
+```
+
+安装完成后，直接在 Codex 或 WorkBuddy 中描述任务即可。宿主与 Beav 须运行在同一台电脑；浏览器 UI 只供用户操作，不作为 Agent 控制通道。以上入口面向正式版，不适用于 2.5.0 源码快照。
+
+## 项目历史与维护
+
+RedBox 已更名为 **Beav**；原有本地数据和工作空间不受影响。公开源码基线为 Tauri + Rust 2.5.0；后续正式版继续在私有仓库中迭代。公开仓库保留清理后的开发历史，后续公开内容通过 PR 审查合并。
+
+<p align="center">
+  <!-- maintenance-days:start -->
+  <img src="https://img.shields.io/badge/%E8%87%AA%202025%20%E5%B9%B4%206%20%E6%9C%88%E8%B5%B7-%E5%B7%B2%E6%8C%81%E7%BB%AD%E7%BB%B4%E6%8A%A4%20492%20%E5%A4%A9-EA580C?style=flat-square&amp;labelColor=9A3412" alt="本项目自 2025 年 6 月起，已持续维护 492 天">
+  <!-- maintenance-days:end -->
+</p>
+
+<p align="center">
+  <!-- release-stats:start -->
+  <a href="https://github.com/Jamailar/Beav/releases"><img src="https://img.shields.io/badge/%E5%B7%B2%E5%8F%91%E5%B8%83%20Release-84%20%E4%B8%AA-2563EB?style=flat-square&amp;labelColor=1D4ED8" alt="已发布 84 个 Release 版本"></a>
+  <a href="https://github.com/Jamailar/Beav/releases"><img src="https://img.shields.io/badge/%E7%B4%AF%E8%AE%A1%E5%AE%89%E8%A3%85%E5%8C%85-668%20%E4%B8%AA-14B8A6?style=flat-square&amp;labelColor=0F766E" alt="累计 668 个安装包"></a>
+  <!-- release-stats:end -->
+</p>
+
+<p align="center">
+  <a href="https://github.com/Jamailar/Beav/releases/latest"><img src="https://img.shields.io/github/v/release/Jamailar/Beav?style=flat-square&color=C56F2C" alt="Latest Release"></a>
+  <a href="https://github.com/Jamailar/Beav"><img src="https://img.shields.io/github/stars/Jamailar/Beav?style=flat-square&color=C56F2C" alt="GitHub Stars"></a>
+  <a href="https://github.com/Jamailar/Beav/releases"><img src="https://img.shields.io/github/downloads/Jamailar/Beav/total?style=flat-square&color=C56F2C" alt="Release 文件下载次数（非用户数）"></a>
+  <a href="https://github.com/Jamailar/Beav/releases/latest"><img src="https://img.shields.io/github/release-date/Jamailar/Beav?style=flat-square&color=6C757D" alt="Release Date"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Source--available-6C757D?style=flat-square" alt="License"></a>
+  <a href="https://beav.pro/download"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-6C757D?style=flat-square" alt="Platform"></a>
+</p>
+
+安装包统计指发布资产文件数量，下载统计指 Release 文件下载次数，均不代表用户数或活跃用户数。
+
+## 社区与媒体资料
+
+- [官网](https://beav.pro/) · [下载](https://beav.pro/download) · [使用指南](https://beav.pro/docs)
+- [GitHub Releases](https://github.com/Jamailar/Beav/releases) · [问题反馈](https://github.com/Jamailar/Beav/issues)
+- [Bilibili 视频教程](https://www.bilibili.com/video/BV12LNn6nEem/)
+- 媒体介绍请统一使用 **Beav** 和 **https://beav.pro/**；注明“Tauri + Rust 2.5.0 源码快照 + 持续更新的桌面正式版”，不要将 2.8 功能写成公开源码能力。
+- 可引用本页的[采集演示](./images/plugin-save-xiaohongshu.gif)、[产品图标](./images/beav-icon.png)与产品截图；媒体及授权联系：[jambahailar@gmail.com](mailto:jambahailar@gmail.com)。
+
+Beav 由[第二定律工作室](https://hyperchaos.dev/)开发和维护，开发者：[JambaHailar](https://x.com/JambaHailar)。
+
+<p align="center">
+  <img src="./images/beav-discussion-group.jpg" alt="加入 Beav AI 创作交流群" width="30%">
+</p>
+
+## 许可证
+
+- **公开源码**：适用 [Beav 非商业源码许可](./LICENSE)。保留现有非商业限制；商业使用、商业分发或集成需事先联系 [jambahailar@gmail.com](mailto:jambahailar@gmail.com) 获得书面授权。这是 source-available 许可，不是标准 MIT，也不符合 [OSI 开源定义](https://opensource.org/osd)。
+- **正式安装版**：适用应用内《Beav 用户协议》以及购买页面所列的个人版、团队版和服务权益。安装包在 Releases 提供下载，不意味着受本仓库源码许可授权；源码非商业限制也不用于替代安装版的使用条款。内容及 AI 产物的商业使用仍须遵守素材授权和所用服务条款。
+- **第三方组件**：保留各自许可证与版权声明。
+
 ## 合作伙伴
 
 ### 商务合作
 
-如有品牌合作、行业方案、产品集成或其他商务合作意向，欢迎发送邮件至 [huaqiang1121@gmail.com](mailto:huaqiang1121@gmail.com)。
+如有品牌合作、行业方案、产品集成或其他商务合作意向，欢迎发送邮件至 [jambahailar@gmail.com](mailto:jambahailar@gmail.com)。
 
 ### 经销代理
 
@@ -183,76 +239,6 @@ IPWO 提供全球住宅IP资源，支持多地区 IP 环境访问，为自动化
 浏览器自动化与智能应用开发场景中，不同地区的网络环境适配是开发测试过程中的常见需求，IPWO全球代理支持免费测试，9折优惠码“0203”<br>
 <a href="https://www.ipwo.net/?ref=githubJamailar">访问IPWO入口</a>
 </small></p>
-
-## 产品截图
-
-### 浏览器采集
-
-![采集小红书笔记与评论](./images/plugin-save-xiaohongshu.gif)
-
-### 知识库
-
-![知识库与素材沉淀](./images/knowledge.png)
-
-### 评论区洞察
-
-![评论区洞察](https://github.com/Jamailar/Beav/releases/download/v2.3.0/redbox-2.3.0-comment-insights.png)
-
-## 快速开始
-
-1. 前往 [下载页](https://redbox.ziz.hk/download) 安装 Beav。
-2. 为一个账号或品牌创建一个工作空间。
-3. 在 `设置 → AI` 使用官方 AI，或配置自己的 Endpoint、API Key 和模型。
-4. 如需网页采集，从 [最新 Release](https://github.com/Jamailar/Beav/releases/latest) 获取 Chrome / Edge 扩展。
-5. 从主页选题或日报开始创作；已有视频可进入媒体工坊进行剪辑，图片处理和账号规划从主页小工具打开。
-
-不确定某个功能怎么用时，可在对话中让 Beav 查询内置使用指南，再按当前版本的入口操作。
-
-## 信任与边界
-
-- **本地优先**：素材、稿件和项目以本地工作空间为核心组织。
-- **模型可选**：支持官方 AI 和 OpenAI-compatible 模型服务。
-- **发布透明**：安装包、扩展、更新资产和签名均通过 GitHub Releases 发布。
-- **边界公开**：许可证、[更新日志](./CHANGELOG.md)、[路线图](./ROADMAP.md) 和 [Issues](https://github.com/Jamailar/Beav/issues) 均可查。
-
-## Agent 插件
-
-Beav Creator 插件让 Codex Desktop 或 WorkBuddy 通过 MCP 连接本机 Beav，把创作任务交给 Beav 内部 Agent；用户仍在 Beav UI 中查看、审批和编辑结果。
-
-先安装并启动 Beav（CLI 用户运行 `beav open`），再把对应指令发给宿主 Agent：
-
-**Codex**
-
-```text
-/goal Read https://beav.ziz.hk/agent to install the Beav Creator plugin and set up a new task for me.
-```
-
-**WorkBuddy**
-
-```text
-Read https://beav.ziz.hk/workbuddy to install the Beav Creator plugin and connect it to my local Beav workspace.
-```
-
-安装完成后，直接在 Codex 或 WorkBuddy 中描述任务即可；浏览器 UI 只供用户操作，不作为 Agent 控制通道。
-
-## 社区
-
-- [官网与下载](https://beav.me/)
-- [GitHub Releases](https://github.com/Jamailar/Beav/releases)
-- [问题反馈](https://github.com/Jamailar/Beav/issues)
-- [Bilibili 视频教程](https://www.bilibili.com/video/BV12LNn6nEem/)
-
-Beav 由 [JambaHailar](https://x.com/JambaHailar) 独立开发和维护。
-
-## 开源版本说明
-
-Beav 的公开开源版本目前停留在 **2.5.0**，基于 **Electron** 构建。该版本保留了当时产品的主要功能与实现，可用于学习、研究和技术交流；对应源码和历史版本请以本仓库的 Git 历史及 Releases 为准。
-
-面向实际用户持续维护的正式版本已经迁移到 **Tauri + Rust** 技术栈，并在独立的代码基础上继续迭代。它与 2.5.0 的 Electron 开源版本在底层实现和版本进度上并不相同，正式版本也可能包含开源版本没有的功能、性能改进和平台适配。因此，开源版本不是当前正式版的完整或即时镜像；如需使用最新正式版本，请从[官网下载安装](https://beav.me/)。
-
-## 许可证
-
-[MIT License – Non-Commercial Use Only](./LICENSE)。商业使用需事先获得作者书面许可。
 
 ## 友情链接
 

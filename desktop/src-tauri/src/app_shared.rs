@@ -1,0 +1,109 @@
+use serde_json::{json, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Emitter, State};
+
+use crate::{payload_string, workspace_root, AppState};
+
+pub(crate) fn collect_json_files(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth == 0 || !root.exists() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_json_files(&path, depth - 1, out);
+        } else if path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("json"))
+            .unwrap_or(false)
+        {
+            out.push(path);
+        }
+    }
+}
+
+pub(crate) fn read_weixin_sidecar_state(state_dir: &Path) -> Option<Value> {
+    let mut files = Vec::new();
+    collect_json_files(state_dir, 4, &mut files);
+    files.sort();
+    for path in files {
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&content) else {
+            continue;
+        };
+        let account_id = payload_string(&value, "accountId")
+            .or_else(|| payload_string(&value, "account_id"))
+            .or_else(|| payload_string(&value, "botId"))
+            .or_else(|| payload_string(&value, "uin"));
+        let user_id = payload_string(&value, "userId")
+            .or_else(|| payload_string(&value, "user_id"))
+            .or_else(|| payload_string(&value, "wxid"));
+        let token = payload_string(&value, "token")
+            .or_else(|| payload_string(&value, "botToken"))
+            .or_else(|| payload_string(&value, "accessToken"));
+        let connected = value
+            .get("connected")
+            .and_then(|item| item.as_bool())
+            .unwrap_or(false)
+            || account_id.is_some()
+            || token.is_some();
+        if connected {
+            return Some(json!({
+                "connected": true,
+                "accountId": account_id,
+                "userId": user_id,
+                "token": token,
+                "sourcePath": path.display().to_string()
+            }));
+        }
+    }
+    None
+}
+
+pub(crate) fn read_text_file_or_empty(path: &Path) -> String {
+    fs::read_to_string(path).unwrap_or_default()
+}
+
+pub(crate) fn manuscript_layouts_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    Ok(workspace_root(state)?.join("manuscript-layouts.json"))
+}
+
+pub(crate) fn default_indexing_stats() -> Value {
+    json!({
+        "isIndexing": false,
+        "totalQueueLength": 0,
+        "activeItems": [],
+        "queuedItems": [],
+        "processedCount": 0,
+        "totalStats": {
+            "vectors": 0,
+            "documents": 0
+        }
+    })
+}
+
+pub(crate) fn emit_space_changed(app: &AppHandle, active_space_id: &str) {
+    let _ = app.emit(
+        "space:changed",
+        json!({ "spaceId": active_space_id, "activeSpaceId": active_space_id }),
+    );
+}
+
+pub(crate) fn emit_space_renamed(app: &AppHandle, active_space_id: &str, space_name: &str) {
+    let _ = app.emit(
+        "space:changed",
+        json!({
+            "spaceId": active_space_id,
+            "activeSpaceId": active_space_id,
+            "spaceName": space_name,
+            "changeType": "rename",
+        }),
+    );
+}

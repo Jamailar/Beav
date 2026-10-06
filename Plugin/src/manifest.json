@@ -1,0 +1,124 @@
+{
+  "manifest_version": 3,
+  "name": "Beav",
+  "description": "将网页、链接、选中文字、图片、小红书、抖音、Bilibili、快手、TikTok、Reddit、X、Instagram 和 YouTube 内容保存到 Beav。",
+  "version": "2.5.0",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "activeTab",
+    "alarms",
+    "bookmarks",
+    "contextMenus",
+    "clipboardRead",
+    "clipboardWrite",
+    "debugger",
+    "downloads",
+    "downloads.ui",
+    "favicon",
+    "history",
+    "nativeMessaging",
+    "notifications",
+    "readingList",
+    "scripting",
+    "sessions",
+    "sidePanel",
+    "storage",
+    "tabGroups",
+    "tabs",
+    "topSites",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:*/*",
+    "http://localhost:*/*",
+    "http://127.0.0.1:31937/*",
+    "http://localhost:31937/*",
+    "http://127.0.0.1:23456/*",
+    "http://localhost:23456/*",
+    "https://www.xiaohongshu.com/*",
+    "https://www.rednote.com/*",
+    "https://edith.xiaohongshu.com/*",
+    "https://pgy.xiaohongshu.com/*",
+    "https://www.douyin.com/*",
+    "https://www.kuaishou.com/*",
+    "https://live.kuaishou.com/*",
+    "https://www.tiktok.com/*",
+    "https://www.bilibili.com/*",
+    "https://space.bilibili.com/*",
+    "https://search.bilibili.com/*",
+    "https://b23.tv/*",
+    "https://reddit.com/*",
+    "https://www.reddit.com/*",
+    "https://old.reddit.com/*",
+    "https://x.com/*",
+    "https://www.x.com/*",
+    "https://mobile.x.com/*",
+    "https://twitter.com/*",
+    "https://www.twitter.com/*",
+    "https://mobile.twitter.com/*",
+    "https://instagram.com/*",
+    "https://www.instagram.com/*",
+    "https://mp.weixin.qq.com/*",
+    "https://zhihu.com/*",
+    "https://www.zhihu.com/*",
+    "https://zhuanlan.zhihu.com/*",
+    "https://*.xhscdn.com/*",
+    "https://*.rednotecdn.com/*",
+    "https://redbox.ziz.hk/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.xiaohongshu.com/*",
+        "https://www.rednote.com/*"
+      ],
+      "js": ["vendor/md5.min.js", "xhsBridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["pageObserver.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["pageRouteBridge.js", "images/cursor-chat.png"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "commands": {
+    "open-redbox-side-panel": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Open Beav browser control side panel"
+    },
+    "open-codex-side-panel": {
+      "description": "Open Codex-compatible browser control side panel"
+    }
+  },
+  "action": {
+    "default_title": "Beav",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "options_page": "settings.html",
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  }
+}

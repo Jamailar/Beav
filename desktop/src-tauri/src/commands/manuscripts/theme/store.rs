@@ -1,0 +1,382 @@
+use super::super::*;
+use super::bundled::{bundled_richpost_theme_ids, ensure_bundled_richpost_themes};
+#[path = "store/migration.rs"]
+mod migration;
+use serde_json::{json, Value};
+use std::collections::BTreeSet;
+use std::fs;
+
+pub(crate) fn richpost_theme_background_storage_dir(
+    package_path: &std::path::Path,
+    theme_id: &str,
+) -> std::path::PathBuf {
+    package_richpost_theme_assets_dir(package_path, &sanitize_richpost_theme_id_fragment(theme_id))
+}
+
+fn read_richpost_theme_spec_from_config_path(path: &std::path::Path) -> Option<RichpostThemeSpec> {
+    let raw = read_json_value_or(path, Value::Null);
+    let mut theme = serde_json::from_value::<RichpostThemeSpec>(raw).ok()?;
+    if theme.id.trim().is_empty() || theme.label.trim().is_empty() {
+        return None;
+    }
+    if theme.source.trim().is_empty() {
+        theme.source = "custom".to_string();
+    }
+    Some(theme)
+}
+
+pub(super) fn resolve_richpost_theme_config_path_in_root(
+    root: &std::path::Path,
+    theme_id: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(theme_id) = theme_id.map(str::trim).filter(|value| !value.is_empty()) {
+        candidates.push(root.join(package_richpost_theme_config_file_name(theme_id)));
+    }
+    if let Some(root_name) = root.file_name().and_then(|value| value.to_str()) {
+        let normalized = sanitize_richpost_theme_id_fragment(root_name);
+        if !normalized.is_empty() {
+            let candidate = root.join(package_richpost_theme_config_file_name(&normalized));
+            if !candidates.iter().any(|item| item == &candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    let legacy_candidate = root.join("theme.json");
+    if !candidates.iter().any(|item| item == &legacy_candidate) {
+        candidates.push(legacy_candidate);
+    }
+    for candidate in &candidates {
+        if candidate.is_file() {
+            return Some(candidate.clone());
+        }
+    }
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        if read_richpost_theme_spec_from_config_path(&path).is_some() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+pub(super) fn read_richpost_theme_spec_from_root(
+    root: &std::path::Path,
+) -> Option<RichpostThemeSpec> {
+    let config_path = resolve_richpost_theme_config_path_in_root(root, None)?;
+    read_richpost_theme_spec_from_config_path(&config_path)
+}
+
+pub(crate) fn resolve_richpost_theme_background_absolute_path(
+    package_path: &std::path::Path,
+    relative_path: &str,
+) -> Option<std::path::PathBuf> {
+    let normalized = normalize_relative_path(relative_path);
+    if normalized.is_empty() {
+        return None;
+    }
+    let workspace_candidate = package_workspace_root_path(package_path).join(&normalized);
+    if workspace_candidate.is_file() {
+        return Some(workspace_candidate);
+    }
+    let package_candidate = package_path.join(&normalized);
+    if package_candidate.is_file() {
+        return Some(package_candidate);
+    }
+    None
+}
+
+pub(crate) fn global_richpost_theme_background_relative_path(
+    package_path: &std::path::Path,
+    theme_id: &str,
+    file_name: &str,
+) -> String {
+    let target_path = richpost_theme_background_storage_dir(package_path, theme_id).join(file_name);
+    if let Ok(relative) = target_path.strip_prefix(package_workspace_root_path(package_path)) {
+        normalize_relative_path(relative.to_string_lossy().as_ref())
+    } else {
+        normalize_relative_path(target_path.to_string_lossy().as_ref())
+    }
+}
+
+pub(crate) fn richpost_theme_background_css_vars(
+    package_path: Option<&std::path::Path>,
+    theme: &RichpostThemeSpec,
+    role: &str,
+) -> serde_json::Map<String, Value> {
+    let mut vars = serde_json::Map::new();
+    let relative = richpost_theme_background_relative_path(theme, role);
+    if relative.trim().is_empty() {
+        return vars;
+    }
+    let Some(package_path) = package_path else {
+        return vars;
+    };
+    let Some(absolute) = resolve_richpost_theme_background_absolute_path(package_path, &relative)
+    else {
+        return vars;
+    };
+    if !absolute.is_file() {
+        return vars;
+    }
+    let (mime_type, _kind, _) = guess_mime_and_kind(&absolute);
+    let background_bytes = match fs::read(&absolute) {
+        Ok(bytes) => bytes,
+        Err(_error) => return vars,
+    };
+    let data_url = format!(
+        "data:{};base64,{}",
+        mime_type,
+        base64::engine::general_purpose::STANDARD.encode(background_bytes)
+    );
+    vars.insert(
+        "--rb-background-image".to_string(),
+        json!(format!("url(\"{}\")", data_url)),
+    );
+    vars
+}
+
+pub(super) fn richpost_theme_background_relative_file_name(
+    theme_id: &str,
+    role: &str,
+    extension: &str,
+) -> String {
+    let role_fragment = sanitize_richpost_master_name(role).unwrap_or_else(|| "body".to_string());
+    let theme_fragment = sanitize_richpost_theme_id_fragment(theme_id);
+    let timestamp = now_i64();
+    if extension.trim().is_empty() {
+        format!("{timestamp}-{theme_fragment}-{role_fragment}")
+    } else {
+        format!(
+            "{timestamp}-{theme_fragment}-{role_fragment}.{}",
+            extension.trim_matches('.')
+        )
+    }
+}
+
+pub(super) fn read_custom_richpost_theme_specs_from_dirs(
+    package_path: &std::path::Path,
+) -> Vec<RichpostThemeSpec> {
+    let themes_dir = package_richpost_theme_store_dir(package_path);
+    let mut items = Vec::new();
+    if let Ok(entries) = fs::read_dir(&themes_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if let Some(theme) = read_richpost_theme_spec_from_root(&path) {
+                items.push(theme);
+            }
+        }
+    }
+    items.sort_by(|left, right| left.label.cmp(&right.label).then(left.id.cmp(&right.id)));
+    items
+}
+
+fn write_custom_richpost_theme_index(
+    package_path: &std::path::Path,
+    themes: &[RichpostThemeSpec],
+) -> Result<(), String> {
+    let items = themes
+        .iter()
+        .map(|theme| {
+            json!({
+                "id": theme.id,
+                "label": theme.label,
+                "description": theme.description,
+                "source": theme.source,
+            })
+        })
+        .collect::<Vec<_>>();
+    write_json_value(
+        &package_richpost_themes_path(package_path),
+        &json!({
+            "version": 2,
+            "items": items,
+        }),
+    )
+}
+
+pub(crate) fn read_custom_richpost_theme_specs(
+    package_path: &std::path::Path,
+) -> Vec<RichpostThemeSpec> {
+    let _ = ensure_bundled_richpost_themes(package_path);
+    let _ = migration::migrate_legacy_richpost_theme_store(package_path);
+    read_custom_richpost_theme_specs_from_dirs(package_path)
+}
+
+pub(crate) fn write_custom_richpost_theme_specs(
+    package_path: &std::path::Path,
+    themes: &[RichpostThemeSpec],
+) -> Result<(), String> {
+    ensure_bundled_richpost_themes(package_path)?;
+    let themes_dir = package_richpost_theme_store_dir(package_path);
+    fs::create_dir_all(&themes_dir).map_err(|error| error.to_string())?;
+    let mut keep_ids = BTreeSet::new();
+    for theme_id in bundled_richpost_theme_ids() {
+        keep_ids.insert(sanitize_richpost_theme_id_fragment(theme_id));
+    }
+    for theme in themes {
+        let theme_id = sanitize_richpost_theme_id_fragment(&theme.id);
+        keep_ids.insert(theme_id.clone());
+        let root = package_richpost_theme_root_dir(package_path, &theme_id);
+        fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+        let legacy_config_path = root.join("theme.json");
+        if legacy_config_path.is_file() {
+            let _ = fs::remove_file(&legacy_config_path);
+        }
+        write_json_value(
+            &package_richpost_theme_config_path(package_path, &theme_id),
+            &richpost_theme_spec_storage_value(theme),
+        )?;
+    }
+    if let Ok(entries) = fs::read_dir(&themes_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if keep_ids.contains(&file_name) {
+                continue;
+            }
+            if file_name == "richpost-theme-assets" {
+                continue;
+            }
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+    write_custom_richpost_theme_index(package_path, themes)?;
+    write_json_value(
+        &legacy_package_richpost_themes_path(package_path),
+        &json!({
+            "version": 1,
+            "items": themes.iter().map(richpost_theme_spec_storage_value).collect::<Vec<_>>(),
+        }),
+    )
+}
+
+pub(crate) fn richpost_theme_spec_storage_value(theme: &RichpostThemeSpec) -> Value {
+    json!({
+        "id": theme.id,
+        "label": theme.label,
+        "description": theme.description,
+        "shellBg": theme.shell_bg,
+        "previewCardBg": theme.preview_card_bg,
+        "previewCardBorder": theme.preview_card_border,
+        "previewCardShadow": theme.preview_card_shadow,
+        "pageBg": theme.page_bg,
+        "surfaceBg": theme.surface_bg,
+        "surfaceBorder": theme.surface_border,
+        "surfaceShadow": theme.surface_shadow,
+        "surfaceRadius": theme.surface_radius,
+        "imageRadius": theme.image_radius,
+        "headingColor": theme.heading_color,
+        "bodyColor": theme.body_color,
+        "text": theme.text,
+        "muted": theme.muted,
+        "accent": theme.accent,
+        "headingFont": theme.heading_font,
+        "bodyFont": theme.body_font,
+        "coverFrame": theme.cover_frame,
+        "bodyFrame": theme.body_frame,
+        "endingFrame": theme.ending_frame,
+        "coverBackgroundPath": theme.cover_background_path,
+        "bodyBackgroundPath": theme.body_background_path,
+        "endingBackgroundPath": theme.ending_background_path,
+        "source": theme.source
+    })
+}
+
+pub(crate) fn richpost_theme_spec_from_manifest_snapshot(
+    manifest: &Value,
+) -> Option<RichpostThemeSpec> {
+    let raw = manifest.get("richpostThemeSnapshot")?;
+    let mut theme = serde_json::from_value::<RichpostThemeSpec>(raw.clone()).ok()?;
+    if theme.id.trim().is_empty() || theme.label.trim().is_empty() {
+        return None;
+    }
+    if theme.source.trim().is_empty() {
+        theme.source = "custom".to_string();
+    }
+    Some(theme)
+}
+
+pub(crate) fn copy_if_exists(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), String> {
+    if !source.is_file() {
+        return Ok(());
+    }
+    let content = fs::read(source).map_err(|error| error.to_string())?;
+    ensure_parent_dir(target)?;
+    fs::write(target, content).map_err(|error| error.to_string())
+}
+
+pub(crate) fn richpost_theme_root_tokens_path_for_theme(
+    package_path: &std::path::Path,
+    theme: &RichpostThemeSpec,
+) -> Option<std::path::PathBuf> {
+    let theme_id = sanitize_richpost_theme_id_fragment(&theme.id);
+    if theme_id.is_empty() {
+        return None;
+    }
+    let path = package_richpost_theme_tokens_path(package_path, &theme_id);
+    path.is_file().then_some(path)
+}
+
+pub(crate) fn richpost_theme_root_master_path_for_theme(
+    package_path: &std::path::Path,
+    theme: &RichpostThemeSpec,
+    master_name: &str,
+) -> Option<std::path::PathBuf> {
+    let theme_id = sanitize_richpost_theme_id_fragment(&theme.id);
+    let sanitized_master = sanitize_richpost_master_name(master_name)?;
+    if theme_id.is_empty() {
+        return None;
+    }
+    let path = package_richpost_theme_master_path(package_path, &theme_id, &sanitized_master);
+    path.is_file().then_some(path)
+}
+
+pub(crate) fn richpost_theme_catalog_for_package(
+    package_path: Option<&std::path::Path>,
+) -> Vec<RichpostThemeSpec> {
+    let mut catalog = richpost_theme_catalog_specs();
+    if let Some(path) = package_path {
+        catalog.extend(read_custom_richpost_theme_specs(path));
+    }
+    catalog
+}
+
+pub(crate) fn richpost_theme_spec_from_manifest(
+    package_path: Option<&std::path::Path>,
+    manifest: &Value,
+) -> RichpostThemeSpec {
+    let theme_id = manifest
+        .get("richpostThemeId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(theme_id) = theme_id {
+        if let Some(theme) = richpost_theme_catalog_for_package(package_path)
+            .into_iter()
+            .find(|theme| theme.id == theme_id)
+        {
+            return theme;
+        }
+    }
+    if let Some(theme) = richpost_theme_spec_from_manifest_snapshot(manifest) {
+        return theme;
+    }
+    default_richpost_theme_spec()
+}

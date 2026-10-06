@@ -1,0 +1,337 @@
+use super::*;
+
+use super::editor_project_ffmpeg::handle_editor_project_ffmpeg_channel;
+use super::editor_project_markers::handle_editor_project_marker_channel;
+use super::editor_runtime_state::update_editor_runtime_state;
+
+pub(super) fn handle_editor_project_channel(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
+    if let Some(result) = handle_editor_project_marker_channel(state, channel, payload) {
+        return Some(result);
+    }
+    if let Some(result) = handle_editor_project_ffmpeg_channel(app, state, channel, payload) {
+        return Some(result);
+    }
+
+    match channel {
+        "manuscripts:get-editor-project" => Some((|| -> Result<Value, String> {
+            let file_path = payload_value_as_string(&payload)
+                .or_else(|| payload_string(&payload, "filePath"))
+                .unwrap_or_default();
+            if file_path.is_empty() {
+                return Ok(json!({ "success": false, "error": "filePath is required" }));
+            }
+            let full_path = resolve_manuscript_path(state, &file_path)?;
+            if !full_path.is_dir() {
+                return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+            }
+            Ok(json!({
+                "success": true,
+                "project": ensure_editor_project(&full_path)?,
+                "state": get_manuscript_package_state(&full_path)?
+            }))
+        })()),
+        "manuscripts:save-editor-project" => Some((|| -> Result<Value, String> {
+            let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+            let mut project = payload_field(&payload, "project")
+                .cloned()
+                .unwrap_or(Value::Null);
+            if file_path.is_empty() {
+                return Ok(json!({ "success": false, "error": "filePath is required" }));
+            }
+            let full_path = resolve_manuscript_path(state, &file_path)?;
+            if !full_path.is_dir() {
+                return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+            }
+            let existing_project = ensure_editor_project(&full_path)?;
+            let next_script_body = project
+                .pointer("/script/body")
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string);
+            let existing_script_body = existing_project
+                .pointer("/script/body")
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string);
+            if let Some(script_body) = next_script_body.as_deref() {
+                if existing_script_body.as_deref() != Some(script_body) {
+                    mark_editor_project_script_pending(&mut project, script_body, "user")?;
+                } else {
+                    let _ = ensure_editor_project_ai_state(&mut project)?;
+                }
+            }
+            let _ = hydrate_editor_project_motion_from_remotion(&mut project, &full_path)?;
+            if existing_project != project {
+                push_editor_project_undo_snapshot(state, &file_path, &existing_project)?;
+            }
+            write_json_value(&package_editor_project_path(&full_path), &project)?;
+            if let Some(script_body) = next_script_body.as_deref() {
+                let manifest =
+                    read_json_value_or(package_manifest_path(&full_path).as_path(), json!({}));
+                let entry_path = package_entry_path(&full_path, &file_path, Some(&manifest));
+                write_text_file(&entry_path, script_body)?;
+            }
+            Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+        })()),
+        "manuscripts:duplicate-editor-project-clip" => Some((|| -> Result<Value, String> {
+            let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+            let clip_id = payload_string(&payload, "clipId").unwrap_or_default();
+            if file_path.is_empty() || clip_id.is_empty() {
+                return Ok(
+                    json!({ "success": false, "error": "filePath and clipId are required" }),
+                );
+            }
+            let full_path = resolve_manuscript_path(state, &file_path)?;
+            if !full_path.is_dir() {
+                return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+            }
+            let mut project = ensure_editor_project(&full_path)?;
+            push_editor_project_undo_snapshot(state, &file_path, &project)?;
+            let items = project
+                .pointer_mut("/items")
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| "Editor project items missing".to_string())?;
+            let Some(source_item) = items
+                .iter()
+                .find(|item| item.get("id").and_then(Value::as_str) == Some(clip_id.as_str()))
+                .cloned()
+            else {
+                return Ok(
+                    json!({ "success": false, "error": "Clip not found in editor project" }),
+                );
+            };
+            let mut duplicate = source_item;
+            let from_ms = payload_field(&payload, "fromMs")
+                .and_then(Value::as_i64)
+                .unwrap_or_else(|| {
+                    duplicate.get("fromMs").and_then(Value::as_i64).unwrap_or(0)
+                        + duplicate
+                            .get("durationMs")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0)
+                });
+            if let Some(object) = duplicate.as_object_mut() {
+                object.insert("id".to_string(), json!(create_timeline_clip_id()));
+                object.insert("fromMs".to_string(), json!(from_ms.max(0)));
+                if let Some(track_id) = payload_string(&payload, "trackId") {
+                    object.insert("trackId".to_string(), json!(track_id));
+                }
+            }
+            items.push(duplicate);
+            write_json_value(&package_editor_project_path(&full_path), &project)?;
+            Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+        })()),
+        "manuscripts:replace-editor-project-clip-asset" => Some((|| -> Result<Value, String> {
+            let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+            let clip_id = payload_string(&payload, "clipId").unwrap_or_default();
+            let asset_id = payload_string(&payload, "assetId").unwrap_or_default();
+            if file_path.is_empty() || clip_id.is_empty() || asset_id.is_empty() {
+                return Ok(
+                    json!({ "success": false, "error": "filePath, clipId, and assetId are required" }),
+                );
+            }
+            let full_path = resolve_manuscript_path(state, &file_path)?;
+            if !full_path.is_dir() {
+                return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+            }
+            let mut project = ensure_editor_project(&full_path)?;
+            push_editor_project_undo_snapshot(state, &file_path, &project)?;
+            let items = project
+                .pointer_mut("/items")
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| "Editor project items missing".to_string())?;
+            let Some(target_item) = items
+                .iter_mut()
+                .find(|item| item.get("id").and_then(Value::as_str) == Some(clip_id.as_str()))
+            else {
+                return Ok(
+                    json!({ "success": false, "error": "Clip not found in editor project" }),
+                );
+            };
+            if let Some(object) = target_item.as_object_mut() {
+                object.insert("assetId".to_string(), json!(asset_id));
+            }
+            write_json_value(&package_editor_project_path(&full_path), &project)?;
+            Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+        })()),
+        "manuscripts:undo-editor-project" => Some((|| -> Result<Value, String> {
+            let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+            if file_path.is_empty() {
+                return Ok(json!({ "success": false, "error": "filePath is required" }));
+            }
+            let full_path = resolve_manuscript_path(state, &file_path)?;
+            if !full_path.is_dir() {
+                return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+            }
+            restore_editor_project_from_history(state, &file_path, &full_path, "undo")
+        })()),
+        "manuscripts:redo-editor-project" => Some((|| -> Result<Value, String> {
+            let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+            if file_path.is_empty() {
+                return Ok(json!({ "success": false, "error": "filePath is required" }));
+            }
+            let full_path = resolve_manuscript_path(state, &file_path)?;
+            if !full_path.is_dir() {
+                return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+            }
+            restore_editor_project_from_history(state, &file_path, &full_path, "redo")
+        })()),
+        "manuscripts:import-legacy-editor-project" => Some((|| -> Result<Value, String> {
+            let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+            if file_path.is_empty() {
+                return Ok(json!({ "success": false, "error": "filePath is required" }));
+            }
+            let full_path = resolve_manuscript_path(state, &file_path)?;
+            if !full_path.is_dir() {
+                return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+            }
+            let file_name = full_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("Untitled");
+            let project = build_editor_project_from_legacy(&full_path, file_name)?;
+            write_json_value(&package_editor_project_path(&full_path), &project)?;
+            Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+        })()),
+        "manuscripts:apply-editor-commands" => Some((|| -> Result<Value, String> {
+            let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+            if file_path.is_empty() {
+                return Ok(json!({ "success": false, "error": "filePath is required" }));
+            }
+            let commands = payload_field(&payload, "commands")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let full_path = resolve_manuscript_path(state, &file_path)?;
+            if !full_path.is_dir() {
+                return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+            }
+            let mut project = ensure_editor_project(&full_path)?;
+            apply_editor_commands(&mut project, &commands)?;
+            write_json_value(&package_editor_project_path(&full_path), &project)?;
+            Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+        })()),
+        "manuscripts:generate-motion-items" => Some((|| -> Result<Value, String> {
+            let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+            let instructions = payload_string(&payload, "instructions").unwrap_or_default();
+            if file_path.is_empty() {
+                return Ok(json!({ "success": false, "error": "filePath is required" }));
+            }
+            let selected_item_ids = payload_field(&payload, "selectedItemIds")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|value| value.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>();
+            let full_path = resolve_manuscript_path(state, &file_path)?;
+            if !full_path.is_dir() {
+                return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+            }
+            let mut project = ensure_editor_project(&full_path)?;
+            let (motion_items, brief) = generate_motion_items_for_project(
+                state,
+                &project,
+                &instructions,
+                &selected_item_ids,
+                payload_field(&payload, "modelConfig"),
+            )?;
+            ensure_motion_track(&mut project)?;
+            let target_bind_ids = motion_items
+                .iter()
+                .filter_map(|item| {
+                    item.get("bindItemId")
+                        .and_then(|value| value.as_str())
+                        .map(ToString::to_string)
+                })
+                .collect::<Vec<_>>();
+            editor_project_items_mut(&mut project)?.retain(|item| {
+                if item.get("type").and_then(|value| value.as_str()) != Some("motion") {
+                    return true;
+                }
+                let bind_item_id = item
+                    .get("bindItemId")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                !target_bind_ids.iter().any(|value| value == bind_item_id)
+            });
+            editor_project_items_mut(&mut project)?.extend(motion_items.clone());
+            if let Some(ai) = project.get_mut("ai").and_then(Value::as_object_mut) {
+                ai.insert("lastMotionBrief".to_string(), json!(brief.clone()));
+                ai.insert("motionPrompt".to_string(), json!(instructions));
+            }
+            write_json_value(&package_editor_project_path(&full_path), &project)?;
+            Ok(json!({
+                "success": true,
+                "brief": brief,
+                "items": motion_items,
+                "state": get_manuscript_package_state(&full_path)?
+            }))
+        })()),
+        "manuscripts:generate-editor-commands" => Some((|| -> Result<Value, String> {
+            let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+            let instructions = payload_string(&payload, "instructions").unwrap_or_default();
+            if file_path.is_empty() {
+                return Ok(json!({ "success": false, "error": "filePath is required" }));
+            }
+            let full_path = resolve_manuscript_path(state, &file_path)?;
+            if !full_path.is_dir() {
+                return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+            }
+            let project = ensure_editor_project(&full_path)?;
+            let (commands, brief) = generate_editor_commands_for_project(
+                state,
+                &project,
+                &instructions,
+                payload_field(&payload, "modelConfig"),
+            )?;
+            Ok(json!({
+                "success": true,
+                "brief": brief,
+                "commands": commands
+            }))
+        })()),
+        "manuscripts:get-editor-runtime-state" => Some((|| -> Result<Value, String> {
+            let file_path = payload_value_as_string(&payload)
+                .or_else(|| payload_string(&payload, "filePath"))
+                .unwrap_or_default();
+            if file_path.is_empty() {
+                return Ok(json!({ "success": false, "error": "filePath is required" }));
+            }
+            Ok(json!({
+                "success": true,
+                "state": editor_runtime_state_value(state, &file_path)?
+            }))
+        })()),
+        "manuscripts:get-remotion-context" => Some((|| -> Result<Value, String> {
+            let file_path = payload_value_as_string(&payload)
+                .or_else(|| payload_string(&payload, "filePath"))
+                .unwrap_or_default();
+            if file_path.is_empty() {
+                return Ok(json!({ "success": false, "error": "filePath is required" }));
+            }
+            let full_path = resolve_manuscript_path(state, &file_path)?;
+            if !full_path.is_dir() {
+                return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
+            }
+            Ok(json!({
+                "success": true,
+                "state": remotion_context_value(state, &full_path, &file_path)?
+            }))
+        })()),
+        "manuscripts:update-editor-runtime-state" => Some((|| -> Result<Value, String> {
+            let file_path = payload_string(&payload, "filePath").unwrap_or_default();
+            if file_path.is_empty() {
+                return Ok(json!({ "success": false, "error": "filePath is required" }));
+            }
+            Ok(json!({
+                "success": true,
+                "state": update_editor_runtime_state(state, &file_path, payload)?
+            }))
+        })()),
+        _ => None,
+    }
+}

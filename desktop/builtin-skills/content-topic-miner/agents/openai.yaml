@@ -1,0 +1,4 @@
+interface:
+  display_name: "自媒体选题编排"
+  short_description: "Orchestrate profile-aware topic discovery across knowledge, wander, comments, history, and trends"
+  default_prompt: "Use $content-topic-miner to generate source-backed self-media topic candidates for this account."

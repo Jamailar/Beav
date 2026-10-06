@@ -1,0 +1,11 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Reddit">
+  <rect width="64" height="64" rx="16" fill="#ff4500"/>
+  <circle cx="32" cy="35" r="18" fill="#fff"/>
+  <circle cx="24" cy="33" r="3.5" fill="#ff4500"/>
+  <circle cx="40" cy="33" r="3.5" fill="#ff4500"/>
+  <path d="M24 42c4.8 3.1 11.2 3.1 16 0" fill="none" stroke="#ff4500" stroke-width="3" stroke-linecap="round"/>
+  <path d="M33.5 20.5l3-9 8 2" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="47" cy="14.5" r="4" fill="#fff"/>
+  <circle cx="14" cy="33" r="5.5" fill="#fff"/>
+  <circle cx="50" cy="33" r="5.5" fill="#fff"/>
+</svg>

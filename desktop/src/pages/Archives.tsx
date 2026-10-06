@@ -1,0 +1,927 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+    Archive,
+    Plus,
+    Search,
+    Upload,
+    Sparkles,
+    FileText,
+    Filter,
+    Star,
+    Tag,
+    Target,
+    UserRound,
+    Pencil,
+    Trash2,
+    X,
+    Check
+} from 'lucide-react';
+import { appConfirm } from '../utils/appDialogs';
+import { clsx } from 'clsx';
+import { APP_BRAND } from '../config/brand';
+
+interface ArchiveProfileRecord {
+    id: string;
+    name: string;
+    platform?: string;
+    goal?: string;
+    domain?: string;
+    audience?: string;
+    tone_tags?: string[];
+    created_at: number;
+    updated_at: number;
+}
+
+interface ArchiveSampleRecord {
+    id: string;
+    profile_id: string;
+    title?: string;
+    content?: string;
+    excerpt?: string;
+    tags?: string[];
+    images?: string[];
+    platform?: string;
+    source_url?: string;
+    sample_date?: string;
+    is_featured?: number;
+    created_at: number;
+}
+
+interface ArchiveProfile {
+    id: string;
+    name: string;
+    platform: string;
+    goal: string;
+    domain: string;
+    audience: string;
+    toneTags: string[];
+    createdAt: number;
+    updatedAt: number;
+}
+
+interface ArchiveSample {
+    id: string;
+    profileId: string;
+    title: string;
+    content: string;
+    excerpt: string;
+    tags: string[];
+    platform: string;
+    sourceUrl: string;
+    sampleDate: string;
+    isFeatured: boolean;
+    createdAt: number;
+}
+
+interface AccountSummaryRecord {
+    id: string;
+    platform?: string;
+    platformUserId?: string;
+    username?: string;
+    homepageUrl?: string;
+    postCount?: number;
+    lastImportedAt?: string;
+    lastLearnedAt?: string;
+    updatedAt?: string;
+}
+
+const normalizeProfile = (profile: ArchiveProfileRecord): ArchiveProfile => ({
+    id: profile.id,
+    name: profile.name,
+    platform: profile.platform || '',
+    goal: profile.goal || '',
+    domain: profile.domain || '',
+    audience: profile.audience || '',
+    toneTags: profile.tone_tags || [],
+    createdAt: profile.created_at,
+    updatedAt: profile.updated_at
+});
+
+const normalizeSample = (sample: ArchiveSampleRecord): ArchiveSample => ({
+    id: sample.id,
+    profileId: sample.profile_id,
+    title: sample.title || '未命名样本',
+    content: sample.content || '',
+    excerpt: sample.excerpt || '',
+    tags: sample.tags || [],
+    platform: sample.platform || '',
+    sourceUrl: sample.source_url || '',
+    sampleDate: sample.sample_date || '',
+    isFeatured: Boolean(sample.is_featured),
+    createdAt: sample.created_at
+});
+
+const formatDate = (sample: ArchiveSample) => {
+    if (sample.sampleDate) return sample.sampleDate;
+    const date = new Date(sample.createdAt);
+    return Number.isNaN(date.valueOf()) ? '' : date.toISOString().slice(0, 10);
+};
+
+export function Archives({ isActive = true }: { isActive?: boolean }) {
+    const [profiles, setProfiles] = useState<ArchiveProfile[]>([]);
+    const [samples, setSamples] = useState<ArchiveSample[]>([]);
+    const [accounts, setAccounts] = useState<AccountSummaryRecord[]>([]);
+    const [selectedProfileId, setSelectedProfileId] = useState('');
+    const [selectedSampleId, setSelectedSampleId] = useState('');
+    const [isLoadingProfiles, setIsLoadingProfiles] = useState(true);
+    const [isLoadingSamples, setIsLoadingSamples] = useState(true);
+    const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+    const [isSampleModalOpen, setIsSampleModalOpen] = useState(false);
+    const [editingProfile, setEditingProfile] = useState<ArchiveProfile | null>(null);
+    const [editingSample, setEditingSample] = useState<ArchiveSample | null>(null);
+    const profilesRef = useRef<ArchiveProfile[]>([]);
+    const samplesRef = useRef<ArchiveSample[]>([]);
+    const selectedProfileIdRef = useRef('');
+    const hasLoadedProfilesSnapshotRef = useRef(false);
+    const hasLoadedSamplesSnapshotRef = useRef(false);
+    const loadProfilesRequestRef = useRef(0);
+    const loadSamplesRequestRef = useRef(0);
+
+    const [profileForm, setProfileForm] = useState({
+        name: '',
+        platform: '',
+        goal: '',
+        domain: '',
+        audience: '',
+        toneTags: ''
+    });
+
+    const [sampleForm, setSampleForm] = useState({
+        title: '',
+        content: '',
+        tags: '',
+        platform: '',
+        sampleDate: '',
+        isFeatured: false
+    });
+
+    const selectedProfile = useMemo(
+        () => profiles.find(profile => profile.id === selectedProfileId) || null,
+        [profiles, selectedProfileId]
+    );
+
+    const selectedSample = useMemo(
+        () => samples.find(sample => sample.id === selectedSampleId) || null,
+        [samples, selectedSampleId]
+    );
+
+    useEffect(() => {
+        profilesRef.current = profiles;
+    }, [profiles]);
+
+    useEffect(() => {
+        samplesRef.current = samples;
+    }, [samples]);
+
+    useEffect(() => {
+        selectedProfileIdRef.current = selectedProfileId;
+    }, [selectedProfileId]);
+
+    const loadProfiles = useCallback(async () => {
+        const requestId = loadProfilesRequestRef.current + 1;
+        loadProfilesRequestRef.current = requestId;
+        const hasLocalProfiles = hasLoadedProfilesSnapshotRef.current || profilesRef.current.length > 0;
+        if (!hasLocalProfiles) {
+            setIsLoadingProfiles(true);
+        }
+        try {
+            const result = await window.ipcRenderer.archives.list() as ArchiveProfileRecord[];
+            if (requestId !== loadProfilesRequestRef.current) return;
+            const list = (result || []).map(normalizeProfile);
+            setProfiles(list);
+            hasLoadedProfilesSnapshotRef.current = true;
+            if (list.length > 0) {
+                setSelectedProfileId(prev => {
+                    const exists = list.some(profile => profile.id === prev);
+                    return exists ? prev : list[0].id;
+                });
+            } else {
+                setSelectedProfileId('');
+                setSamples([]);
+                setSelectedSampleId('');
+                setIsLoadingSamples(false);
+            }
+        } catch (error) {
+            if (requestId !== loadProfilesRequestRef.current) return;
+            console.error('Failed to load archives:', error);
+        } finally {
+            if (requestId === loadProfilesRequestRef.current) {
+                setIsLoadingProfiles(false);
+            }
+        }
+    }, []);
+
+    const loadAccounts = useCallback(async () => {
+        try {
+            const result = await window.ipcRenderer.accounts.list() as { accounts?: AccountSummaryRecord[] };
+            setAccounts(Array.isArray(result?.accounts) ? result.accounts : []);
+        } catch (error) {
+            console.error('Failed to load account profiles:', error);
+        }
+    }, []);
+
+    const loadSamples = useCallback(async (profileId: string) => {
+        if (!profileId) return;
+        const requestId = loadSamplesRequestRef.current + 1;
+        loadSamplesRequestRef.current = requestId;
+        const hasLocalSamples = (hasLoadedSamplesSnapshotRef.current || samplesRef.current.length > 0) && selectedProfileIdRef.current === profileId;
+        if (!hasLocalSamples) {
+            setIsLoadingSamples(true);
+        }
+        try {
+            const result = await window.ipcRenderer.archives.samples.list(profileId) as ArchiveSampleRecord[];
+            if (requestId !== loadSamplesRequestRef.current) return;
+            const list = (result || []).map(normalizeSample);
+            setSamples(list);
+            hasLoadedSamplesSnapshotRef.current = true;
+            setSelectedSampleId(list[0]?.id || '');
+        } catch (error) {
+            if (requestId !== loadSamplesRequestRef.current) return;
+            console.error('Failed to load samples:', error);
+        } finally {
+            if (requestId === loadSamplesRequestRef.current) {
+                setIsLoadingSamples(false);
+            }
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!isActive) return;
+        void loadProfiles();
+        void loadAccounts();
+    }, [isActive, loadAccounts, loadProfiles]);
+
+    useEffect(() => {
+        if (!isActive) return;
+        if (selectedProfileId) {
+            void loadSamples(selectedProfileId);
+        }
+    }, [isActive, loadSamples, selectedProfileId]);
+
+    useEffect(() => {
+        if (!isActive) return;
+        const handleSampleCreated = (_event: unknown, data: { profileId: string }) => {
+            if (data.profileId === selectedProfileIdRef.current) {
+                void loadSamples(selectedProfileIdRef.current);
+            }
+        };
+        window.ipcRenderer.archives.onSampleCreated(handleSampleCreated);
+        return () => window.ipcRenderer.archives.offSampleCreated(handleSampleCreated);
+    }, [isActive, loadSamples]);
+
+    const openCreateProfile = () => {
+        setEditingProfile(null);
+        setProfileForm({
+            name: '',
+            platform: '',
+            goal: '',
+            domain: '',
+            audience: '',
+            toneTags: ''
+        });
+        setIsProfileModalOpen(true);
+    };
+
+    const openEditProfile = () => {
+        if (!selectedProfile) return;
+        setEditingProfile(selectedProfile);
+        setProfileForm({
+            name: selectedProfile.name,
+            platform: selectedProfile.platform,
+            goal: selectedProfile.goal,
+            domain: selectedProfile.domain,
+            audience: selectedProfile.audience,
+            toneTags: selectedProfile.toneTags.join(', ')
+        });
+        setIsProfileModalOpen(true);
+    };
+
+    const saveProfile = async () => {
+        const toneTags = profileForm.toneTags
+            .split(',')
+            .map(tag => tag.trim())
+            .filter(Boolean);
+
+        if (!profileForm.name.trim()) return;
+
+        if (editingProfile) {
+            await window.ipcRenderer.archives.update({
+                id: editingProfile.id,
+                name: profileForm.name.trim(),
+                platform: profileForm.platform.trim(),
+                goal: profileForm.goal.trim(),
+                domain: profileForm.domain.trim(),
+                audience: profileForm.audience.trim(),
+                toneTags
+            });
+        } else {
+            const created = await window.ipcRenderer.archives.create({
+                name: profileForm.name.trim(),
+                platform: profileForm.platform.trim(),
+                goal: profileForm.goal.trim(),
+                domain: profileForm.domain.trim(),
+                audience: profileForm.audience.trim(),
+                toneTags
+            }) as ArchiveProfileRecord;
+            const normalized = created ? normalizeProfile(created) : null;
+            if (normalized) {
+                setSelectedProfileId(normalized.id);
+            }
+        }
+
+        setIsProfileModalOpen(false);
+        await loadProfiles();
+    };
+
+    const deleteProfile = async () => {
+        if (!selectedProfile) return;
+        if (!(await appConfirm(`确定删除档案“${selectedProfile.name}”及其样本吗？`, { title: '删除档案', confirmLabel: '删除', tone: 'danger' }))) return;
+        await window.ipcRenderer.archives.delete(selectedProfile.id);
+        await loadProfiles();
+    };
+
+    const openCreateSample = () => {
+        if (!selectedProfile) return;
+        setEditingSample(null);
+        setSampleForm({
+            title: '',
+            content: '',
+            tags: '',
+            platform: selectedProfile.platform,
+            sampleDate: new Date().toISOString().slice(0, 10),
+            isFeatured: false
+        });
+        setIsSampleModalOpen(true);
+    };
+
+    const openEditSample = () => {
+        if (!selectedSample) return;
+        setEditingSample(selectedSample);
+        setSampleForm({
+            title: selectedSample.title,
+            content: selectedSample.content,
+            tags: selectedSample.tags.join(', '),
+            platform: selectedSample.platform,
+            sampleDate: selectedSample.sampleDate || formatDate(selectedSample),
+            isFeatured: selectedSample.isFeatured
+        });
+        setIsSampleModalOpen(true);
+    };
+
+    const saveSample = async () => {
+        if (!selectedProfile) return;
+        const tags = sampleForm.tags
+            .split(',')
+            .map(tag => tag.trim())
+            .filter(Boolean);
+
+        if (editingSample) {
+            await window.ipcRenderer.archives.samples.update({
+                id: editingSample.id,
+                profileId: selectedProfile.id,
+                title: sampleForm.title.trim(),
+                content: sampleForm.content.trim(),
+                tags,
+                platform: sampleForm.platform.trim(),
+                sampleDate: sampleForm.sampleDate,
+                isFeatured: sampleForm.isFeatured
+            });
+        } else {
+            await window.ipcRenderer.archives.samples.create({
+                profileId: selectedProfile.id,
+                title: sampleForm.title.trim(),
+                content: sampleForm.content.trim(),
+                tags,
+                platform: sampleForm.platform.trim(),
+                sampleDate: sampleForm.sampleDate,
+                isFeatured: sampleForm.isFeatured
+            });
+        }
+
+        setIsSampleModalOpen(false);
+        await loadSamples(selectedProfile.id);
+    };
+
+    const deleteSample = async () => {
+        if (!selectedSample) return;
+        if (!(await appConfirm(`确定删除样本“${selectedSample.title}”吗？`, { title: '删除样本', confirmLabel: '删除', tone: 'danger' }))) return;
+        await window.ipcRenderer.archives.samples.delete(selectedSample.id);
+        await loadSamples(selectedProfileId);
+    };
+
+    const markFeatured = async () => {
+        if (!selectedSample || !selectedProfile) return;
+        await window.ipcRenderer.archives.samples.update({
+            id: selectedSample.id,
+            profileId: selectedProfile.id,
+            title: selectedSample.title,
+            content: selectedSample.content,
+            tags: selectedSample.tags,
+            platform: selectedSample.platform,
+            sampleDate: selectedSample.sampleDate || formatDate(selectedSample),
+            isFeatured: true
+        });
+        await loadSamples(selectedProfile.id);
+    };
+
+    return (
+        <div className="flex h-full min-h-0">
+            <div className="w-72 border-r border-border bg-surface-secondary/30 flex flex-col">
+                <div className="p-4 border-b border-border">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-text-primary font-semibold">
+                            <Archive className="w-4 h-4" />
+                            档案
+                        </div>
+                        <button
+                            onClick={openCreateProfile}
+                            className="p-1.5 text-text-tertiary hover:text-accent-primary hover:bg-surface-primary rounded transition-colors"
+                        >
+                            <Plus className="w-4 h-4" />
+                        </button>
+                    </div>
+                    <div className="mt-3 relative">
+                        <Search className="w-4 h-4 text-text-tertiary absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                            className="w-full bg-surface-primary border border-border rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                            placeholder="搜索档案"
+                        />
+                    </div>
+                </div>
+                <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                    {isLoadingProfiles && profiles.length === 0 ? (
+                        <div className="text-xs text-text-tertiary px-2">加载中...</div>
+                    ) : profiles.length === 0 ? (
+                        <div className="text-xs text-text-tertiary px-2">暂无档案，先创建一个吧</div>
+                    ) : (
+                        profiles.map(profile => (
+                            <button
+                                key={profile.id}
+                                onClick={() => setSelectedProfileId(profile.id)}
+                                className={clsx(
+                                    'w-full text-left p-3 rounded-lg border transition-colors',
+                                    selectedProfileId === profile.id
+                                        ? 'bg-surface-primary border-border shadow-sm'
+                                        : 'bg-transparent border-transparent hover:bg-surface-primary'
+                                )}
+                            >
+                                <div className="text-sm font-medium text-text-primary">{profile.name}</div>
+                                <div className="mt-1 text-xs text-text-tertiary">{profile.platform} · {profile.goal}</div>
+                                <div className="mt-2 flex flex-wrap gap-1">
+                                    {profile.toneTags.slice(0, 2).map(tag => (
+                                        <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded bg-surface-secondary text-text-secondary">
+                                            {tag}
+                                        </span>
+                                    ))}
+                                </div>
+                            </button>
+                        ))
+                    )}
+                </div>
+                <div className="p-3 border-t border-border text-xs text-text-tertiary">
+                    支持多账号档案，建议按平台拆分
+                </div>
+            </div>
+
+            <div className="flex-1 flex flex-col min-w-0 bg-surface-primary">
+                <div className="px-6 py-4 border-b border-border flex items-center justify-between">
+                    <div>
+                        <div className="text-lg font-semibold text-text-primary">{selectedProfile?.name || '档案详情'}</div>
+                        <div className="text-sm text-text-tertiary">
+                            {selectedProfile ? `最近更新 ${new Date(selectedProfile.updatedAt).toISOString().slice(0, 10)}` : '请选择档案'}
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={openCreateSample}
+                            disabled={!selectedProfile}
+                            className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                        >
+                            <Upload className="w-3.5 h-3.5" />
+                            导入样本
+                        </button>
+                        <button
+                            className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                        >
+                            <Sparkles className="w-3.5 h-3.5" />
+                            生成风格摘要
+                        </button>
+                        <button
+                            onClick={openEditProfile}
+                            disabled={!selectedProfile}
+                            className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                        >
+                            <Pencil className="w-3.5 h-3.5" />
+                            编辑档案
+                        </button>
+                        <button
+                            onClick={deleteProfile}
+                            disabled={!selectedProfile}
+                            className="flex items-center gap-1.5 px-3 py-1.5 border border-border rounded text-xs text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
+                        >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            删除
+                        </button>
+                    </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                    <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
+                                    <Sparkles className="w-4 h-4 text-accent-primary" />
+                                    运营账号学习
+                                </div>
+                                <div className="mt-1 text-xs text-text-tertiary">
+                                    通过浏览器插件绑定账号后，{APP_BRAND.displayName} 会自动更新创作档案、写作风格和待确认长期偏好。
+                                </div>
+                            </div>
+                            <button
+                                onClick={loadAccounts}
+                                className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-primary transition-colors"
+                            >
+                                刷新
+                            </button>
+                        </div>
+                        <div className="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-3">
+                            {accounts.length === 0 ? (
+                                <div className="xl:col-span-3 rounded-lg border border-dashed border-border bg-surface-primary px-4 py-5 text-sm text-text-secondary">
+                                    当前空间还没有绑定运营账号。打开小红书账号主页，在插件侧边栏点击“绑定并学习这个账号”。
+                                </div>
+                            ) : (
+                                accounts.map(account => (
+                                    <div key={account.id} className="rounded-lg border border-border bg-surface-primary p-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="min-w-0">
+                                                <div className="truncate text-sm font-semibold text-text-primary">{account.username || '未命名账号'}</div>
+                                                <div className="mt-1 text-xs text-text-tertiary">{account.platform || '-'} · {account.platformUserId || account.id}</div>
+                                            </div>
+                                            <span className="shrink-0 rounded bg-accent-primary/10 px-2 py-1 text-[10px] font-medium text-accent-primary">
+                                                已绑定
+                                            </span>
+                                        </div>
+                                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                                            <div className="rounded bg-surface-secondary px-2 py-1.5">
+                                                <div className="text-text-tertiary">历史内容</div>
+                                                <div className="mt-0.5 font-medium text-text-primary">{Number(account.postCount || 0)} 条</div>
+                                            </div>
+                                            <div className="rounded bg-surface-secondary px-2 py-1.5">
+                                                <div className="text-text-tertiary">写作风格</div>
+                                                <div className="mt-0.5 font-medium text-text-primary">{account.lastLearnedAt ? '已更新' : '待学习'}</div>
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 text-[11px] leading-4 text-text-tertiary">
+                                            {account.lastImportedAt ? `最近导入 ${account.lastImportedAt.slice(0, 10)}` : '等待首次导入'}
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                        <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
+                            <div className="flex items-center gap-2 text-sm font-medium text-text-primary mb-3">
+                                <UserRound className="w-4 h-4 text-text-secondary" />
+                                基础信息
+                            </div>
+                            {selectedProfile ? (
+                                <div className="space-y-2 text-sm text-text-secondary">
+                                    <div className="flex items-center justify-between">
+                                        <span>平台</span>
+                                        <span className="text-text-primary">{selectedProfile.platform || '-'}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span>领域</span>
+                                        <span className="text-text-primary">{selectedProfile.domain || '-'}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span>目标</span>
+                                        <span className="text-text-primary">{selectedProfile.goal || '-'}</span>
+                                    </div>
+                                    <div className="flex items-start justify-between">
+                                        <span>受众画像</span>
+                                        <span className="text-text-primary text-right max-w-[240px]">{selectedProfile.audience || '-'}</span>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-xs text-text-tertiary">请选择档案查看详情</div>
+                            )}
+                            <div className="mt-4 flex items-center gap-2 text-xs text-text-tertiary">
+                                <Target className="w-3.5 h-3.5" />
+                                快捷编辑支持标签与目标快速更新
+                            </div>
+                        </div>
+
+                        <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
+                            <div className="flex items-center gap-2 text-sm font-medium text-text-primary mb-3">
+                                <Archive className="w-4 h-4 text-text-secondary" />
+                                风格画像
+                            </div>
+                            {selectedProfile ? (
+                                <div className="mb-3">
+                                    <div className="text-xs text-text-tertiary mb-2">语气与风格词</div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {selectedProfile.toneTags.length > 0 ? (
+                                            selectedProfile.toneTags.map(tag => (
+                                                <span key={tag} className="px-2 py-1 text-xs rounded bg-surface-primary border border-border text-text-secondary">
+                                                    {tag}
+                                                </span>
+                                            ))
+                                        ) : (
+                                            <span className="text-xs text-text-tertiary">暂无风格标签</span>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-xs text-text-tertiary">暂无档案</div>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
+                                <FileText className="w-4 h-4 text-text-secondary" />
+                                样本库
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button className="flex items-center gap-1.5 px-2.5 py-1 border border-border rounded text-xs hover:bg-surface-secondary transition-colors">
+                                    <Filter className="w-3.5 h-3.5" />
+                                    平台
+                                </button>
+                                <button className="flex items-center gap-1.5 px-2.5 py-1 border border-border rounded text-xs hover:bg-surface-secondary transition-colors">
+                                    <Tag className="w-3.5 h-3.5" />
+                                    主题
+                                </button>
+                                <button className="flex items-center gap-1.5 px-2.5 py-1 border border-border rounded text-xs hover:bg-surface-secondary transition-colors">
+                                    <Star className="w-3.5 h-3.5" />
+                                    代表作
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="mt-4 grid grid-cols-1 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4">
+                            <div className="space-y-3">
+                                {isLoadingSamples && samples.length === 0 ? (
+                                    <div className="text-xs text-text-tertiary">加载中...</div>
+                                ) : samples.length === 0 ? (
+                                    <div className="text-xs text-text-tertiary">暂无样本，先添加一条内容吧</div>
+                                ) : (
+                                    samples.map(sample => (
+                                        <button
+                                            key={sample.id}
+                                            onClick={() => setSelectedSampleId(sample.id)}
+                                            className={clsx(
+                                                'w-full text-left bg-surface-primary border rounded-lg p-3 transition-colors',
+                                                selectedSampleId === sample.id ? 'border-accent-primary/60' : 'border-border hover:border-text-tertiary'
+                                            )}
+                                        >
+                                            <div className="flex items-center justify-between">
+                                                <div className="text-sm font-medium text-text-primary">{sample.title}</div>
+                                                {sample.isFeatured ? (
+                                                    <span className="flex items-center gap-1 text-xs text-amber-600">
+                                                        <Star className="w-3.5 h-3.5" />
+                                                        代表作
+                                                    </span>
+                                                ) : (
+                                                    <span className="text-xs text-text-tertiary">普通样本</span>
+                                                )}
+                                            </div>
+                                            <div className="mt-1 text-xs text-text-tertiary">{sample.platform || '-'} · {formatDate(sample) || '-'}</div>
+                                            <div className="mt-2 flex flex-wrap gap-1.5">
+                                                {sample.tags.map(tag => (
+                                                    <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded bg-surface-secondary text-text-secondary">
+                                                        {tag}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </button>
+                                    ))
+                                )}
+                            </div>
+
+                            <div className="bg-surface-primary border border-border rounded-lg p-3 h-fit">
+                                <div className="flex items-center gap-2 text-sm font-medium text-text-primary mb-2">
+                                    <FileText className="w-4 h-4 text-text-secondary" />
+                                    样本详情
+                                </div>
+                                {selectedSample ? (
+                                    <>
+                                        <div className="text-sm text-text-primary mb-1">{selectedSample.title}</div>
+                                        <div className="text-xs text-text-tertiary mb-3">{selectedSample.platform || '-'} · {formatDate(selectedSample) || '-'}</div>
+                                        <p className="text-xs text-text-secondary leading-relaxed">{selectedSample.excerpt || '暂无摘要'}</p>
+                                        <div className="mt-3 flex flex-wrap gap-1.5">
+                                            {selectedSample.tags.map(tag => (
+                                                <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded bg-surface-secondary text-text-secondary">
+                                                    {tag}
+                                                </span>
+                                            ))}
+                                        </div>
+                                        <div className="mt-4 space-y-2">
+                                            <button
+                                                onClick={markFeatured}
+                                                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                                            >
+                                                <Star className="w-3.5 h-3.5" />
+                                                设为代表作
+                                            </button>
+                                            <button
+                                                onClick={openEditSample}
+                                                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                                            >
+                                                <Pencil className="w-3.5 h-3.5" />
+                                                编辑样本
+                                            </button>
+                                            <button
+                                                onClick={deleteSample}
+                                                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 border border-border rounded text-xs text-red-500 hover:bg-red-50 transition-colors"
+                                            >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                                删除样本
+                                            </button>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="text-xs text-text-tertiary">选择样本查看详情</div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {isProfileModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                    <div className="w-full max-w-lg mx-4 bg-surface-primary rounded-xl border border-border shadow-2xl overflow-hidden">
+                        <div className="px-6 py-4 border-b border-border flex items-center justify-between">
+                            <h3 className="text-base font-semibold text-text-primary">{editingProfile ? '编辑档案' : '创建档案'}</h3>
+                            <button
+                                onClick={() => setIsProfileModalOpen(false)}
+                                className="p-1.5 text-text-tertiary hover:text-text-primary"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+
+                        <div className="px-6 py-4 space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <label className="text-xs text-text-secondary">
+                                    档案名称
+                                    <input
+                                        className="mt-1 w-full bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                        value={profileForm.name}
+                                        onChange={(event) => setProfileForm({ ...profileForm, name: event.target.value })}
+                                    />
+                                </label>
+                                <label className="text-xs text-text-secondary">
+                                    平台
+                                    <input
+                                        className="mt-1 w-full bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                        value={profileForm.platform}
+                                        onChange={(event) => setProfileForm({ ...profileForm, platform: event.target.value })}
+                                    />
+                                </label>
+                                <label className="text-xs text-text-secondary">
+                                    领域
+                                    <input
+                                        className="mt-1 w-full bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                        value={profileForm.domain}
+                                        onChange={(event) => setProfileForm({ ...profileForm, domain: event.target.value })}
+                                    />
+                                </label>
+                                <label className="text-xs text-text-secondary">
+                                    目标
+                                    <input
+                                        className="mt-1 w-full bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                        value={profileForm.goal}
+                                        onChange={(event) => setProfileForm({ ...profileForm, goal: event.target.value })}
+                                    />
+                                </label>
+                            </div>
+                            <label className="text-xs text-text-secondary">
+                                受众画像
+                                <input
+                                    className="mt-1 w-full bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                    value={profileForm.audience}
+                                    onChange={(event) => setProfileForm({ ...profileForm, audience: event.target.value })}
+                                />
+                            </label>
+                            <label className="text-xs text-text-secondary">
+                                风格词（用逗号分隔）
+                                <input
+                                    className="mt-1 w-full bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                    value={profileForm.toneTags}
+                                    onChange={(event) => setProfileForm({ ...profileForm, toneTags: event.target.value })}
+                                />
+                            </label>
+                        </div>
+
+                        <div className="px-6 py-4 bg-surface-secondary border-t border-border flex items-center justify-end gap-3">
+                            <button
+                                onClick={() => setIsProfileModalOpen(false)}
+                                className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary border border-border rounded-lg transition-colors"
+                            >
+                                取消
+                            </button>
+                            <button
+                                onClick={saveProfile}
+                                className="px-4 py-2 text-sm text-white bg-accent-primary hover:bg-accent-primary/90 rounded-lg transition-colors"
+                            >
+                                <Check className="w-4 h-4 inline-block mr-1" />
+                                保存
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isSampleModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                    <div className="w-full max-w-2xl mx-4 bg-surface-primary rounded-xl border border-border shadow-2xl overflow-hidden">
+                        <div className="px-6 py-4 border-b border-border flex items-center justify-between">
+                            <h3 className="text-base font-semibold text-text-primary">{editingSample ? '编辑样本' : '新增样本'}</h3>
+                            <button
+                                onClick={() => setIsSampleModalOpen(false)}
+                                className="p-1.5 text-text-tertiary hover:text-text-primary"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+
+                        <div className="px-6 py-4 space-y-4">
+                            <label className="text-xs text-text-secondary">
+                                标题
+                                <input
+                                    className="mt-1 w-full bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                    value={sampleForm.title}
+                                    onChange={(event) => setSampleForm({ ...sampleForm, title: event.target.value })}
+                                />
+                            </label>
+                            <label className="text-xs text-text-secondary">
+                                正文内容
+                                <textarea
+                                    className="mt-1 w-full min-h-[140px] bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                    value={sampleForm.content}
+                                    onChange={(event) => setSampleForm({ ...sampleForm, content: event.target.value })}
+                                />
+                            </label>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <label className="text-xs text-text-secondary">
+                                    标签（逗号分隔）
+                                    <input
+                                        className="mt-1 w-full bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                        value={sampleForm.tags}
+                                        onChange={(event) => setSampleForm({ ...sampleForm, tags: event.target.value })}
+                                    />
+                                </label>
+                                <label className="text-xs text-text-secondary">
+                                    平台
+                                    <input
+                                        className="mt-1 w-full bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                        value={sampleForm.platform}
+                                        onChange={(event) => setSampleForm({ ...sampleForm, platform: event.target.value })}
+                                    />
+                                </label>
+                                <label className="text-xs text-text-secondary">
+                                    日期
+                                    <input
+                                        type="date"
+                                        className="mt-1 w-full bg-surface-secondary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                        value={sampleForm.sampleDate}
+                                        onChange={(event) => setSampleForm({ ...sampleForm, sampleDate: event.target.value })}
+                                    />
+                                </label>
+                            </div>
+                            <label className="flex items-center gap-2 text-xs text-text-secondary">
+                                <input
+                                    type="checkbox"
+                                    checked={sampleForm.isFeatured}
+                                    onChange={(event) => setSampleForm({ ...sampleForm, isFeatured: event.target.checked })}
+                                />
+                                设为代表作
+                            </label>
+                        </div>
+
+                        <div className="px-6 py-4 bg-surface-secondary border-t border-border flex items-center justify-end gap-3">
+                            <button
+                                onClick={() => setIsSampleModalOpen(false)}
+                                className="px-4 py-2 text-sm text-text-secondary hover:text-text-primary border border-border rounded-lg transition-colors"
+                            >
+                                取消
+                            </button>
+                            <button
+                                onClick={saveSample}
+                                className="px-4 py-2 text-sm text-white bg-accent-primary hover:bg-accent-primary/90 rounded-lg transition-colors"
+                            >
+                                <Check className="w-4 h-4 inline-block mr-1" />
+                                保存
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}

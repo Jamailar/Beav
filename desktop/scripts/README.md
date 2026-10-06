@@ -1,0 +1,36 @@
+# `scripts/`
+
+本目录放开发和构建辅助脚本。
+
+## Current Scripts
+
+- [extract-ipc-inventory.mjs](/desktop/scripts/extract-ipc-inventory.mjs): 生成 IPC 清单文档
+- [sync-version.mjs](/desktop/scripts/sync-version.mjs): 同步根版本号到 Rust 元数据
+- [tauri-before-dev.mjs](/desktop/scripts/tauri-before-dev.mjs): 开发期复用或拉起 Vite
+- [release-utils.mjs](/desktop/scripts/release-utils.mjs): 发布脚本共用命令、临时配置与产物查找工具
+- [build-all-release.mjs](/desktop/scripts/build-all-release.mjs): `release:all` 总控脚本，固定执行 Windows 远程多架构打包、macOS 多架构打包、Linux 远程打包和浏览器插件 zip 打包，并输出统一结果摘要
+- [build-linux-release.mjs](/desktop/scripts/build-linux-release.mjs): Linux 桌面端发布脚本；Linux 主机本地打包，非 Linux 主机默认通过 `ssh jamdebian` 远程构建并拉回 `.deb`
+- [publish-open-source-release.mjs](/desktop/scripts/publish-open-source-release.mjs): `release:oss` 总控脚本，复用 `release:all` 打包，再推送开源 tag、生成更新日志，并通过 `gh release create` 上传安装包和浏览器插件 zip
+- [build-mac-release.mjs](/desktop/scripts/build-mac-release.mjs): 本地发现 `Developer ID Application` 证书，默认连续构建 `arm64 + x64` 两个 macOS 安装包，签名、notarize、staple 并验证
+- [setup-mac-notary-profile.mjs](/desktop/scripts/setup-mac-notary-profile.mjs): 用 `xcrun notarytool store-credentials` 保存 Apple notarization profile
+- [build-windows-release.mjs](/desktop/scripts/build-windows-release.mjs): 非 Windows 主机默认通过 `ssh jamdebian` 远程连续构建并拉回 `x64 + arm64 + x86` 三种 NSIS 安装包；也支持在本机走原生/本地交叉打包，并支持注入自定义签名命令
+
+## Artifact Paths
+
+- 最终 macOS 安装包复制到 `artifacts/installers/macos/`
+- 最终 Windows 安装包复制到 `artifacts/installers/windows/`
+- 最终 Linux 安装包复制到 `artifacts/installers/linux/`
+- 最新浏览器插件压缩包复制到 `artifacts/installers/browser-plugin/`
+- 构建摘要写到 `artifacts/release/`
+- 开源发布更新日志写到 `artifacts/release/vX.Y.Z-release-notes.md`
+- `artifacts/` 应保持为本地构建输出目录，不进入 Git
+
+## Rules
+
+- 脚本输出路径必须明确、稳定。
+- 报错信息要足够定位问题，不要吞异常。
+- 脚本变更后至少手动运行一次。
+
+## Related Docs
+
+- [本地构建与源码范围](../README.md)

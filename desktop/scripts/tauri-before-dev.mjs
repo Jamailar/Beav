@@ -1,0 +1,214 @@
+import { execFile as execFileCallback, spawn } from 'node:child_process';
+import process from 'node:process';
+import { promisify } from 'node:util';
+import { runCommand } from './release-utils.mjs';
+import { syncVersion } from './sync-version.mjs';
+
+const execFileRaw = promisify(execFileCallback);
+const execFile = (file, args = [], options = {}) => execFileRaw(file, args, { windowsHide: true, ...options });
+
+const PORT = Number(process.env.REDBOX_DEV_PORT || process.env.LEXBOX_DEV_PORT || 1420);
+const DEV_URL = process.env.REDBOX_DEV_URL || process.env.LEXBOX_DEV_URL || `http://localhost:${PORT}`;
+const cwd = process.cwd();
+const isProbe = process.argv.includes('--probe');
+const requestedBrand = String(process.env.REDBOX_BRAND || process.env.APP_BRAND || '').trim().toLowerCase();
+const BRAND_BINARIES = ['redbox', 'thrive', 'beav'];
+
+async function isHealthy(url) {
+  try {
+    const response = await fetch(url, {
+      method: 'HEAD',
+      signal: AbortSignal.timeout(1500),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function getListeningPids(port) {
+  try {
+    const { stdout } = await execFile('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']);
+    return stdout
+      .split('\n')
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((value) => Number(value))
+      .filter(Number.isFinite);
+  } catch {
+    return [];
+  }
+}
+
+async function getCommandForPid(pid) {
+  try {
+    const { stdout } = await execFile('ps', ['-p', String(pid), '-o', 'command=']);
+    return stdout.trim();
+  } catch {
+    return '';
+  }
+}
+
+function isRepoViteCommand(command) {
+  return command.includes(`${cwd}/node_modules`) && command.includes('vite');
+}
+
+async function getPortState() {
+  const pids = await getListeningPids(PORT);
+  const processes = await Promise.all(
+    pids.map(async (pid) => ({
+      pid,
+      command: await getCommandForPid(pid),
+    })),
+  );
+
+  return {
+    healthy: await isHealthy(DEV_URL),
+    processes,
+  };
+}
+
+async function terminateProcess(pid) {
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return;
+  }
+
+  const deadline = Date.now() + 2500;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    } catch {
+      return;
+    }
+  }
+
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // noop
+  }
+}
+
+async function terminateStaleDevAppForBrand() {
+  if (!requestedBrand) return;
+  const staleBinaries = BRAND_BINARIES.filter((binary) => binary !== requestedBrand);
+  const targetMarkers = staleBinaries.map((binary) => `${cwd}/src-tauri/target/debug/${binary}`);
+
+  let stdout = '';
+  try {
+    ({ stdout } = await execFile('ps', ['-axo', 'pid=,command=']));
+  } catch {
+    return;
+  }
+
+  const stalePids = stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(.+)$/);
+      return match ? { pid: Number(match[1]), command: match[2] } : null;
+    })
+    .filter((entry) => entry && Number.isFinite(entry.pid) && targetMarkers.some((marker) => entry.command.includes(marker)));
+
+  for (const entry of stalePids) {
+    console.log(`[tauri-before-dev] Stopping stale brand dev app ${entry.pid}`);
+    await terminateProcess(entry.pid);
+  }
+}
+
+async function holdForReusedServer() {
+  console.log(`[tauri-before-dev] Reusing healthy Vite server on ${DEV_URL}`);
+
+  const stop = () => process.exit(0);
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+
+  await new Promise(() => {});
+}
+
+async function startDevServer() {
+  console.log(`[tauri-before-dev] Starting Vite on ${DEV_URL}`);
+
+  const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  const child = spawn(command, ['dev'], {
+    cwd,
+    stdio: 'inherit',
+    env: process.env,
+    windowsHide: true,
+  });
+
+  const forwardSignal = (signal) => {
+    if (!child.killed) {
+      child.kill(signal);
+    }
+  };
+
+  process.on('SIGINT', forwardSignal);
+  process.on('SIGTERM', forwardSignal);
+
+  await new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('exit', (code, signal) => {
+      if (signal) {
+        resolve();
+        return;
+      }
+      if ((code ?? 0) === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`pnpm dev exited with code ${code ?? 'unknown'}`));
+    });
+  });
+}
+
+async function main() {
+  await runCommand('node', ['./scripts/tauri-preflight.mjs'], { cwd });
+  await syncVersion({ cwd });
+  await terminateStaleDevAppForBrand();
+
+  const state = await getPortState();
+
+  if (isProbe) {
+    console.log(JSON.stringify(state, null, 2));
+    return;
+  }
+
+  if (state.healthy) {
+    const foreignProcess = state.processes.find((entry) => !isRepoViteCommand(entry.command));
+    if (foreignProcess) {
+      throw new Error(`Port ${PORT} is in use by another process: PID ${foreignProcess.pid} (${foreignProcess.command})`);
+    }
+    if (requestedBrand) {
+      const repoVite = state.processes.find((entry) => isRepoViteCommand(entry.command));
+      if (repoVite) {
+        console.log(`[tauri-before-dev] Restarting Vite for brand "${requestedBrand}"`);
+        await terminateProcess(repoVite.pid);
+        await startDevServer();
+        return;
+      }
+    }
+    await holdForReusedServer();
+    return;
+  }
+
+  const staleRepoVite = state.processes.find((entry) => isRepoViteCommand(entry.command));
+  if (staleRepoVite) {
+    console.log(`[tauri-before-dev] Cleaning stale Vite process ${staleRepoVite.pid}`);
+    await terminateProcess(staleRepoVite.pid);
+  } else if (state.processes.length > 0) {
+    const foreign = state.processes[0];
+    throw new Error(`Port ${PORT} is in use by another process: PID ${foreign.pid} (${foreign.command})`);
+  }
+
+  await startDevServer();
+}
+
+main().catch((error) => {
+  console.error(`[tauri-before-dev] ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+});

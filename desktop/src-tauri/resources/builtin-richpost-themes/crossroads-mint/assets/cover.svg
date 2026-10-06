@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="896" height="1200" viewBox="0 0 896 1200" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="68" y1="54" x2="815" y2="1150" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#56ABE9"/>
+      <stop offset="0.52" stop-color="#52C8DA"/>
+      <stop offset="1" stop-color="#66D7BE"/>
+    </linearGradient>
+    <radialGradient id="mistA" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(282 740) rotate(90) scale(432 394)">
+      <stop stop-color="#D9F7F5" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#D9F7F5" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="mistB" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(696 332) rotate(90) scale(248 260)">
+      <stop stop-color="#EDFDFC" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#EDFDFC" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="paper" x1="144" y1="124" x2="763" y2="1066" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EBF7F8" stop-opacity="0.97"/>
+      <stop offset="1" stop-color="#DCEEF3" stop-opacity="0.94"/>
+    </linearGradient>
+    <filter id="shadow" x="18" y="38" width="860" height="1094" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="16"/>
+      <feGaussianBlur stdDeviation="22"/>
+      <feColorMatrix values="0 0 0 0 0.100392 0 0 0 0 0.482353 0 0 0 0 0.65098 0 0 0 0.22 0"/>
+      <feBlend in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+  <rect width="896" height="1200" fill="url(#bg)"/>
+  <rect width="896" height="1200" fill="url(#mistA)"/>
+  <rect width="896" height="1200" fill="url(#mistB)"/>
+  <circle cx="168" cy="1040" r="124" fill="#43A8F4" fill-opacity="0.24"/>
+  <circle cx="766" cy="1048" r="164" fill="#7BE7DF" fill-opacity="0.16"/>
+  <g filter="url(#shadow)">
+    <rect x="74" y="82" width="748" height="1006" rx="40" fill="url(#paper)"/>
+    <rect x="74.75" y="82.75" width="746.5" height="1004.5" rx="39.25" stroke="#F7FEFE" stroke-opacity="0.7" stroke-width="1.5"/>
+  </g>
+  <ellipse cx="452" cy="244" rx="232" ry="92" fill="#F7FEFD" fill-opacity="0.36"/>
+  <ellipse cx="470" cy="846" rx="292" ry="122" fill="#D7EEF2" fill-opacity="0.42"/>
+  <rect x="148" y="872" width="12" height="86" rx="6" fill="#2F965C" fill-opacity="0.88"/>
+  <rect x="175" y="902" width="176" height="16" rx="8" fill="#F3E79A" fill-opacity="0.66"/>
+</svg>

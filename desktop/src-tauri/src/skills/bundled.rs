@@ -1,0 +1,44 @@
+use crate::runtime::SkillRecord;
+use crate::skills::discover_builtin_skill_records;
+
+pub fn builtin_skill_records() -> Vec<SkillRecord> {
+    discover_builtin_skill_records()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_skill_records_are_loaded_from_builtin_skills_directory() {
+        let skills = builtin_skill_records();
+        let names = skills
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            names,
+            std::collections::BTreeSet::from([
+                "image-director",
+                "image-prompt-optimizer",
+                "content-topic-miner",
+                "cosyvoice-ssml",
+                "member-skill-distiller",
+                "redclaw-style-definition",
+                "skill-creator",
+                "social-cover-director",
+                "tts-director",
+                "video-director",
+                "wander-synthesis",
+                "writing-style",
+                "wwud",
+                "xhs-comment-insight",
+                "xhs-title",
+            ])
+        );
+        assert!(skills.iter().all(|item| item.is_builtin == Some(true)));
+        assert!(skills
+            .iter()
+            .all(|item| item.source_scope.as_deref() == Some("builtin")));
+    }
+}

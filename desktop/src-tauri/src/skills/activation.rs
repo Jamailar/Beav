@@ -1,0 +1,223 @@
+use serde_json::Value;
+
+use crate::runtime::SkillRecord;
+use crate::skills::{
+    apply_skill_tool_permissions, build_skill_catalog_snapshot, build_skill_hook_output,
+    normalized_activation_scope, requested_session_skill_names, skill_allows_runtime_mode,
+    LoadedSkillRecord, SkillHookOutput,
+};
+
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedSkillSet {
+    pub catalog: Vec<LoadedSkillRecord>,
+    pub visible_skills: Vec<LoadedSkillRecord>,
+    pub active_skills: Vec<LoadedSkillRecord>,
+    pub allowed_tools: Vec<String>,
+    pub hooks: SkillHookOutput,
+    pub can_invoke_skill: bool,
+}
+
+fn resolve_active_skills(
+    catalog: &[LoadedSkillRecord],
+    runtime_mode: &str,
+    metadata: Option<&Value>,
+) -> Vec<LoadedSkillRecord> {
+    let requested = requested_session_skill_names(metadata);
+    let task_hint_requested = metadata
+        .and_then(|value| value.get("taskHints"))
+        .map(|value| requested_session_skill_names(Some(value)));
+    let mut active = Vec::new();
+    for skill in catalog {
+        if !skill_allows_runtime_mode(skill, runtime_mode) {
+            continue;
+        }
+        let requested_match = requested.iter().any(|item| item == &skill.name);
+        if requested_match
+            && normalized_activation_scope(skill.metadata.activation_scope.as_deref()) == "turn"
+            && !task_hint_requested
+                .as_ref()
+                .map(|items| items.iter().any(|item| item == &skill.name))
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        if requested_match {
+            active.push(skill.clone());
+        }
+    }
+    active
+}
+
+fn visible_catalog(catalog: &[LoadedSkillRecord], runtime_mode: &str) -> Vec<LoadedSkillRecord> {
+    catalog
+        .iter()
+        .filter(|skill| !skill.metadata.hidden && skill_allows_runtime_mode(skill, runtime_mode))
+        .cloned()
+        .collect()
+}
+
+pub fn resolve_skill_set(
+    skills: &[SkillRecord],
+    runtime_mode: &str,
+    metadata: Option<&Value>,
+    base_tools: &[String],
+) -> ResolvedSkillSet {
+    let catalog_snapshot = build_skill_catalog_snapshot(skills);
+    let catalog = catalog_snapshot.entries;
+    let visible_skills = visible_catalog(&catalog, runtime_mode);
+    let active_skills = resolve_active_skills(&catalog, runtime_mode, metadata);
+    let allowed_tools = apply_skill_tool_permissions(base_tools, &active_skills);
+    let hooks = build_skill_hook_output(&active_skills);
+    let can_invoke_skill = base_tools
+        .iter()
+        .any(|item| item == "skill" || item == "workflow");
+    ResolvedSkillSet {
+        catalog,
+        visible_skills,
+        active_skills,
+        allowed_tools,
+        hooks,
+        can_invoke_skill,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn skill(name: &str, runtime_modes: &str, auto_activate: bool) -> SkillRecord {
+        SkillRecord {
+            name: name.to_string(),
+            description: "desc".to_string(),
+            location: format!("skills://{name}"),
+            body: format!(
+                "---\nallowedRuntimeModes: {runtime_modes}\nautoActivate: {auto_activate}\nactivationScope: session\nhookMode: inline\n---\n# Skill\n\nBody"
+            ),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        }
+    }
+
+    fn turn_scoped_skill(name: &str, runtime_modes: &str) -> SkillRecord {
+        SkillRecord {
+            name: name.to_string(),
+            description: "desc".to_string(),
+            location: format!("skills://{name}"),
+            body: format!(
+                "---\nallowedRuntimeModes: {runtime_modes}\nautoActivate: false\nactivationScope: turn\nhookMode: inline\n---\n# Skill\n\nBody"
+            ),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        }
+    }
+
+    #[test]
+    fn resolve_skill_set_reads_typed_session_skill_state() {
+        let resolved = resolve_skill_set(
+            &[skill("session-writer", "[wander]", false)],
+            "wander",
+            Some(&serde_json::json!({
+                "sessionSkillState": {
+                    "requested": [{
+                        "skillName": "session-writer",
+                        "requestedScope": "session"
+                    }],
+                    "active": [{
+                        "skillName": "session-writer",
+                        "requestedScope": "session"
+                    }]
+                }
+            })),
+            &["workflow".to_string()],
+        );
+        assert_eq!(resolved.active_skills.len(), 1);
+        assert_eq!(resolved.visible_skills.len(), 1);
+    }
+
+    #[test]
+    fn resolve_skill_set_hides_internal_skills_but_can_activate_them_by_name() {
+        let resolved = resolve_skill_set(
+            &[SkillRecord {
+                name: "redclaw-style-definition".to_string(),
+                description: "desc".to_string(),
+                location: "skills://redclaw-style-definition".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nautoActivate: false\nactivationScope: session\nhidden: true\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
+                source_scope: Some("builtin".to_string()),
+                is_builtin: Some(true),
+                disabled: Some(false),
+            }],
+            "redclaw",
+            Some(&serde_json::json!({
+                "activeSkills": ["redclaw-style-definition"]
+            })),
+            &[],
+        );
+
+        assert!(resolved.visible_skills.is_empty());
+        assert_eq!(resolved.active_skills.len(), 1);
+        assert_eq!(resolved.active_skills[0].name, "redclaw-style-definition");
+    }
+
+    #[test]
+    fn resolve_skill_set_does_not_persist_turn_scoped_skill_requests() {
+        let resolved = resolve_skill_set(
+            &[turn_scoped_skill("writing-style", "[redclaw, wander]")],
+            "redclaw",
+            Some(&serde_json::json!({
+                "activeSkills": ["writing-style"]
+            })),
+            &["workflow".to_string()],
+        );
+        assert!(resolved.active_skills.is_empty());
+    }
+
+    #[test]
+    fn resolve_skill_set_activates_turn_scoped_task_hint_skill() {
+        let resolved = resolve_skill_set(
+            &[
+                turn_scoped_skill("writing-style", "[redclaw, wander]"),
+                turn_scoped_skill("xhs-title", "[redclaw, wander]"),
+            ],
+            "redclaw",
+            Some(&serde_json::json!({
+                "activeSkills": ["writing-style", "xhs-title"],
+                "taskHints": {
+                    "activeSkills": ["writing-style", "xhs-title"],
+                    "requiredSkill": ["writing-style", "xhs-title"]
+                }
+            })),
+            &["workflow".to_string()],
+        );
+
+        assert_eq!(resolved.active_skills.len(), 2);
+        assert_eq!(resolved.active_skills[0].name, "writing-style");
+        assert_eq!(resolved.active_skills[1].name, "xhs-title");
+    }
+
+    #[test]
+    fn resolve_skill_set_activates_explicitly_requested_session_skill() {
+        let resolved = resolve_skill_set(
+            &[skill("xhs-title", "[redclaw, wander]", false)],
+            "redclaw",
+            Some(&serde_json::json!({
+                "activeSkills": ["xhs-title"]
+            })),
+            &["workflow".to_string()],
+        );
+        assert_eq!(resolved.active_skills.len(), 1);
+        assert_eq!(resolved.active_skills[0].name, "xhs-title");
+    }
+
+    #[test]
+    fn resolve_skill_set_does_not_auto_activate_without_explicit_request() {
+        let resolved = resolve_skill_set(
+            &[skill("writing-style", "[redclaw, wander]", true)],
+            "redclaw",
+            None,
+            &["workflow".to_string()],
+        );
+        assert!(resolved.active_skills.is_empty());
+    }
+}

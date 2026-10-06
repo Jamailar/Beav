@@ -1,0 +1,916 @@
+use serde_json::{json, Value};
+
+use crate::runtime::{
+    runtime_subagent_role_spec, CollabMailboxMessageRecord, CollabMemberRecord,
+    CollabProgressReportRecord, CollabSessionRecord, CollabSessionSnapshot, CollabTaskRecord,
+    ReviewDecisionRecord, ReviewDocketRecord,
+};
+use crate::{now_i64, AppStore};
+
+#[path = "collab_runtime/mailbox_reports.rs"]
+mod mailbox_reports;
+#[path = "collab_runtime/member_management.rs"]
+mod member_management;
+#[path = "collab_runtime/member_profile.rs"]
+mod member_profile;
+#[path = "collab_runtime/member_workload.rs"]
+mod member_workload;
+#[path = "collab_runtime/payload.rs"]
+mod payload;
+#[path = "collab_runtime/review_docket.rs"]
+mod review_docket;
+#[path = "collab_runtime/session_core.rs"]
+mod session_core;
+#[path = "collab_runtime/state_helpers.rs"]
+mod state_helpers;
+#[path = "collab_runtime/task_lifecycle.rs"]
+mod task_lifecycle;
+
+pub use mailbox_reports::{
+    attach_collab_artifact, cleanup_collab_mailbox, list_collab_messages, list_collab_reports,
+    post_collab_message, raise_collab_blocker, read_collab_mailbox, request_collab_report,
+    submit_collab_report,
+};
+pub use member_management::{
+    add_collab_member, list_collab_members, rename_collab_member, resume_collab_member,
+    shutdown_collab_member,
+};
+use member_profile::{build_member_agent_card, member_metadata_from_payload};
+pub use member_workload::match_collab_members_for_task;
+use member_workload::{
+    initial_member_task_plan, remove_member_task_from_plan, upsert_member_task_plan,
+    validate_member_executor_capacity,
+};
+use payload::{
+    merge_object_defaults, value_array, value_i64, value_object, value_string, value_string_array,
+    value_string_array_or_default, value_vec,
+};
+pub use review_docket::{
+    archive_review_docket, create_review_docket, decide_review_docket, get_review_docket,
+    list_review_dockets, review_docket_stats,
+};
+pub use session_core::{
+    collab_session_snapshot, create_collab_session, ensure_collab_session_coordinator,
+    list_collab_sessions, set_collab_session_coordinator, update_collab_session_status,
+};
+use state_helpers::{
+    apply_task_status, completion_claim_payload, merge_task_metadata, next_collab_id,
+    normalize_task_defaults, promote_ready_dependents, sync_task_dependency_links, touch_session,
+    valid_task_transition, validate_member, validate_session, validate_task,
+};
+pub use task_lifecycle::{
+    create_collab_task, list_collab_tasks, pin_collab_task_session, retry_collab_task,
+    transition_collab_task, update_collab_task,
+};
+
+const DEFAULT_PROGRESS_INTERVAL_MS: i64 = 15 * 60 * 1000;
+const COLLAB_MAILBOX_READ_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+const COLLAB_REPORTS_KEEP_LATEST_PER_TASK: usize = 200;
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn collab_report_updates_member_and_task_board_state() {
+        let mut store = AppStore::default();
+        let session = create_collab_session(
+            &mut store,
+            &json!({
+                "title": "视频工作流改造",
+                "objective": "让团队成员并行处理视频任务",
+                "runtimeMode": "default"
+            }),
+        )
+        .unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "视频工程师",
+                "roleId": "video-engineer",
+                "capabilities": ["ffmpeg"]
+            }),
+        )
+        .unwrap();
+        let task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "生成剪辑任务 DAG",
+                "objective": "把视频处理拆成可追踪任务",
+                "priority": 8
+            }),
+        )
+        .unwrap();
+
+        let report = submit_collab_report(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": task.id,
+                "status": "running",
+                "summary": "已完成任务 DAG 初版",
+                "nextAction": "接入执行器",
+                "blockers": []
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(report.status, "running");
+        let snapshot = collab_session_snapshot(&store, &session.id, None, None).unwrap();
+        assert_eq!(
+            snapshot.members[0].current_task_id.as_deref(),
+            Some(task.id.as_str())
+        );
+        assert_eq!(snapshot.members[0].status, "working");
+        assert_eq!(snapshot.tasks[0].status, "running");
+        assert_eq!(
+            snapshot.tasks[0].result_summary.as_deref(),
+            Some("已完成任务 DAG 初版")
+        );
+        assert_eq!(snapshot.reports.len(), 1);
+    }
+
+    #[test]
+    fn collab_report_cleanup_keeps_latest_reports_per_task() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "report cleanup" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({ "sessionId": session.id, "displayName": "Reporter" }),
+        )
+        .unwrap();
+        let task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "Long task",
+                "objective": "Generate many progress reports"
+            }),
+        )
+        .unwrap();
+        let other_task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "Other task",
+                "objective": "Keep separate report retention"
+            }),
+        )
+        .unwrap();
+
+        for index in 0..205 {
+            submit_collab_report(
+                &mut store,
+                &json!({
+                    "sessionId": session.id,
+                    "memberId": member.id,
+                    "taskId": task.id,
+                    "status": "running",
+                    "summary": format!("report-{index}")
+                }),
+            )
+            .unwrap();
+        }
+        submit_collab_report(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": other_task.id,
+                "status": "running",
+                "summary": "other-report"
+            }),
+        )
+        .unwrap();
+
+        let task_reports = list_collab_reports(&store, &session.id, Some(&task.id), None, None);
+        let other_reports =
+            list_collab_reports(&store, &session.id, Some(&other_task.id), None, None);
+        let updated_task = store
+            .collab_tasks
+            .iter()
+            .find(|item| item.id == task.id)
+            .unwrap();
+
+        assert_eq!(task_reports.len(), 200);
+        assert_eq!(other_reports.len(), 1);
+        assert_eq!(task_reports.first().unwrap().summary, "report-5");
+        assert_eq!(task_reports.last().unwrap().summary, "report-204");
+        assert!(updated_task.artifacts.iter().any(|artifact| {
+            artifact.get("kind").and_then(Value::as_str) == Some("collab-report-archive")
+                && artifact.get("removedCount").and_then(Value::as_u64) == Some(1)
+        }));
+    }
+
+    #[test]
+    fn collab_member_promotes_knowledge_binding_metadata() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "member knowledge" })).unwrap();
+
+        let member = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "法规研究员",
+                "advisorId": "advisor-law",
+                "sourceId": "advisor:advisor-law",
+                "metadata": {
+                    "specialty": "claims"
+                }
+            }),
+        )
+        .unwrap();
+
+        let metadata = member.metadata.unwrap();
+        assert_eq!(
+            metadata.get("advisorId").and_then(Value::as_str),
+            Some("advisor-law")
+        );
+        assert_eq!(
+            metadata.get("sourceId").and_then(Value::as_str),
+            Some("advisor:advisor-law")
+        );
+        assert_eq!(
+            metadata.get("specialty").and_then(Value::as_str),
+            Some("claims")
+        );
+    }
+
+    #[test]
+    fn collab_task_dependency_must_belong_to_same_session() {
+        let mut store = AppStore::default();
+        let first = create_collab_session(&mut store, &json!({ "objective": "first" })).unwrap();
+        let second = create_collab_session(&mut store, &json!({ "objective": "second" })).unwrap();
+        let external = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": first.id,
+                "title": "外部任务"
+            }),
+        )
+        .unwrap();
+
+        let result = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": second.id,
+                "title": "错误依赖",
+                "dependsOnTaskIds": [external.id]
+            }),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn collab_task_dependency_updates_reverse_blocks() {
+        let mut store = AppStore::default();
+        let session = create_collab_session(&mut store, &json!({ "objective": "deps" })).unwrap();
+        let first = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "先做"
+            }),
+        )
+        .unwrap();
+        let second = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "后做"
+            }),
+        )
+        .unwrap();
+        let dependent = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "依赖任务",
+                "dependsOnTaskIds": [first.id.clone()]
+            }),
+        )
+        .unwrap();
+
+        let first_after_create = store
+            .collab_tasks
+            .iter()
+            .find(|task| task.id == first.id)
+            .unwrap();
+        assert!(first_after_create.blocks_task_ids.contains(&dependent.id));
+
+        update_collab_task(
+            &mut store,
+            &json!({
+                "taskId": dependent.id.clone(),
+                "dependsOnTaskIds": [second.id.clone()]
+            }),
+        )
+        .unwrap();
+
+        let first_after_update = store
+            .collab_tasks
+            .iter()
+            .find(|task| task.id == first.id)
+            .unwrap();
+        let second_after_update = store
+            .collab_tasks
+            .iter()
+            .find(|task| task.id == second.id)
+            .unwrap();
+        assert!(!first_after_update.blocks_task_ids.contains(&dependent.id));
+        assert!(second_after_update.blocks_task_ids.contains(&dependent.id));
+    }
+
+    #[test]
+    fn collab_task_completion_promotes_dependents_to_ready() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "promote" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({ "sessionId": session.id, "displayName": "成员" }),
+        )
+        .unwrap();
+        let upstream = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "上游"
+            }),
+        )
+        .unwrap();
+        let downstream = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "下游",
+                "status": "blocked",
+                "dependsOnTaskIds": [upstream.id.clone()],
+                "blockedByTaskIds": [upstream.id.clone()]
+            }),
+        )
+        .unwrap();
+
+        submit_collab_report(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": upstream.id,
+                "status": "completed",
+                "summary": "上游完成"
+            }),
+        )
+        .unwrap();
+
+        let downstream = store
+            .collab_tasks
+            .iter()
+            .find(|task| task.id == downstream.id)
+            .unwrap();
+        assert_eq!(downstream.status, "ready");
+        assert!(downstream.blocked_by_task_ids.is_empty());
+    }
+
+    #[test]
+    fn collab_member_spawn_persists_agent_card_profile() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "profile" })).unwrap();
+
+        let member = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "研究员",
+                "roleId": "researcher",
+                "capabilities": ["knowledge_retrieval"]
+            }),
+        )
+        .unwrap();
+
+        let agent_card = member
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("agentCard"))
+            .expect("agent card should be persisted");
+        assert_eq!(
+            agent_card.get("memberId").and_then(Value::as_str),
+            Some(member.id.as_str())
+        );
+        assert_eq!(
+            agent_card.get("displayName").and_then(Value::as_str),
+            Some("研究员")
+        );
+        assert_eq!(
+            agent_card.get("roleId").and_then(Value::as_str),
+            Some("researcher")
+        );
+        assert_eq!(
+            agent_card
+                .pointer("/capacity/maxExecutorThreads")
+                .and_then(Value::as_i64),
+            Some(5)
+        );
+        assert!(agent_card
+            .get("preferredTasks")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|value| value == "research"));
+    }
+
+    #[test]
+    fn collab_member_match_prefers_task_specific_agent_card() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "visual production" }))
+                .unwrap();
+        add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "研究员",
+                "roleId": "researcher",
+                "capabilities": ["knowledge_retrieval"]
+            }),
+        )
+        .unwrap();
+        add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "图片导演",
+                "roleId": "image-director",
+                "capabilities": ["image_generation"],
+                "allowedTools": ["image.generate"]
+            }),
+        )
+        .unwrap();
+
+        let result = match_collab_members_for_task(
+            &store,
+            &json!({
+                "sessionId": session.id,
+                "title": "生成封面图",
+                "objective": "用生图工具生成封面和视觉方案",
+                "taskType": "image_generation",
+                "requiredCapabilities": ["image_generation"],
+                "requiredToolFamilies": ["image.generate"],
+                "limit": 2
+            }),
+        )
+        .unwrap();
+
+        let first = result
+            .get("candidates")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .expect("candidate should exist");
+        assert_eq!(
+            first.get("roleId").and_then(Value::as_str),
+            Some("image-director")
+        );
+        assert!(first
+            .get("reasons")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|value| value
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("preferred_task")));
+    }
+
+    #[test]
+    fn collab_member_agent_card_allows_custom_profile_overlay() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "custom profile" })).unwrap();
+
+        let member = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "审稿人",
+                "roleId": "reviewer",
+                "metadata": {
+                    "agentCard": {
+                        "oneLine": "专门检查交付风险",
+                        "preferredTasks": ["acceptance_check"]
+                    }
+                }
+            }),
+        )
+        .unwrap();
+
+        let agent_card = member
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("agentCard"))
+            .unwrap();
+        assert_eq!(
+            agent_card.get("oneLine").and_then(Value::as_str),
+            Some("专门检查交付风险")
+        );
+        assert!(agent_card
+            .get("preferredTasks")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|value| value == "acceptance_check"));
+    }
+
+    #[test]
+    fn collab_member_task_plan_tracks_assignment_and_completion_claim() {
+        let mut store = AppStore::default();
+        let session = create_collab_session(&mut store, &json!({ "objective": "plan" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({ "sessionId": session.id, "displayName": "执行者" }),
+        )
+        .unwrap();
+        let task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "执行任务",
+                "status": "running"
+            }),
+        )
+        .unwrap();
+
+        let report = submit_collab_report(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": task.id,
+                "status": "completed",
+                "summary": "完成任务",
+                "evidence": [{ "kind": "file", "path": "workspace://done.md" }],
+                "handoff": "交给 reviewer",
+                "risks": []
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(report.report_type, "completion");
+        assert!(report
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("completionClaim"))
+            .is_some());
+        let member = store
+            .collab_members
+            .iter()
+            .find(|item| item.id == member.id)
+            .unwrap();
+        let plan = member
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("memberTaskPlan"))
+            .unwrap();
+        assert_eq!(
+            plan.pointer("/tasks/0/status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            plan.pointer("/speechQueue/0/reason")
+                .and_then(Value::as_str),
+            Some("completion")
+        );
+    }
+
+    #[test]
+    fn collab_member_executor_capacity_blocks_extra_running_tasks() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "capacity" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "有限执行者",
+                "metadata": {
+                    "agentCard": {
+                        "capacity": { "maxExecutorThreads": 1, "defaultExecutorThreads": 1 }
+                    }
+                }
+            }),
+        )
+        .unwrap();
+        create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "第一个任务",
+                "status": "running"
+            }),
+        )
+        .unwrap();
+
+        let result = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "第二个任务",
+                "status": "running"
+            }),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn collab_artifact_and_blocker_helpers_submit_structured_reports() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "helpers" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({ "sessionId": session.id, "displayName": "成员" }),
+        )
+        .unwrap();
+        let task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "产物任务"
+            }),
+        )
+        .unwrap();
+
+        let artifact_report = attach_collab_artifact(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": task.id,
+                "artifact": { "kind": "note", "path": "workspace://a.md" }
+            }),
+        )
+        .unwrap();
+        assert_eq!(artifact_report.report_type, "artifact");
+        let blocker_report = raise_collab_blocker(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": task.id,
+                "blocker": "等待输入"
+            }),
+        )
+        .unwrap();
+        assert_eq!(blocker_report.report_type, "blocker");
+        assert_eq!(blocker_report.status, "blocked");
+    }
+
+    #[test]
+    fn collab_task_lifecycle_claims_once_and_pins_resume_pointer() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "canonical task" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({ "sessionId": session.id, "displayName": "执行者" }),
+        )
+        .unwrap();
+        let task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "统一任务",
+                "source": "chat",
+                "maxAttempts": 2
+            }),
+        )
+        .unwrap();
+
+        let claimed = transition_collab_task(
+            &mut store,
+            &json!({
+                "taskId": task.id,
+                "memberId": member.id,
+                "leaseOwner": "worker-1",
+                "leaseExpiresAt": 12345
+            }),
+            "claim",
+        )
+        .unwrap();
+        assert_eq!(claimed.status, "claimed");
+        assert_eq!(claimed.source, "chat");
+        assert_eq!(claimed.lease_owner.as_deref(), Some("worker-1"));
+
+        let duplicate = transition_collab_task(
+            &mut store,
+            &json!({ "taskId": claimed.id, "leaseOwner": "worker-2" }),
+            "claim",
+        );
+        assert!(duplicate.is_err());
+
+        let running =
+            transition_collab_task(&mut store, &json!({ "taskId": claimed.id }), "start").unwrap();
+        assert_eq!(running.status, "running");
+        assert!(running.started_at.is_some());
+
+        let pinned = pin_collab_task_session(
+            &mut store,
+            &json!({
+                "taskId": running.id,
+                "sessionResumeId": "agent-session-1",
+                "workDir": "/tmp/redconvert-task"
+            }),
+        )
+        .unwrap();
+        assert_eq!(pinned.session_resume_id.as_deref(), Some("agent-session-1"));
+        assert_eq!(pinned.work_dir.as_deref(), Some("/tmp/redconvert-task"));
+    }
+
+    #[test]
+    fn collab_task_retry_preserves_parent_and_attempt() {
+        let mut store = AppStore::default();
+        let session = create_collab_session(&mut store, &json!({ "objective": "retry" })).unwrap();
+        let task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "可重试任务",
+                "maxAttempts": 2
+            }),
+        )
+        .unwrap();
+        let claimed = transition_collab_task(
+            &mut store,
+            &json!({ "taskId": task.id, "leaseOwner": "worker-1" }),
+            "claim",
+        )
+        .unwrap();
+        let running =
+            transition_collab_task(&mut store, &json!({ "taskId": claimed.id }), "start").unwrap();
+        let failed = transition_collab_task(
+            &mut store,
+            &json!({
+                "taskId": running.id,
+                "failureReason": "runtime_recovery",
+                "sessionResumeId": "agent-session-1"
+            }),
+            "fail",
+        )
+        .unwrap();
+        assert_eq!(failed.status, "failed");
+
+        let retry = retry_collab_task(&mut store, &json!({ "taskId": failed.id })).unwrap();
+        assert_eq!(retry.parent_task_id.as_deref(), Some(failed.id.as_str()));
+        assert_eq!(retry.attempt, 2);
+        assert_eq!(retry.max_attempts, 2);
+        assert_eq!(retry.session_resume_id.as_deref(), Some("agent-session-1"));
+        assert_eq!(retry.status, "queued");
+
+        let exhausted = retry_collab_task(&mut store, &json!({ "taskId": retry.id }));
+        assert!(exhausted.is_err());
+    }
+
+    #[test]
+    fn review_docket_pauses_and_resumes_linked_task() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "review docket" })).unwrap();
+        let task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "等待审批的任务",
+                "status": "running"
+            }),
+        )
+        .unwrap();
+
+        let docket = create_review_docket(
+            &mut store,
+            &json!({
+                "sourceKind": "team",
+                "taskId": task.id,
+                "title": "确认是否继续",
+                "summary": "AI 需要人类批准继续执行",
+                "decisionType": "approve",
+                "proposedAction": {
+                    "onDecisionTaskStatus": {
+                        "approved": "running",
+                        "rejected": "failed"
+                    }
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(docket.status, "pending");
+        let paused = store
+            .collab_tasks
+            .iter()
+            .find(|item| item.id == task.id)
+            .unwrap();
+        assert_eq!(paused.status, "waiting_for_review");
+
+        let decision = decide_review_docket(
+            &mut store,
+            &json!({
+                "docketId": docket.id,
+                "decision": "approve",
+                "comment": "准"
+            }),
+        )
+        .unwrap();
+        assert_eq!(decision.decision, "approved");
+        let resumed = store
+            .collab_tasks
+            .iter()
+            .find(|item| item.id == task.id)
+            .unwrap();
+        assert_eq!(resumed.status, "running");
+        let decided = store
+            .review_dockets
+            .iter()
+            .find(|item| item.id == docket.id)
+            .unwrap();
+        assert_eq!(decided.status, "approved");
+        assert!(decided.decided_at.is_some());
+    }
+
+    #[test]
+    fn review_docket_cannot_be_decided_twice() {
+        let mut store = AppStore::default();
+        let docket = create_review_docket(
+            &mut store,
+            &json!({
+                "sourceKind": "scheduler",
+                "title": "创建自动任务",
+                "summary": "是否允许创建自动任务"
+            }),
+        )
+        .unwrap();
+        decide_review_docket(
+            &mut store,
+            &json!({ "docketId": docket.id, "decision": "reject" }),
+        )
+        .unwrap();
+        let duplicate = decide_review_docket(
+            &mut store,
+            &json!({ "docketId": docket.id, "decision": "approve" }),
+        );
+        assert!(duplicate.is_err());
+    }
+
+    #[test]
+    fn review_docket_stats_counts_pending_and_expired() {
+        let mut store = AppStore::default();
+        let expired_at = now_i64() - 1;
+        let pending = create_review_docket(
+            &mut store,
+            &json!({
+                "sourceKind": "scheduler",
+                "title": "过期审批",
+                "summary": "需要尽快处理",
+                "expiresAt": expired_at
+            }),
+        )
+        .unwrap();
+        let approved = create_review_docket(
+            &mut store,
+            &json!({
+                "sourceKind": "team",
+                "title": "已批准审批",
+                "summary": "完成验收"
+            }),
+        )
+        .unwrap();
+
+        decide_review_docket(
+            &mut store,
+            &json!({ "docketId": approved.id, "decision": "approve" }),
+        )
+        .unwrap();
+
+        let stats = review_docket_stats(&store);
+        assert_eq!(stats["total"], 2);
+        assert_eq!(stats["pending"], 1);
+        assert_eq!(stats["approved"], 1);
+        assert_eq!(stats["expiredPending"], 1);
+        assert_eq!(pending.status, "pending");
+    }
+}

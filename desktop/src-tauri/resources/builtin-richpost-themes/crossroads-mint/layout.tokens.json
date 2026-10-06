@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "themeId": "crossroads-mint",
+  "cssVars": {
+    "--rb-page-bg": "#f4f0ea",
+    "--rb-shell-bg": "linear-gradient(135deg,#4fa8ea 0%,#4fc9dc 46%,#5dd6be 100%)",
+    "--rb-preview-card-bg": "rgba(241,250,250,.88)",
+    "--rb-preview-card-border": "rgba(23,62,67,.10)",
+    "--rb-preview-card-shadow": "0 22px 56px rgba(34,100,122,.14)",
+    "--rb-surface-bg": "rgba(240,249,249,.96)",
+    "--rb-surface-border": "rgba(23,62,67,.08)",
+    "--rb-surface-shadow": "0 24px 54px rgba(18,86,126,.16)",
+    "--rb-surface-radius": "38px",
+    "--rb-image-radius": "24px",
+    "--rb-heading-text": "#091015",
+    "--rb-body-text": "#121a1d",
+    "--rb-text": "#121a1d",
+    "--rb-muted": "#4d6267",
+    "--rb-accent": "#1f7d58",
+    "--rb-heading-font": "\"Songti SC\",\"STSong\",\"Source Han Serif SC\",serif",
+    "--rb-body-font": "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif",
+    "--rb-page-padding": "clamp(22px, 4vw, 36px)",
+    "--rb-zone-gap": "18px",
+    "--rb-body-font-size": "calc(clamp(18px, 3.2vw, 34px) * var(--rb-font-scale))",
+    "--rb-body-line-height": "1.95",
+    "--rb-heading-h1-size": "calc(clamp(34px, 5.9vw, 64px) * var(--rb-font-scale))",
+    "--rb-heading-h2-size": "calc(clamp(26px, 4.6vw, 50px) * var(--rb-font-scale))",
+    "--rb-heading-h3-size": "calc(clamp(22px, 4vw, 40px) * var(--rb-font-scale))",
+    "--rb-content-max-width": "100%",
+    "--rb-title-max-width": "100%",
+    "--rb-strong-weight": "800",
+    "--rb-link-decoration": "underline"
+  },
+  "roleCssVars": {
+    "cover": {
+      "--rb-zone-gap": "20px"
+    },
+    "body": {
+      "--rb-zone-gap": "18px"
+    },
+    "ending": {
+      "--rb-zone-gap": "16px"
+    }
+  }
+}

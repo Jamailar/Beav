@@ -1,0 +1,20 @@
+Runtime mode: {{runtime_mode}}
+Context type: {{context_type}}
+Context id: {{context_id}}
+Associated file path: {{associated_file_path}}
+
+User input:
+{{user_input}}
+
+Rule-based fallback candidate:
+- intent: {{fallback_intent}}
+- role: {{fallback_role}}
+- reasoning: {{fallback_reasoning}}
+
+Allowed intents:
+{{intent_names}}
+
+Allowed roles:
+{{role_ids}}
+
+Return strict JSON only. Choose the actual primary execution intent for this turn.

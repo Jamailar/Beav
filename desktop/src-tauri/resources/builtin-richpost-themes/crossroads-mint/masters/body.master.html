@@ -1,0 +1,134 @@
+<!-- Crossroads Mint body master -->
+<style>
+.rb-page-host .rb-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
+  background:
+    radial-gradient(56% 44% at 32% 54%, rgba(239,253,252,0.52) 0%, rgba(239,253,252,0) 100%),
+    radial-gradient(24% 18% at 82% 14%, rgba(226,255,246,0.36) 0%, rgba(226,255,246,0) 100%),
+    linear-gradient(135deg, #57ace7 0%, #52c6d9 48%, #63d5bd 100%);
+}
+.rb-page-host .rb-zone-background,
+.rb-page-host .rb-zone-overlay,
+.rb-page-host .rb-zone-decoration {
+  position: absolute;
+  inset: 0;
+}
+.rb-page-host .rb-zone-background {
+  z-index: 0;
+  background-image: var(--rb-background-image, none);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+.rb-page-host .rb-zone-background .page-asset,
+.rb-page-host .rb-zone-background img {
+  width: 100%;
+  height: 100%;
+}
+.rb-page-host .rb-zone-background img {
+  object-fit: cover;
+}
+.rb-page-host .rb-zone-overlay {
+  z-index: 1;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0) 25%, rgba(255,255,255,0.04) 100%);
+}
+.rb-page-host .rb-paper,
+.rb-page-host .rb-paper-glow {
+  position: absolute;
+}
+.rb-page-host .rb-paper {
+  inset: 6.4% 6.7% 6.1% 6.7%;
+  z-index: 2;
+  border-radius: 40px;
+  background: linear-gradient(180deg, rgba(236,248,249,0.98) 0%, rgba(219,237,244,0.95) 100%);
+  border: 1px solid rgba(248,254,254,0.76);
+  box-shadow: 0 22px 56px rgba(18,86,126,0.19);
+}
+.rb-page-host .rb-paper-glow {
+  left: 21%;
+  top: 22%;
+  width: 58%;
+  height: 12%;
+  z-index: 3;
+  border-radius: 999px;
+  background: rgba(248,255,254,0.24);
+  filter: blur(10px);
+}
+.rb-page-host .rb-stage-frame {
+  position: absolute;
+  left: var(--rb-frame-left, 14%);
+  top: var(--rb-frame-top, 11%);
+  width: var(--rb-frame-width, 74%);
+  height: var(--rb-frame-height, 79%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rb-zone-gap);
+  align-items: flex-start;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+.rb-page-host .rb-zone-title,
+.rb-page-host .rb-zone-body,
+.rb-page-host .rb-zone-media,
+.rb-page-host .rb-zone-footer {
+  width: 100%;
+  max-width: 100%;
+}
+.rb-page-host .rb-zone-body p {
+  margin-top: 0;
+}
+.rb-page-host .rb-zone-title h1,
+.rb-page-host .rb-zone-body h1 {
+  position: relative;
+  display: inline-block;
+  margin: 0.08em 0 0.34em;
+  padding: 0.04em 0.12em 0.12em 1.02em;
+  color: #0d1014;
+  font-weight: 900;
+  letter-spacing: 0.01em;
+  line-height: 1.18;
+  z-index: 0;
+}
+.rb-page-host .rb-zone-title h1::before,
+.rb-page-host .rb-zone-body h1::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.12em;
+  width: 0.24em;
+  height: 1.18em;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(34,138,73,1) 0%, rgba(49,155,98,0.96) 100%);
+}
+.rb-page-host .rb-zone-title h1::after,
+.rb-page-host .rb-zone-body h1::after {
+  content: "";
+  position: absolute;
+  left: 1.02em;
+  right: 0;
+  bottom: 0.12em;
+  height: 0.34em;
+  border-radius: 999px;
+  background: rgba(240,231,148,0.56);
+  z-index: -1;
+}
+</style>
+<div class="rb-stage">
+  <div class="rb-zone rb-zone-background">{{zone:background}}</div>
+  <div class="rb-zone rb-zone-overlay">{{zone:overlay}}</div>
+  <div class="rb-paper"></div>
+  <div class="rb-paper-glow"></div>
+  <div class="rb-zone rb-zone-decoration">{{zone:decoration}}</div>
+  <div class="rb-stage-frame" data-zone-frame="content">
+    <header class="rb-zone rb-zone-title">{{zone:title}}</header>
+    <main class="rb-zone rb-zone-body">{{zone:body}}</main>
+    <div class="rb-zone rb-zone-media">{{zone:media}}</div>
+    <footer class="rb-zone rb-zone-footer">{{zone:footer}}</footer>
+  </div>
+</div>

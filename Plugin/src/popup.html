@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Beav</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="app">
+    <section class="panel">
+      <div class="brand">
+        <img src="icons/icon48.png" alt="Beav" class="brand-icon">
+        <div class="eyebrow">Beav</div>
+      </div>
+      <h1>保存到知识库</h1>
+      <div id="server-status" class="status">正在检测桌面端...</div>
+      <div id="page-meta" class="page-meta"></div>
+    </section>
+
+    <section id="update-panel" class="panel update-panel hidden">
+      <div class="section-label">插件更新</div>
+      <div id="update-status" class="status">正在检查插件更新...</div>
+      <div id="update-meta" class="update-meta hidden"></div>
+      <div class="update-actions">
+        <button id="check-update" class="btn btn-ghost">立即检查更新</button>
+        <button id="open-update-source" class="btn btn-ghost">打开更新源</button>
+      </div>
+    </section>
+
+    <section class="panel actions">
+      <div id="action-hint" class="action-hint hidden"></div>
+      <button id="save-primary" class="btn btn-primary">正在识别当前页面...</button>
+    </section>
+
+    <section id="result" class="panel result hidden"></section>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

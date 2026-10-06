@@ -1,0 +1,14 @@
+# `src/features/`
+
+本目录放垂直功能特性，适合比通用组件更重、但还不应上升为整页的模块。
+
+## Current Areas
+
+- `app-shell/`: shell gates, view navigation, and global intent routing
+- `capture/`: clipboard and external capture prompt logic
+- `official/`: 官方发布相关 UI
+
+## Rule Of Thumb
+
+- 需要自己的状态、协议、局部目录结构时，放在 `features/`
+- 只是纯展示组件时，不必提升到 `features/`
