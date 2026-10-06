@@ -31,6 +31,8 @@ These describe the maintained desktop product. See the source boundary below bef
 
 The public source is not a complete or live mirror of the latest desktop product. Building the 2.5.0 snapshot will not reproduce the 2.8 installer. Public components such as the browser extension may update independently of the desktop source snapshot.
 
+See [desktop/README.md](./desktop/README.md) for the source layout, dependencies and local build steps.
+
 ## Workflow in the desktop release
 
 | Task | Entry point |
