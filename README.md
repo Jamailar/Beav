@@ -164,20 +164,6 @@ Beav 因此而生：把 AI 变成自媒体工作者真正可持续使用的素�
 
 如希望成为 Beav 的经销或代理合作伙伴，请填写 [Beav 经销代理合作申请表](https://my.feishu.cn/share/base/form/shrcnYe6rZBbfQNvgeDIEHClWUc)。
 
-## 友情赞助
-
-<p>
-  <a href="https://www.ipwo.net/?ref=githubJamailar">
-    <img src="./images/ipwo-sponsor.png" alt="IPWO 住宅代理" width="100%">
-  </a>
-</p>
-
-<p><small>
-IPWO 提供全球住宅IP资源，支持多地区 IP 环境访问，为自动化任务执行、海外服务测试等场景提供灵活的网络支持。<br>
-浏览器自动化与智能应用开发场景中，不同地区的网络环境适配是开发测试过程中的常见需求，IPWO全球代理支持免费测试，9折优惠码“0203”<br>
-<a href="https://www.ipwo.net/?ref=githubJamailar">访问IPWO入口</a>
-</small></p>
-
 ## 产品截图
 
 ### 浏览器采集
