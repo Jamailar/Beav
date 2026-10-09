@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <img src="./images/beav-agent-workflow-hero.png" alt="Beav AI content operations workspace" width="50%">
+  <img src="./images/beav-product-hero.png" alt="Beav AI content operations workspace" width="50%">
 </p>
 
 > RedBox is now **Beav**. Existing local data and workspaces are unaffected.

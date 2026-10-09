@@ -1,0 +1,17 @@
+Beav social preview
+Generated with the built-in imagegen tool on 2026-10-08.
+Identity reference: desktop/branding/variants/beav/icons/icon.png
+Master: images/beav-product-hero.png
+Upload-ready export: images/beav-social-preview.jpg (1280 x 640)
+
+Use case: ads-marketing
+Asset type: permanent GitHub social preview for Beav, landscape exactly 2:1, target 1280x640.
+Create a polished, restrained brand graphic for the current Beav product, an AI workspace for social-media creators. No announcement or rebranding theme.
+Input image 1 is the official Beav app icon and identity reference. Faithfully preserve this orange beaver's face, proportions, two white front teeth, brown nose, paws, sage green inner tile and creamy rounded frame. Incorporate it as a large, premium dimensional app icon in the right half of the composition.
+Composition: spacious warm ivory background, confident editorial typography on the left, beautiful hero icon on the right. Subtle sage green halo behind right-side objects, soft realistic contact shadows, finely crafted matte surfaces. Refined orange accent line. Behind and beside the hero icon, just three modest layered creative artifact cards: a research/writing page with minimal abstract lines, a photographic landscape card, and a small video timeline card with an orange play triangle and a few sage/peach tracks. These are symbolic creative artifacts, not fake app screenshots. Let the beaver dominate. Keep cards visually quiet and never overlapping the text.
+Exact text, with clean typography, no extra text:
+"Beav" — extremely large bold dark warm brown sans-serif, the main wordmark at upper/middle left.
+"AI 自媒体工作台" — second-largest text underneath, crisp dark brown Chinese sans-serif.
+"调研 · 写作 · 图片 · 视频" — a single smaller muted brown line with generous space above.
+"beav.pro" — small but readable, lower left.
+Keep all important content within 6 percent safe margins. Strong hierarchy that remains readable as a small link preview. Warm, capable, friendly, premium desktop software identity. No red boxes, no RedBox text, no arrows indicating migration, no renamed wording, no badges, no extra slogan, no robots, no neon gradients, no watermarks. Sharp professional finished artwork.
