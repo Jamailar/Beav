@@ -39,7 +39,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.bilibili.com/video/BV12LNn6nEem/">视频教程</a>
+  <a href="https://www.bilibili.com/video/BV1pnpz6rETV/">视频教程</a>
 </p>
 
 <p align="center">
@@ -298,7 +298,7 @@ Linux 服务器版可以通过浏览器访问，适合放在一台常开的机�
 - [官网与下载](https://beav.pro/)
 - [GitHub Releases](https://github.com/Jamailar/Beav/releases)
 - [问题反馈](https://github.com/Jamailar/Beav/issues)
-- [Bilibili 视频教程](https://www.bilibili.com/video/BV12LNn6nEem/)
+- [Bilibili 视频教程](https://www.bilibili.com/video/BV1pnpz6rETV/)
 
 Beav 由 [JambaHailar](https://x.com/JambaHailar) 独立开发和维护。
 

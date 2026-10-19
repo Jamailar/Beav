@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.bilibili.com/video/BV12LNn6nEem/">Video Tutorial</a>
+  <a href="https://www.bilibili.com/video/BV1pnpz6rETV/">Video Tutorial</a>
 </p>
 
 <p align="center">
@@ -229,7 +229,7 @@ Not sure where something is? Ask Beav in a conversation; it checks the built-in 
 - [Website and downloads](https://beav.pro/)
 - [GitHub Releases](https://github.com/Jamailar/Beav/releases)
 - [Issues](https://github.com/Jamailar/Beav/issues)
-- [Bilibili video tutorial](https://www.bilibili.com/video/BV12LNn6nEem/)
+- [Bilibili video tutorial](https://www.bilibili.com/video/BV1pnpz6rETV/)
 
 Beav is independently developed and maintained by [JambaHailar](https://x.com/JambaHailar).
 
