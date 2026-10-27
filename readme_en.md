@@ -38,7 +38,7 @@
 | The daily pain | What Beav does |
 | --- | --- |
 | Great posts spotted on your phone get bookmarked and are gone by the time you sit at your computer | Paste share links on your phone to save them straight into your **computer's Knowledge base**. Videos are downloaded and transcribed, and can be **broken down automatically** into topic, structure, shots and timed script |
-| You check competitor accounts every day and forget what you saw | **Subscribe to creators**: new posts sync into your library every day, with optional automatic breakdowns |
+| You check competitor accounts every day and forget what you saw | **Subscribe to creators**: new posts sync into your library every day |
 | Every morning starts with "what should I post today?" | A **daily operations report** and plan at 09:00, plus a **Trends** page that scores hot topics against your account |
 | General-purpose AI doesn't sound like you | Each account gets its own **space** with long-term memory of positioning, audience, voice, preferences and past posts |
 | Writing, covers, video editing and captions live in different apps | Write, generate images from **templates**, cut talking-head videos with the **editor**, add captions, animations and AI voice-over, all from one conversation |
@@ -62,17 +62,17 @@ Ideas show up while scrolling on your phone, the work happens on your computer, 
 </p>
 
 1. **Save from your phone in one step:** click *Phone upload* in the Knowledge base and scan the QR code to open the *Save to Knowledge* page. Copy share links from Xiaohongshu, Douyin, Bilibili, YouTube, Weibo, Zhihu, WeChat and more and paste them in, share text included, up to 50 at once. Photos, videos and recordings from your camera roll can go straight to the Library. Pair once and bookmark the page for 90 days.
-2. **Broken down as soon as it lands:** tick *Break down after saving* and your computer downloads, transcribes and breaks each item into topic, structure, shot rhythm, shooting script and timed original script, with clips saved to the Library. Turn on *Auto-break down new posts* for subscribed creators and their updates arrive already analyzed.
+2. **Break down what you want to learn from:** your computer downloads and transcribes each item; click *Break down* on one and it is split into topic, structure, shot rhythm, shooting script and timed original script. Subscribed creators' new posts arrive on their own.
 3. **Create with AI on your computer:** turn what you saved into topics, drafts, covers and edited videos, packaged for each platform.
 4. **Scan to post from your phone:** click the phone icon on a publishing package, manuscript or knowledge card, scan, then save the original images to your photos and copy the title and body in one tap. Images, videos, documents and whole folders can be sent to your phone the same way.
 
 <table>
   <tr>
-    <td width="50%"><img src="./images/readme/phone-save-to-desktop.jpg" alt="Phone upload QR code on the computer; paste share links on the phone with break down after saving"></td>
+    <td width="50%"><img src="./images/readme/phone-save-to-desktop.jpg" alt="Phone upload QR code on the computer; paste share links on the phone to save them to your computer"></td>
     <td width="50%"><img src="./images/readme/phone-share-to-publish.jpg" alt="Share a publishing package to the phone; save images and copy the title and body"></td>
   </tr>
   <tr>
-    <td align="center">Spotted on the phone: paste links to save and break down on your computer</td>
+    <td align="center">Spotted on the phone: paste links to save them on your computer</td>
     <td align="center">Done on the computer: scan to your phone, save images and copy the text</td>
   </tr>
 </table>
@@ -151,8 +151,8 @@ AI voice-over (including multilingual), image-to-video and video templates are a
 ## Build up your sources: Knowledge and Library
 
 - **Knowledge:** save links from Xiaohongshu, Douyin, Bilibili, YouTube, X, Weibo, Zhihu, WeChat articles and more, or link local folders, Obsidian and Eagle. Videos are downloaded and transcribed, and comments can be saved too.
-- **Breakdowns:** tick *Break down after saving*, or click *Break down* on any item, to get topic, structure, shot rhythm, shooting script and the timed original script. The clips go straight into the Library.
-- **Creator subscriptions:** follow benchmark accounts, sync new posts daily, and optionally break them down automatically within a daily quota.
+- **Breakdowns:** click *Break down* on any item (or select several and break them down together) to get topic, structure, shot rhythm, shooting script and the timed original script. The clips go straight into the Library.
+- **Creator subscriptions:** follow benchmark accounts, and sync new posts daily.
 - **Library:** a Finder-style home for images, videos, copy, music, prompts and topics, with folders, multi-select drag and drop, context menus, space-bar preview and phone upload. Everything is understood by AI (transcripts, breakdowns, visual index) so a single sentence can find it later.
 
 <p align="center">
