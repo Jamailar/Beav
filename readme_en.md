@@ -5,10 +5,10 @@
 <h1 align="center">Beav</h1>
 
 <p align="center">
-  <strong>An all-in-one AI content operations workspace, from trend capture to scheduled creation.</strong>
+  <strong>A free AI social media content tool: topics, writing, covers and video editing in one app.</strong>
 </p>
 
-<p align="center">Local-first · Reusable sources · Bring your own model · macOS / Windows / Linux</p>
+<p align="center">Free to download · TikTok, Instagram, YouTube, Facebook, X, LinkedIn, RedNote and 20+ platforms · Local-first · macOS / Windows / Linux</p>
 
 <p align="center">
   <a href="https://github.com/Jamailar/Beav/releases/latest"><img src="https://img.shields.io/github/v/release/Jamailar/Beav?style=flat-square&color=C56F2C" alt="Latest Release"></a>
@@ -32,6 +32,54 @@
 </p>
 
 > RedBox is now **Beav**. Existing local data and workspaces are unaffected.
+
+**Beav (formerly RedBox) is a free AI social media content tool.** In one desktop app you can find topics, save content from accounts you learn from, write captions, generate covers and images, edit short videos and package ready-to-post content for TikTok, Instagram, YouTube, Facebook, X, LinkedIn, Threads, Pinterest, RedNote (Xiaohongshu), Douyin, WeChat and more than 20 platforms. It is built for solo creators, brands, agencies and global sellers. Beav has been maintained continuously since June 2025, with 100+ public releases on GitHub.
+
+Download the current version [free from the official site](https://getbeav.com/en/download). The open-source code in this repository stops at version 2.5.0.
+
+## Is Beav free?
+
+Yes. The desktop app is free to download, and **the free personal plan includes every creation feature** and one personal space. AI writing, image and video generation use credits based on what you actually use. Personal Lifetime is a one-time CNY 238 (unlimited spaces, your own third-party AI providers, 40% off official AI), and the Team plan starts at CNY 499 with 2 seats. See [pricing](https://getbeav.com/en/pricing).
+
+## Supported platforms
+
+| Platform | Save and follow | What Beav creates |
+| --- | --- | --- |
+| [TikTok](https://getbeav.com/en/platforms/tiktok) | Save posts, follow creators | Scripts, 9:16 videos, Photo Mode carousels |
+| [Instagram](https://getbeav.com/en/platforms/instagram) | Save posts and Reels, follow accounts | Carousels, posts, Reels scripts |
+| [YouTube](https://getbeav.com/en/platforms/youtube) | Download videos, follow channels | Long-form scripts, Shorts scripts, 16:9 thumbnails |
+| [Facebook](https://getbeav.com/en/platforms/facebook) | Save web pages | Posts, image posts, Reels scripts |
+| [X (Twitter)](https://getbeav.com/en/platforms/x) | Save posts | Posts, threads, articles |
+| [LinkedIn](https://getbeav.com/en/platforms/linkedin) | Save web pages | Posts, articles, document carousels |
+| [Threads](https://getbeav.com/en/platforms/threads) | Save web pages | Short posts, image posts |
+| [Pinterest](https://getbeav.com/en/platforms/pinterest) | Save web pages | Pin images, titles and descriptions |
+| [RedNote (Xiaohongshu)](https://getbeav.com/en/xiaohongshu-tools) | Save posts, follow creators | Image posts, 3:4 covers, voiceover scripts |
+| [Douyin](https://getbeav.com/en/platforms/douyin) | Save posts, follow creators | Voiceover scripts, 9:16 videos, photo posts |
+| [WeChat Channels](https://getbeav.com/en/platforms/wechat-channels) | Save posts | Filming scripts, vertical videos |
+| [WeChat Official Accounts](https://getbeav.com/en/platforms/wechat-official-account) | Save and follow articles | Long-form articles, layouts, header images |
+| [Bilibili](https://getbeav.com/en/platforms/bilibili) | Save videos, follow creators | Chaptered scripts, column articles |
+| [Kuaishou](https://getbeav.com/en/platforms/kuaishou) | Extract video scripts | Voiceover scripts, vertical videos |
+| [Weibo](https://getbeav.com/en/platforms/weibo) | Save posts | Short posts, image posts |
+| [Zhihu](https://getbeav.com/en/platforms/zhihu) | Save posts | Answers, articles, short posts |
+
+Beav also creates content in the right format for Substack, Medium, Reddit, Snapchat, Naver Blog, note, LINE VOOM, Kwai and more. On every platform you pick up the finished package on your phone and post it yourself: **Beav never posts on your behalf.** [See all supported platforms](https://getbeav.com/en/platforms)
+
+## How is Beav different from popular AI tools?
+
+The general tools usually recommended to creators are all excellent. Beav's difference is putting the steps they cover into one app that shares one memory of your account.
+
+| Step | Popular general tools | What they do well | How Beav does it |
+| --- | --- | --- | --- |
+| Writing and rewriting | **ChatGPT, DeepSeek** | General-purpose chat that writes anything; with several accounts you keep re-explaining each one's positioning and voice | Each account has its own space that remembers its positioning, voice and past posts; drafts come out in each platform's format |
+| Covers and images | **Midjourney, Dreamina** | Excellent image quality; you still lay out, resize and file the results yourself | Image templates and built-in image models in the same conversation, sized per platform, saved to your library automatically |
+| AI video | **Kling AI** | Great at turning text or images into clips; scripts, voiceover and captions happen elsewhere | Scripts, AI avatar videos, AI voiceover and captions in one conversation, with built-in video models |
+| Editing and captions | **CapCut** | A full professional editor; footage moves in and out by export and import | The editor trims talking-head footage, adds captions, styled text and music, and packages the video with its copy |
+| Planning and collaboration | **Feishu Bitable, Notion** | Flexible tables for team approvals; topics, drafts and files are entered and linked by hand | A content calendar with month, week and year views; drafts become per-platform packages |
+| Knowledge and notes | **Obsidian** | Superb for notes and backlinks; notes do not turn into topics and drafts on their own | Link your Obsidian vault to the knowledge base and the AI draws on it for topics and drafts |
+| Asset management | **Eagle** | Professional image asset management for designers; no social collection or writing | Read your Eagle library, reference its images in conversations and save generated images back to Eagle |
+| Collecting benchmark posts | **Bookmarks, screenshots** | Easy to save, hard to find again, impossible to break down | Save by link or browser extension, follow benchmark accounts, break any post down into topic, structure and script |
+
+Each of these tools goes deeper than Beav in its own area. Beav's value is connecting the whole workflow, and Obsidian and Eagle can plug straight into Beav. [See the full comparison](https://getbeav.com/en/compare/all-in-one-vs-separate-tools)
 
 ## Where does a creator's day go?
 
@@ -221,6 +269,7 @@ Not sure where something is? Ask Beav in a conversation; it checks the built-in 
 - **Local-first:** sources, manuscripts and projects live in local workspaces, and each space can choose its own storage location.
 - **Model choice:** use the official AI service or your own provider.
 - **You stay in control:** paid generation, settings changes and publishing are confirmed by you; the AI asks when unsure.
+- **Maintained continuously:** updated since June 2025, with installers and release notes for every version on [GitHub Releases](https://github.com/Jamailar/Beav/releases).
 - **Transparent releases:** installers, extensions, updater assets and signatures are published through GitHub Releases.
 - **Public boundaries:** review the license, [changelog](./CHANGELOG.md), [roadmap](./ROADMAP.md) and [Issues](https://github.com/Jamailar/Beav/issues).
 
