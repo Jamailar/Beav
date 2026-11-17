@@ -5,7 +5,7 @@
 <h1 align="center">Beav</h1>
 
 <p align="center">
-  <strong>AI 自媒体工作台</strong>
+  <strong>免费的 AI 自媒体运营工具</strong>
 </p>
 
 <p align="center">
@@ -21,9 +21,9 @@
   <!-- release-stats:end -->
 </p>
 
-<p align="center">从资讯与选题，到图文创作、口播剪辑和持续运营的一站式 AI 工作空间。</p>
+<p align="center">一个软件完成找选题、写文案、做封面配图、剪辑短视频和多平台素材包，支持小红书、抖音、视频号、公众号、TikTok、Instagram、YouTube、Facebook、X、LinkedIn 等 20 多个平台。</p>
 
-<p align="center">本地优先 · 账号长期记忆 · AI 图片与视频剪辑 · macOS / Windows / Linux</p>
+<p align="center">免费下载 · 一站式图文与视频创作 · 本地优先 · 账号长期记忆 · macOS / Windows / Linux</p>
 
 <p align="center">
   <a href="https://github.com/Jamailar/Beav/releases/latest"><img src="https://img.shields.io/github/v/release/Jamailar/Beav?style=flat-square&color=C56F2C" alt="Latest Release"></a>
@@ -47,6 +47,54 @@
 </p>
 
 > RedBox 已更名为 **Beav**；原有本地数据和工作空间不受影响。
+
+**Beav（原 RedBox）是一款免费下载使用的 AI 自媒体运营工具**：在一个桌面软件里完成找选题、采集对标内容、写文案、生成封面配图、剪辑短视频和打包各平台素材包，支持小红书、抖音、视频号、公众号、B 站、快手、微博、知乎、TikTok、Instagram、YouTube、Facebook、X、LinkedIn、Threads、Pinterest 等 20 多个平台，适合个人博主、品牌商家、代运营团队和出海品牌。自 2025 年 6 月起持续维护，所有版本通过 GitHub Releases 公开发布。
+
+正式版请从[官网免费下载](https://beav.pro/download)。本仓库公开的源码停留在 2.5.0 版本，详见文末[开源版本说明](#开源版本说明)。
+
+## Beav 免费吗？
+
+可以免费用。桌面端免费下载，**个人免费版包含全部创作功能**和一个个人空间；AI 写稿、生图和视频生成按实际用量消耗积分。个人终身版 ¥238 一次购买（空间不限，可接入自己的第三方 AI，官方 AI 调用 6 折），团队永久版 ¥499 起并含 2 个席位。详见[价格页](https://beav.pro/pricing)。
+
+## 支持的平台
+
+| 平台 | 保存与订阅 | Beav 能生成 |
+| --- | --- | --- |
+| [小红书](https://beav.pro/xiaohongshu-tools) | 单篇保存、订阅博主 | 图文笔记、3:4 封面、口播脚本 |
+| [抖音](https://beav.pro/platforms/douyin) | 单篇保存、订阅博主 | 口播脚本、9:16 视频、图文 |
+| [视频号](https://beav.pro/platforms/wechat-channels) | 单篇保存 | 拍摄脚本、竖屏口播视频 |
+| [公众号](https://beav.pro/platforms/wechat-official-account) | 文章保存、订阅公众号 | 长文、公众号排版、头图和插图 |
+| [B 站](https://beav.pro/platforms/bilibili) | 单篇保存、订阅 UP 主 | 分段讲稿、拍摄脚本、专栏文章 |
+| [快手](https://beav.pro/platforms/kuaishou) | 视频文案提取 | 口播脚本、竖屏视频 |
+| [微博](https://beav.pro/platforms/weibo) | 单篇保存 | 短动态、图文 |
+| [知乎](https://beav.pro/platforms/zhihu) | 单篇保存 | 回答、文章、想法 |
+| [TikTok](https://beav.pro/platforms/tiktok) | 单篇保存、订阅博主 | 口播脚本、9:16 视频、图文轮播 |
+| [Instagram](https://beav.pro/platforms/instagram) | 单篇保存、订阅博主 | 轮播图文、帖子、Reels 脚本 |
+| [YouTube](https://beav.pro/platforms/youtube) | 视频下载、订阅频道 | 长视频讲稿、Shorts 脚本、16:9 缩略图 |
+| [X（推特）](https://beav.pro/platforms/x) | 单篇保存 | 帖子、线程、长文 |
+| [Facebook](https://beav.pro/platforms/facebook) | 网页保存 | 帖子、图文、Reels 脚本 |
+| [LinkedIn](https://beav.pro/platforms/linkedin) | 网页保存 | 帖子、文章、文档轮播 |
+| [Threads](https://beav.pro/platforms/threads) | 网页保存 | 短帖子、图文 |
+| [Pinterest](https://beav.pro/platforms/pinterest) | 网页保存 | Pin 图、标题和描述 |
+
+此外还能为 Substack、Medium、Reddit、Snapchat、Naver Blog、note、LINE VOOM、Kwai 等平台生成对应格式的内容。所有平台都是生成素材包后手机扫码领取、由你本人发布，**Beav 不会替你自动发帖**。[查看全部支持平台](https://beav.pro/platforms)
+
+## Beav 和常用 AI 工具有什么区别？
+
+做自媒体时常被推荐的通用工具都很优秀，Beav 的不同在于把它们覆盖的环节放进同一个软件，并共享同一份账号记忆。
+
+| 环节 | 常用的通用工具 | 它们擅长什么 | 在 Beav 里怎么做 |
+| --- | --- | --- | --- |
+| 写文案与改写 | **ChatGPT、DeepSeek** | 通用对话写作，什么都能写；运营多个账号时，要自己反复交代每个账号的定位和文风 | 每个账号一个空间，定位、文风和已发内容长期记住；按各平台格式直接出稿 |
+| 封面与配图 | **即梦、Midjourney** | 图片生成质量高；生成后还要另外排版、调整尺寸、整理到素材库 | 对话里用图片模板和内置的多家图片模型出图，尺寸按平台比例，生成记录自动进素材库 |
+| AI 视频 | **可灵 AI** | 擅长把文字或图片生成视频片段；脚本、配音和字幕要在别的工具里完成 | 脚本、数字人口播、AI 配音和字幕在同一个对话里完成，也能调用内置的视频模型 |
+| 剪辑与字幕 | **剪映** | 专业剪辑功能全面；素材要来回导出导入，文案另外整理 | 剪辑器智能剪口播，自动加字幕、花字和背景音乐，成片和文案一起打包 |
+| 排期与协作 | **飞书多维表格** | 表格灵活，适合团队审批协作；选题、稿件和素材要手动录入、关联 | 内容日历按月、周、年排期，稿件自动打包成各平台素材包 |
+| 知识与笔记 | **Obsidian** | 个人笔记和双向链接很强；笔记不会自动变成选题和稿件 | 知识库直接关联 Obsidian 仓库，AI 找选题、写稿时引用里面的资料 |
+| 素材管理 | **Eagle** | 图片素材管理专业，适合设计师；不负责采集社交平台内容和写稿 | 读取 Eagle 素材库、在对话中引用图片，也能把生成的图片存回 Eagle |
+| 对标内容采集 | **浏览器收藏夹、截图** | 收藏方便，回头很难找到，也没法拆解 | 粘贴链接或用浏览器插件保存，订阅对标账号，一键拆解成选题、结构和文案 |
+
+这些工具在各自领域都很强，单项深度通常比 Beav 更深。Beav 的价值是把整条流程串起来；Obsidian 和 Eagle 还可以直接接进 Beav 一起用。[查看完整对比](https://beav.pro/compare/all-in-one-vs-separate-tools)
 
 ## 做自媒体，时间都去哪了？
 
@@ -280,6 +328,7 @@ Linux 服务器版可以通过浏览器访问，适合放在一台常开的机�
 - **本地优先**：素材、稿件和项目以本地工作空间为核心组织，每个空间可以单独选择保存位置。
 - **模型可选**：支持官方 AI，也支持自己配置的模型供应商。
 - **你说了算**：收费生成、改设置、发布等动作由你确认；AI 不确定时会停下来问你。
+- **持续维护**：自 2025 年 6 月起持续迭代，每个版本的安装包和更新说明都在 [GitHub Releases](https://github.com/Jamailar/Beav/releases) 公开。
 - **发布透明**：安装包、扩展、更新资产和签名均通过 GitHub Releases 发布。
 - **边界公开**：许可证、[更新日志](./CHANGELOG.md)、[路线图](./ROADMAP.md) 和 [Issues](https://github.com/Jamailar/Beav/issues) 均可查。
 
