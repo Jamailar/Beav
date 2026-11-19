@@ -71,7 +71,7 @@ The general tools usually recommended to creators are all excellent. Beav's diff
 | Step | Popular general tools | What they do well | How Beav does it |
 | --- | --- | --- | --- |
 | Writing and rewriting | **ChatGPT, DeepSeek** | General-purpose chat that writes anything; with several accounts you keep re-explaining each one's positioning and voice | Each account has its own space that remembers its positioning, voice and past posts; drafts come out in each platform's format |
-| Covers and images | **Midjourney, Dreamina** | Excellent image quality; you still lay out, resize and file the results yourself | Image templates and built-in image models in the same conversation, sized per platform, saved to your library automatically |
+| Covers and images | **Canva, Midjourney** | Great for generating images and templated designs; you still resize and file the results yourself | Image templates and built-in image models in the same conversation, sized per platform, saved to your library automatically |
 | AI video | **Kling AI** | Great at turning text or images into clips; scripts, voiceover and captions happen elsewhere | Scripts, AI avatar videos, AI voiceover and captions in one conversation, with built-in video models |
 | Editing and captions | **CapCut** | A full professional editor; footage moves in and out by export and import | The editor trims talking-head footage, adds captions, styled text and music, and packages the video with its copy |
 | Planning and collaboration | **Feishu Bitable, Notion** | Flexible tables for team approvals; topics, drafts and files are entered and linked by hand | A content calendar with month, week and year views; drafts become per-platform packages |
