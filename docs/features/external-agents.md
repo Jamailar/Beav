@@ -7,7 +7,8 @@ Beav 不只自己用 AI，也可以当作其他 AI 工具的「创作者数据�
 ## 接入 Agent
 
 - 入口：账号菜单或素材库模式侧栏左下角的「接入 Agent」，右侧数字是已连上的 Agent 数量。
-- 弹窗按 Agent 分页（Claude Code、Codex、WorkBuddy、Claude 桌面版、Cursor、其他）。每页顶部有「一键连接」：Beav 把自己写进该工具的 MCP 配置，回到那个工具新开对话即可；也可以按页面上的话术、终端命令或 MCP 配置手动装 Beav Creator 插件。
+- Codex 和 WorkBuddy 可以一键写入 MCP 配置，也可以在同一页复制安装指引，安装含 Beav Creator Skill 的插件。安装后在 Codex 新任务或重新加载插件的 WorkBuddy 对话中调用 `creator_status`、`workspace_list` 和 `creator_tools`。
+- 支持 `extension prepare deepseek` 的桌面版增加 DeepSeek Harness 分页。在目标 Harness 的 Plugins → Add plugin 中选择准备命令返回的本地 `bundlePath`，加载后即可使用以 `mcp__beav__` 开头的工具。Claude Code、Claude 桌面版、Cursor 和「其他」保留各自的配置步骤。
 - 状态：「已连接」（本次启动后调用过）或「已授权，等待第一次调用」。
 - 外部 Agent 和 Beav 共享记忆和创作偏好；它写好的稿件、打包的素材可以回写到 Beav 的我的作品和素材库。
 - 两条通道：Agent 通过 MCP 直接操作数据和工具；你通过本机网页查看、审批和编辑。外部 Agent 不靠点网页或看截图判断任务完成。
