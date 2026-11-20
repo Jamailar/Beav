@@ -4,7 +4,7 @@
   "version": "../package.json",
   "identifier": "com.redconvert.beav",
   "build": {
-    "beforeDevCommand": "pnpm tauri:before-dev",
+    "beforeDevCommand": "node ./scripts/tauri-before-dev.mjs",
     "beforeBuildCommand": "pnpm build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"

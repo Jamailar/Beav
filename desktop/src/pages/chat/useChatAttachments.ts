@@ -133,13 +133,17 @@ function isVideoAttachment(attachment: UploadedFileAttachment | null | undefined
 }
 
 function attachmentIdentity(attachment: UploadedFileAttachment): string {
+  // Prefer stable content/path identity over `attachmentId`, which is a fresh
+  // timestamp on every backend create call. Two attachments of the same image
+  // share these stable fields even when their attachmentIds differ, so this
+  // keeps the dedupe effective (e.g. one clipboard image pasted twice).
   return String(
-    attachment.attachmentId
-    || attachment.workspaceRelativePath
+    attachment.workspaceRelativePath
     || attachment.toolPath
     || attachment.absolutePath
     || attachment.originalAbsolutePath
     || attachment.inlineDataUrl
+    || attachment.attachmentId
     || attachment.name
   ).trim();
 }

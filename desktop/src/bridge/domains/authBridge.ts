@@ -39,7 +39,15 @@ export function createAuthBridge(core: BridgeCore) {
       refreshPricing: () => core.invokeChannel('redbox-auth:pricing-refresh'),
     },
     llmReadiness: {
-      getState: () => core.invokeChannelGuarded(
+      getState: () => core.invokeChannelGuarded<{
+        ready?: boolean;
+        reason?: string;
+        mode?: string;
+        model?: string;
+        canUseCustom?: boolean;
+        canUseOfficial?: boolean;
+        [key: string]: unknown;
+      }>(
         'llm-readiness:get-state',
         undefined,
         {
