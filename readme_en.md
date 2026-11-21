@@ -35,7 +35,7 @@
 
 **Beav (formerly RedBox) is a free AI social media content tool.** In one desktop app you can find topics, save content from accounts you learn from, write captions, generate covers and images, edit short videos and package ready-to-post content for TikTok, Instagram, YouTube, Facebook, X, LinkedIn, Threads, Pinterest, RedNote (Xiaohongshu), Douyin, WeChat and more than 20 platforms. It is built for solo creators, brands, agencies and global sellers. Beav has been maintained continuously since June 2025, with 100+ public releases on GitHub.
 
-Download the current version [free from the official site](https://getbeav.com/en/download). The open-source code in this repository stops at version 2.5.0.
+Download the current version [free from the official site](https://getbeav.com/en/download). This repository contains the Beav 2.6.0 desktop and browser extension source code and its development history. See the [source guide](desktop/README.md) for build instructions.
 
 ## Is Beav free?
 

@@ -197,20 +197,170 @@ export interface ThrivePluginDiscoverLocalResponse {
   error?: string;
 }
 
+export interface SkillMarketIntroNote {
+  sourceType?: string | null;
+  source_type?: string | null;
+  noteUrl?: string | null;
+  note_url?: string | null;
+  resolvedNoteUrl?: string | null;
+  resolved_note_url?: string | null;
+  noteId?: string | null;
+  note_id?: string | null;
+  noteType?: string | null;
+  note_type?: string | null;
+  title?: string | null;
+  authorName?: string | null;
+  author_name?: string | null;
+  authorId?: string | null;
+  author_id?: string | null;
+  authorAvatarUrl?: string | null;
+  author_avatar_url?: string | null;
+  coverUrl?: string | null;
+  cover_url?: string | null;
+  contentText?: string | null;
+  content_text?: string | null;
+  images?: string[];
+  video?: (Record<string, unknown> & {
+    playbackUrl?: string | null;
+    playback_url?: string | null;
+    ossUrl?: string | null;
+    oss_url?: string | null;
+    fileUrl?: string | null;
+    file_url?: string | null;
+    sourceUrl?: string | null;
+    source_url?: string | null;
+    firstUrl?: string | null;
+    first_url?: string | null;
+    urls?: string[];
+  }) | null;
+  tags?: string[];
+  stats?: Record<string, unknown> | null;
+  fetchedAt?: string | null;
+  fetched_at?: string | null;
+  updatedAt?: string | null;
+  updated_at?: string | null;
+}
+
 export interface ThriveSkillMarketplaceItem {
   id: string;
+  packageId?: string;
+  marketId?: string;
+  marketName?: string;
+  sourceKind?: string;
   name: string;
   author: string;
+  authorAvatarUrl?: string | null;
+  authorHomepageUrl?: string | null;
+  authorBio?: string | null;
+  authorVerified?: boolean;
+  introNote?: SkillMarketIntroNote | null;
+  intro_note?: SkillMarketIntroNote | null;
   description: string;
-  repo: string;
+  avatarUrl?: string | null;
+  iconUrl?: string | null;
+  logoUrl?: string | null;
+  imageUrl?: string | null;
+  thumbnailUrl?: string | null;
+  repo?: string | null;
+  refName?: string | null;
+  paths?: string[];
+  version?: string | null;
+  kind?: string;
+  channel?: string | null;
+  tags?: string[];
+  riskLevel?: string | null;
+  trustLevel?: string;
+  installedVersion?: string | null;
+  installedSkillNames?: string[];
+  updateAvailable?: boolean;
+  installable?: boolean;
+  error?: string | null;
   installed?: boolean;
+}
+
+export interface SkillMarketSource {
+  id: string;
+  name: string;
+  kind: 'legacy-thrive' | 'github' | 'git' | 'local' | 'url' | 'redskill-cli' | 'redbox-server' | string;
+  enabled: boolean;
+  priority: number;
+  trustLevel: 'official' | 'curated' | 'community' | string;
+  source?: string | null;
+  registryUrl?: string | null;
+  repo?: string | null;
+  refName?: string | null;
+  description?: string | null;
+}
+
+export interface SkillMarketCollection {
+  id: string;
+  collectionKey?: string;
+  collection_key?: string;
+  marketId?: string;
+  marketName?: string;
+  sourceKind?: string;
+  title: string;
+  subtitle?: string | null;
+  description?: string | null;
+  avatarUrl?: string | null;
+  avatar_url?: string | null;
+  coverUrl?: string | null;
+  cover_url?: string | null;
+  homepageUrl?: string | null;
+  homepage_url?: string | null;
+  externalUrl?: string | null;
+  external_url?: string | null;
+  author?: string | null;
+  authorAvatarUrl?: string | null;
+  author_avatar_url?: string | null;
+  authorHomepageUrl?: string | null;
+  author_homepage_url?: string | null;
+  packageKeys?: string[];
+  package_keys?: string[];
+  skillCount?: number;
+  skill_count?: number;
+  tags?: string[];
 }
 
 export interface ThriveSkillMarketplaceResponse {
   success: boolean;
   registryUrl?: string;
+  sources?: SkillMarketSource[];
+  collections?: SkillMarketCollection[];
+  items?: ThriveSkillMarketplaceItem[];
   skills: ThriveSkillMarketplaceItem[];
+  warnings?: Array<{ marketId: string; marketName: string; error: string }>;
   error?: string;
+}
+
+export interface SkillMarketplaceInstalledSkill {
+  name?: string;
+  sourcePath?: string;
+  path?: string;
+  replaced?: boolean;
+}
+
+export interface SkillMarketplaceInstallVerification {
+  name: string;
+  requestedName?: string;
+  found: boolean;
+  activationReady: boolean;
+  location?: string | null;
+  sourceScope?: string | null;
+  disabled?: boolean;
+}
+
+export interface SkillMarketplaceInstallResponse {
+  success?: boolean;
+  error?: string;
+  source?: string;
+  refName?: string | null;
+  scope?: string;
+  installRoot?: string;
+  installed?: SkillMarketplaceInstalledSkill[];
+  verified?: SkillMarketplaceInstallVerification[];
+  activationReady?: boolean;
+  requiresAgentRestart?: boolean;
 }
 
 export interface ThrivePluginHomeWidget {
@@ -1289,6 +1439,15 @@ declare global {
           session?: unknown;
           error?: string;
         }>;
+        redeemInviteCode: (payload: { inviteCode: string }) => Promise<{
+          success?: boolean;
+          status?: string;
+          error?: string;
+          message?: string;
+          inviter_reward_points?: number;
+          invitee_reward_points?: number;
+          redemption_id?: string;
+        }>;
         logout: () => Promise<{ success?: boolean; error?: string }>;
         getProducts: () => Promise<{
           success?: boolean;
@@ -1804,6 +1963,9 @@ declare global {
         render: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary; outputPath?: string; compositionPath?: string; subtitlePath?: string | null }>;
       };
       getAppVersion: () => Promise<string>;
+      getAppOnboardingStatus: (payload?: { legacySeen?: boolean }) => Promise<{ success?: boolean; seen?: boolean; seenAt?: string; migrated?: boolean; path?: string; error?: string }>;
+      markAppOnboardingSeen: () => Promise<{ success?: boolean; seen?: boolean; seenAt?: string; path?: string; error?: string }>;
+      getAppReleaseNotes: (version?: string) => Promise<{ success: boolean; version?: string; tag?: string; name?: string; htmlUrl?: string; publishedAt?: string; body?: string; error?: string }>;
       checkAppUpdate: (force?: boolean) => Promise<{ success: boolean; hasUpdate: boolean; throttled?: boolean; inFlight?: boolean; message?: string; notice?: { currentVersion: string; latestVersion: string; htmlUrl: string; name: string; publishedAt: string; body: string; installable?: boolean } }>;
       installAppUpdate: () => Promise<{ success: boolean; installed?: boolean; hasUpdate?: boolean; inFlight?: boolean; error?: string }>;
       onAppUpdateAvailable: (listener: (...args: unknown[]) => void) => void;
@@ -1828,6 +1990,44 @@ declare global {
           error?: string;
           noteId?: string;
         } | null>;
+        createServerJob?: (payload: {
+          source: 'clipboard';
+          kind: 'youtube-video' | 'xhs-note' | 'xhs-profile' | 'douyin-video';
+          platform: 'youtube' | 'xiaohongshu' | 'douyin';
+          url: string;
+          canonicalUrl: string;
+          externalId?: string;
+          clientRequestId: string;
+          includeComments?: boolean;
+          options?: {
+            downloadMedia?: boolean;
+            includeComments?: boolean;
+            noteType?: string;
+            limit?: number;
+          };
+        }) => Promise<{
+          success: boolean;
+          duplicate?: boolean;
+          job?: Record<string, unknown>;
+          jobId?: string;
+          status?: 'queued' | 'running' | 'completed' | 'failed' | 'unavailable';
+          error?: string;
+        }>;
+        getServerJob?: (payload: { jobId: string }) => Promise<{
+          success: boolean;
+          job?: Record<string, unknown>;
+          error?: string;
+        }>;
+        listServerJobs?: (payload?: { limit?: number }) => Promise<{
+          success: boolean;
+          jobs?: Array<Record<string, unknown>>;
+          error?: string;
+        }>;
+      };
+      deepLink: {
+        consumePending: <T = { success?: boolean; items?: Array<Record<string, unknown>> }>() => Promise<T>;
+        onOpen: (listener: (...args: unknown[]) => void) => void;
+        offOpen: (listener: (...args: unknown[]) => void) => void;
       };
       openKnowledgeApiGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       plugins: {
@@ -1863,8 +2063,20 @@ declare global {
         enable: (payload: { name: string }) => Promise<unknown>;
         disable: (payload: { name: string }) => Promise<unknown>;
         uninstall: (payload: { name: string; scope?: 'user' | 'workspace' | string }) => Promise<unknown>;
-        marketplace: (payload?: { url?: string }) => Promise<ThriveSkillMarketplaceResponse>;
-        marketInstall: (payload: { slug?: string; id?: string; repo?: string; tag?: string; ref?: string; refName?: string }) => Promise<unknown>;
+        marketplace: (payload?: { url?: string; marketId?: string; query?: string }) => Promise<ThriveSkillMarketplaceResponse>;
+        marketplaceList: (payload?: { marketId?: string; query?: string; includeDisabledSources?: boolean }) => Promise<ThriveSkillMarketplaceResponse>;
+        readMarketplacePackage: (payload: { marketId?: string; packageId?: string; id?: string; slug?: string }) => Promise<unknown>;
+        cacheMarketplaceAvatar: <T = unknown>(payload: { url: string }) => Promise<T>;
+        installMarketplace: (payload: { marketId?: string; packageId?: string; id?: string; slug?: string; repo?: string; paths?: string[]; tag?: string; ref?: string; refName?: string; scope?: 'user' | 'workspace' | string }) => Promise<SkillMarketplaceInstallResponse>;
+        updateMarketplaceInstalled: (payload: { marketId?: string; packageId?: string; id?: string; slug?: string; repo?: string; paths?: string[]; tag?: string; ref?: string; refName?: string; scope?: 'user' | 'workspace' | string }) => Promise<SkillMarketplaceInstallResponse>;
+        marketInstall: (payload: { marketId?: string; packageId?: string; slug?: string; id?: string; repo?: string; paths?: string[]; tag?: string; ref?: string; refName?: string; scope?: 'user' | 'workspace' | string }) => Promise<SkillMarketplaceInstallResponse>;
+        marketSources: {
+          list: () => Promise<{ success: boolean; sources: SkillMarketSource[]; error?: string }>;
+          refresh: () => Promise<{ success: boolean; sources: SkillMarketSource[]; error?: string }>;
+          add: (payload: Partial<SkillMarketSource>) => Promise<{ success: boolean; source?: SkillMarketSource; sources?: SkillMarketSource[]; error?: string }>;
+          update: (payload: Partial<SkillMarketSource> & { id: string }) => Promise<{ success: boolean; source?: SkillMarketSource; sources?: SkillMarketSource[]; error?: string }>;
+          remove: (payload: { id: string }) => Promise<{ success: boolean; removedId?: string; sources?: SkillMarketSource[]; error?: string }>;
+        };
         installFromRepo: (payload: {
           source?: string;
           url?: string;
@@ -1949,6 +2161,7 @@ declare global {
         openIndexRoot: () => Promise<unknown>;
         deleteNote: (noteId: string) => Promise<unknown>;
         deleteBatch: (payload: { items: Array<{ id: string; kind: 'redbook-note' | 'link-article' | 'wechat-article' | 'zhihu-answer' | 'zhihu-article' | 'youtube-video' | 'document-source' }> }) => Promise<unknown>;
+        batchIngest: (payload: { entries?: unknown[]; documentSources?: unknown[]; mediaAssets?: unknown[] }) => Promise<unknown>;
         transcribe: (noteId: string) => Promise<unknown>;
         deleteYoutube: (videoId: string) => Promise<unknown>;
         retryYoutubeSubtitle: (videoId: string) => Promise<unknown>;
@@ -1986,6 +2199,7 @@ declare global {
       files: {
         showInFolder: (payload: { source: string }) => Promise<unknown>;
         copyImage: (payload: { source: string }) => Promise<unknown>;
+        downloadToDownloads: (payload: { source: string; defaultName?: string }) => Promise<{ success?: boolean; error?: string; path?: string }>;
         saveAs: (payload: { source: string; defaultName?: string }) => Promise<unknown>;
         saveZip: (payload: { defaultName?: string; files: Array<{ source: string; name?: string }> }) => Promise<{ success?: boolean; error?: string; canceled?: boolean; path?: string; count?: number }>;
         resolvePreview: (payload: { source: string }) => Promise<{
@@ -2202,6 +2416,7 @@ declare global {
         list: <T = unknown>() => Promise<T>;
         read: <T = unknown>(filePath: string) => Promise<T>;
         save: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
+        download: <T = unknown>(payload: { filePath: string }) => Promise<T>;
         createFile: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
         createFolder: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;
         rename: <T = unknown>(payload: Record<string, unknown>) => Promise<T>;

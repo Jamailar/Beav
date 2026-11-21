@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, lazy, Suspense, type ReactNode } from
 import { FileText, Loader2, MessageSquareWarning } from 'lucide-react';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
-import { AppOnboarding, getAppAcquisitionSource, hasSeenAppOnboarding, markAppOnboardingSeen } from './components/AppOnboarding';
+import { AppOnboarding, getAppAcquisitionSource, getAppOnboardingStatus, markAppOnboardingSeenOnDevice } from './components/AppOnboarding';
 import { FeedbackReportDialog } from './components/FeedbackReportDialog';
 import { useLlmReadinessLifecycle } from './hooks/useLlmReadinessLifecycle';
 import { useLlmReadinessState } from './hooks/useLlmReadinessState';
@@ -22,8 +22,9 @@ import { useRedClawShellNavigation } from './features/app-shell/useRedClawShellN
 import { useSettingsShellNavigation } from './features/app-shell/useSettingsShellNavigation';
 import { useSubjectsModal } from './features/app-shell/useSubjectsModal';
 import { shouldRenderView, useViewNavigation } from './features/app-shell/useViewNavigation';
-import type { GenerationIntent, ImmersiveMode } from './features/app-shell/types';
+import type { GenerationIntent, ImmersiveMode, PendingChatMessage, SkillsNavigationTarget } from './features/app-shell/types';
 import { ClipboardCapturePrompt } from './features/capture/ClipboardCapturePrompt';
+import { useDeepLinkRouter } from './features/deep-link/useDeepLinkRouter';
 
 export type { GenerationIntent, ImmersiveMode, PendingChatMessage, TeamSection, ViewType } from './features/app-shell/types';
 
@@ -70,6 +71,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
   const [wanderTitleBarContent, setWanderTitleBarContent] = useState<ReactNode>(null);
   const [knowledgeTitleBarContent, setKnowledgeTitleBarContent] = useState<ReactNode>(null);
   const [approvalTargetDocketId, setApprovalTargetDocketId] = useState('');
+  const [skillsNavigationTarget, setSkillsNavigationTarget] = useState<SkillsNavigationTarget | null>(null);
 
   const globalAuthNotice = useOfficialAuthNotice();
   const {
@@ -111,6 +113,10 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setImmersiveMode,
   });
 
+  const handleTrySkillInChat = useCallback((message: PendingChatMessage) => {
+    navigateToRedClaw(message);
+  }, [navigateToRedClaw]);
+
   const {
     pendingGenerationIntent,
     setPendingGenerationIntent,
@@ -125,8 +131,16 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
     setActiveManuscriptEditorFile,
     setSettingsNavigationTarget,
     setRedClawNavigationAction,
+    setSkillsNavigationTarget,
     setApprovalTargetDocketId,
     setPendingGenerationIntent,
+  });
+
+  useDeepLinkRouter({
+    navigateToView,
+    navigateToRedClaw,
+    setRedClawNavigationAction,
+    setSkillsNavigationTarget,
   });
 
   const {
@@ -213,7 +227,11 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
         {shouldRenderView(mountedViews, currentView, persistentViews, 'skills') && (
           <div className={currentView === 'skills' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'skills' ? <ViewLoadingFallback /> : null}>
-              <SkillsPage isActive={currentView === 'skills'} />
+              <SkillsPage
+                isActive={currentView === 'skills'}
+                onTrySkillInChat={handleTrySkillInChat}
+                navigationTarget={skillsNavigationTarget}
+              />
             </Suspense>
           </div>
         )}
@@ -391,6 +409,10 @@ function App() {
   const officialAuthNeedsLogin = officialAuthBootstrapped
     && !officialAuthPending
     && !officialAuthLoggedIn;
+  const llmReady = Boolean(llmReadinessState?.ready);
+  const llmReadinessMode = String(llmReadinessState?.mode || '').trim();
+  const canEnterWithCustomAi = llmReady && (llmReadinessMode === 'custom' || llmReadinessMode === 'local');
+  const canEnterWorkspace = officialAuthLoggedIn ? llmReady : canEnterWithCustomAi;
   const llmReadinessPending = officialAuthLoggedIn && !llmReadinessBootstrapped;
 
   const openAppOnboarding = useCallback(() => {
@@ -398,14 +420,20 @@ function App() {
   }, []);
 
   const closeAppOnboarding = useCallback(() => {
-    markAppOnboardingSeen();
+    void markAppOnboardingSeenOnDevice();
     setAppOnboardingOpen(false);
   }, []);
 
   useEffect(() => {
-    if (!hasSeenAppOnboarding()) {
-      setAppOnboardingOpen(true);
-    }
+    let cancelled = false;
+    void getAppOnboardingStatus().then((status) => {
+      if (!cancelled && !status.seen) {
+        setAppOnboardingOpen(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (officialAuthPending) {
@@ -417,7 +445,7 @@ function App() {
     );
   }
 
-  if (officialAuthNeedsLogin) {
+  if (officialAuthNeedsLogin && !canEnterWithCustomAi) {
     return (
       <>
         <OfficialLoginGate mode={officialAuthStatus === 'reauthRequired' ? 'expired' : 'login'} />
@@ -435,7 +463,7 @@ function App() {
     );
   }
 
-  if (!llmReadinessState?.ready) {
+  if (!canEnterWorkspace) {
     return (
       <>
         <OfficialLoginGate mode={officialAuthStatus === 'reauthRequired' ? 'expired' : 'login'} />

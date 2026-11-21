@@ -6,6 +6,7 @@ export function createManuscriptsBridge(core: BridgeCore) {
       list: <T = unknown>() => core.invokeChannel('manuscripts:list') as Promise<T>,
       read: <T = unknown>(filePath: string) => core.invokeChannel('manuscripts:read', filePath) as Promise<T>,
       save: <T = unknown>(payload: Record<string, unknown>) => core.invokeChannel('manuscripts:save', payload) as Promise<T>,
+      download: <T = unknown>(payload: { filePath: string }) => core.invokeChannel('manuscripts:download', payload) as Promise<T>,
       createFile: <T = unknown>(payload: Record<string, unknown>) => core.invokeChannel('manuscripts:create-file', payload) as Promise<T>,
       createFolder: <T = unknown>(payload: Record<string, unknown>) => core.invokeChannel('manuscripts:create-folder', payload) as Promise<T>,
       rename: <T = unknown>(payload: Record<string, unknown>) => core.invokeChannel('manuscripts:rename', payload) as Promise<T>,

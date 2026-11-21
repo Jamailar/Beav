@@ -15,6 +15,9 @@ interface AppUpdateCheckResult {
   success: boolean;
   hasUpdate: boolean;
   notice?: AppUpdateNotice | null;
+  throttled?: boolean;
+  inFlight?: boolean;
+  message?: string;
   error?: string;
 }
 
@@ -25,11 +28,23 @@ interface AppUpdateInstallResult {
   error?: string;
 }
 
+interface AppReleaseNotesResult {
+  success: boolean;
+  version?: string;
+  tag?: string;
+  name?: string;
+  htmlUrl?: string;
+  publishedAt?: string;
+  body?: string;
+  error?: string;
+}
+
 export function createSystemBridge(core: BridgeCore) {
   return {
     files: {
       showInFolder: (payload: { source: string }) => core.invokeChannel('file:show-in-folder', payload),
       copyImage: (payload: { source: string }) => core.invokeChannel('file:copy-image', payload),
+      downloadToDownloads: (payload: { source: string; defaultName?: string }) => core.invokeChannel('file:download-to-downloads', payload),
       saveAs: (payload: { source: string; defaultName?: string }) => core.invokeChannel('file:save-as', payload),
       saveZip: (payload: { defaultName?: string; files: Array<{ source: string; name?: string }> }) => core.invokeChannel('file:save-zip', payload),
       resolvePreview: (payload: { source: string }) => core.invokeChannel('file:preview-resolve', payload),
@@ -91,10 +106,36 @@ export function createSystemBridge(core: BridgeCore) {
 
     saveSettings: (settings: unknown) => core.invokeChannel('db:save-settings', settings),
     getSettings: () => core.invokeChannel('db:get-settings'),
+    aiProviders: {
+      fetchModels: (payload: {
+        sourceId?: string;
+        baseURL?: string;
+        apiKey?: string;
+        presetId?: string;
+        protocol?: string;
+        providerKey?: string;
+        scope?: string;
+        modelsUrl?: string;
+        userAgent?: string;
+        isFullUrl?: boolean;
+      }) => core.invokeChannel('ai-providers:fetch-models', payload),
+    },
     onSettingsUpdated: (listener: Listener) => core.on('settings:updated', listener),
     offSettingsUpdated: (listener: Listener) => core.off('settings:updated', listener),
     onDataChanged: (listener: Listener) => core.on('data:changed', listener),
     offDataChanged: (listener: Listener) => core.off('data:changed', listener),
+    deepLink: {
+      consumePending: <T = Record<string, unknown>>() => core.invokeChannelGuarded<T>(
+        'app:deep-link-consume-pending',
+        {},
+        {
+          timeoutMs: 1200,
+          fallback: { success: false, items: [] } as T,
+        },
+      ),
+      onOpen: (listener: Listener) => core.on('app:deep-link', listener),
+      offOpen: (listener: Listener) => core.off('app:deep-link', listener),
+    },
     pickWorkspaceDir: () => core.invokeChannel('settings:pick-workspace-dir'),
     debug: {
       getStatus: () => core.invokeChannel('debug:get-status'),
@@ -155,6 +196,43 @@ export function createSystemBridge(core: BridgeCore) {
       offStatus: (listener: Listener) => core.off('app:startup-migration-status', listener),
     },
     getAppVersion: () => core.invokeChannel('app:get-version'),
+    getAppOnboardingStatus: (payload?: { legacySeen?: boolean }) => core.invokeChannelGuarded<{
+      success?: boolean;
+      seen?: boolean;
+      seenAt?: string;
+      migrated?: boolean;
+      path?: string;
+      error?: string;
+    }>(
+      'app:onboarding-status',
+      payload || {},
+      {
+        timeoutMs: 1200,
+        fallback: { success: false, seen: false, error: 'App onboarding status unavailable' },
+      },
+    ),
+    markAppOnboardingSeen: () => core.invokeChannelGuarded<{
+      success?: boolean;
+      seen?: boolean;
+      seenAt?: string;
+      path?: string;
+      error?: string;
+    }>(
+      'app:onboarding-mark-seen',
+      {},
+      {
+        timeoutMs: 1200,
+        fallback: { success: false, seen: true, error: 'App onboarding receipt unavailable' },
+      },
+    ),
+    getAppReleaseNotes: (version?: string) => core.invokeChannelGuarded<AppReleaseNotesResult>(
+      'app:get-release-notes',
+      { version },
+      {
+        timeoutMs: 12000,
+        fallback: { success: false, error: 'Release notes unavailable' },
+      },
+    ),
     checkAppUpdate: (force = false) => core.invokeCommandGuarded<AppUpdateCheckResult>(
       'app_check_update',
       { force },
@@ -188,6 +266,9 @@ export function createSystemBridge(core: BridgeCore) {
         description?: string;
         thumbnailUrl?: string;
       }) => core.invokeChannel('youtube:save-note', payload),
+      createServerJob: (payload: Record<string, unknown>) => core.invokeChannel('capture:create-server-job', payload),
+      getServerJob: (payload: { jobId: string }) => core.invokeChannel('capture:get-server-job', payload),
+      listServerJobs: (payload?: { limit?: number }) => core.invokeChannel('capture:list-server-jobs', payload || {}),
     },
     openKnowledgeApiGuide: () => core.invokeChannel('app:open-knowledge-api-guide'),
     windowControls: {

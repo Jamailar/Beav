@@ -580,6 +580,7 @@ export function RedClaw({
     const [isCreatingRoom, setIsCreatingRoom] = useState(false);
     const [roomCreateError, setRoomCreateError] = useState('');
     const [isRedClawChatExecuting, setIsRedClawChatExecuting] = useState(false);
+    const [chatModelKey, setChatModelKey] = useState('');
 
     const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
     const [sidebarTab, setSidebarTab] = useState<SidebarTab>('skills');
@@ -1495,6 +1496,7 @@ export function RedClaw({
         manualDraftActiveRef.current = true;
         activeSessionIdRef.current = null;
         setActiveSessionId(null);
+        setChatModelKey('');
         setIsSessionLoading(false);
         setHistoryLoading(false);
         setPreviewTarget(null);
@@ -1509,6 +1511,7 @@ export function RedClaw({
         manualDraftActiveRef.current = false;
         activeSessionIdRef.current = nextSessionId;
         setActiveSessionId(nextSessionId);
+        setChatModelKey('');
         debugUi('sessions:switch', { sessionId: nextSessionId, activeSpaceId });
     }, [activeSpaceId, debugUi]);
 
@@ -2354,6 +2357,8 @@ export function RedClaw({
                                         fixedSessionId={activeChatSessionId}
                                         fixedSessionDraft={!activeChatSessionId}
                                         onEnsureSessionForSend={ensureActiveChatSessionForSend}
+                                        initialChatModelKey={chatModelKey}
+                                        onChatModelKeyChange={setChatModelKey}
                                         pendingMessage={activeAiSurface === 'redclaw' ? activeRedClawPendingMessage : null}
                                         onMessageConsumed={handleRedClawPendingMessageConsumed}
                                         showClearButton={false}
@@ -2396,6 +2401,10 @@ export function RedClaw({
                                         placeholder="描述创作目标，使用 # 调用知识库"
                                         fixedMemberMention={activeMemberMention}
                                         onSessionActivity={markHistorySessionActivity}
+                                        analyticsContext={{
+                                            surface: 'redclaw',
+                                            runtimeMode: activeAiSurface,
+                                        }}
                                         messageListHeader={<RedClawImageGenerationProgressPanel jobs={activeAiSurface === 'redclaw' ? visibleImageJobs : []} />}
                                     />
                                 )}

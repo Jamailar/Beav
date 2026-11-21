@@ -243,6 +243,117 @@ fn normalize_call_record_purpose(item: &Value) -> Option<&'static str> {
     None
 }
 
+fn call_record_event_label(event_type: &str) -> Option<&'static str> {
+    match event_type.trim() {
+        "invite_reward" => Some("邀请奖励"),
+        "order_points_topup" => Some("积分充值"),
+        "order_points_refund" => Some("订单积分退回"),
+        "order_points_deduct" => Some("订单积分抵扣"),
+        "redeem_ai_points" => Some("兑换积分"),
+        "manual_grant" => Some("后台赠送"),
+        "feedback_reward" => Some("反馈奖励"),
+        "initial_grant" | "wallet_init" => Some("初始积分"),
+        "ai_usage_refund" => Some("AI 调用退回"),
+        "points_credit" => Some("积分入账"),
+        _ => None,
+    }
+}
+
+fn normalize_call_record_direction(
+    item: &Value,
+    event_type: Option<&str>,
+    points_delta: Option<f64>,
+    points: f64,
+) -> &'static str {
+    let raw_direction = nested_payload_string(
+        item,
+        &[
+            "direction",
+            "points_direction",
+            "pointsDirection",
+            "movement",
+            "transaction_type",
+            "transactionType",
+        ],
+    )
+    .unwrap_or_default()
+    .trim()
+    .to_ascii_lowercase();
+
+    if matches!(
+        raw_direction.as_str(),
+        "credit"
+            | "income"
+            | "increase"
+            | "earn"
+            | "earned"
+            | "grant"
+            | "reward"
+            | "topup"
+            | "refund"
+            | "入账"
+            | "增加"
+            | "获得"
+            | "奖励"
+            | "退回"
+    ) {
+        return "credit";
+    }
+    if matches!(
+        raw_direction.as_str(),
+        "debit"
+            | "expense"
+            | "decrease"
+            | "consume"
+            | "consumed"
+            | "spend"
+            | "spent"
+            | "deduct"
+            | "cost"
+            | "支出"
+            | "消耗"
+            | "扣减"
+            | "抵扣"
+    ) {
+        return "debit";
+    }
+    if let Some(delta) = points_delta {
+        if delta > 0.0 {
+            return "credit";
+        }
+        if delta < 0.0 {
+            return "debit";
+        }
+    }
+    if let Some(event_type) = event_type {
+        if matches!(
+            event_type,
+            "invite_reward"
+                | "order_points_topup"
+                | "order_points_refund"
+                | "redeem_ai_points"
+                | "manual_grant"
+                | "feedback_reward"
+                | "initial_grant"
+                | "wallet_init"
+                | "ai_usage_refund"
+                | "points_credit"
+        ) {
+            return "credit";
+        }
+        if event_type.contains("refund")
+            || event_type.contains("reward")
+            || event_type.contains("topup")
+        {
+            return "credit";
+        }
+    }
+    if points > 0.0 {
+        return "debit";
+    }
+    "neutral"
+}
+
 pub(super) fn normalize_official_call_record_items(items: &[Value]) -> Vec<Value> {
     let mut seen_ids = HashSet::<String>::new();
     let mut records = Vec::<Value>::new();
@@ -252,7 +363,28 @@ pub(super) fn normalize_official_call_record_items(items: &[Value]) -> Vec<Value
             .or_else(|| payload_string(item, "log_id"))
             .or_else(|| payload_string(item, "request_id"))
             .unwrap_or_else(|| format!("record_{index}"));
-        let model = payload_string(item, "model")
+        let event_type = nested_payload_string(item, &["event_type", "eventType"]);
+        let entry_type = nested_payload_string(item, &["entry_type", "entryType"]);
+        let title = nested_payload_string(
+            item,
+            &[
+                "title",
+                "display_title",
+                "displayTitle",
+                "reason",
+                "reason_label",
+                "reasonLabel",
+            ],
+        )
+        .or_else(|| {
+            event_type
+                .as_deref()
+                .and_then(call_record_event_label)
+                .map(ToString::to_string)
+        });
+        let model = title
+            .clone()
+            .or_else(|| payload_string(item, "model"))
             .or_else(|| payload_string(item, "model_name"))
             .or_else(|| payload_string(item, "modelId"))
             .unwrap_or_else(|| "-".to_string());
@@ -268,13 +400,31 @@ pub(super) fn normalize_official_call_record_items(items: &[Value]) -> Vec<Value
             .or_else(|| item.get("usage_tokens"))
             .and_then(value_as_f64)
             .unwrap_or(0.0);
-        let points = item
+        let points_delta = item
+            .get("points_delta")
+            .or_else(|| item.get("pointsDelta"))
+            .or_else(|| item.get("delta"))
+            .and_then(value_as_f64);
+        let raw_points = item
             .get("points")
+            .or_else(|| item.get("points_amount"))
+            .or_else(|| item.get("pointsAmount"))
+            .or_else(|| item.get("amount"))
             .or_else(|| item.get("points_cost"))
             .or_else(|| item.get("cost_points"))
             .or_else(|| item.get("cost"))
-            .and_then(value_as_f64)
-            .unwrap_or(0.0);
+            .and_then(value_as_f64);
+        let mut points = raw_points.unwrap_or(0.0);
+        if (!points.is_finite() || points <= 0.0) && points_delta.unwrap_or(0.0) != 0.0 {
+            points = points_delta.unwrap_or(0.0).abs();
+        }
+        let direction =
+            normalize_call_record_direction(item, event_type.as_deref(), points_delta, points);
+        let normalized_points_delta = points_delta.unwrap_or_else(|| match direction {
+            "credit" => points,
+            "debit" => -points,
+            _ => 0.0,
+        });
         let status = payload_string(item, "status")
             .or_else(|| payload_string(item, "state"))
             .unwrap_or_else(|| "success".to_string());
@@ -292,6 +442,13 @@ pub(super) fn normalize_official_call_record_items(items: &[Value]) -> Vec<Value
             "endpoint": endpoint,
             "tokens": if tokens.is_finite() { tokens } else { 0.0 },
             "points": if points.is_finite() { points } else { 0.0 },
+            "pointsDelta": if normalized_points_delta.is_finite() { normalized_points_delta } else { 0.0 },
+            "direction": direction,
+            "title": title.unwrap_or_else(|| model.clone()),
+            "entryType": entry_type,
+            "eventType": event_type,
+            "referenceType": nested_payload_string(item, &["reference_type", "referenceType"]),
+            "balanceAfter": item.get("balance_after").or_else(|| item.get("balanceAfter")).and_then(value_as_f64),
             "status": if status.trim().is_empty() { "success" } else { status.as_str() },
             "createdAt": created_at,
             "purpose": purpose,

@@ -342,11 +342,20 @@ pub(crate) fn build_compatible_video_route_urls(endpoint: &str, suffix: &str) ->
 
 pub(crate) fn normalize_embedding_url(endpoint: &str) -> String {
     let normalized = normalize_base_url(endpoint);
-    if normalized.ends_with("/embeddings") {
-        normalized
-    } else {
-        format!("{normalized}/embeddings")
-    }
+    let catalog =
+        crate::provider_runtime::catalog_entry_for("openai", "openai", "openai", &normalized);
+    crate::provider_runtime::resolve_endpoint(
+        &normalized,
+        &catalog.endpoint_policy,
+        crate::provider_runtime::CapabilityScope::Embedding,
+    )
+    .unwrap_or_else(|_| {
+        if normalized.ends_with("/embeddings") {
+            normalized
+        } else {
+            format!("{normalized}/embeddings")
+        }
+    })
 }
 
 pub(crate) fn resolve_embedding_settings(

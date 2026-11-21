@@ -377,6 +377,13 @@ pub(super) fn save_settings(
         ))
     })?;
     crate::persist_store(&state.store_path, &store_snapshot)?;
+    state.visual_index_enabled_runtime.store(
+        settings_snapshot
+            .get("visual_index_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        std::sync::atomic::Ordering::Release,
+    );
     crate::ai_model_manager::store::sync_model_config_file(&state.store_path, &settings_snapshot)?;
     let _ = crate::ai_model_manager::defaults::repair_missing_official_defaults_for_store(
         Some(app),

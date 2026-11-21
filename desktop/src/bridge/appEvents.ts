@@ -4,6 +4,7 @@ export type DataChangedPayload = {
   scope?: string;
   action?: string;
   entityId?: string;
+  filePath?: string;
 };
 
 export function subscribeSettingsUpdated(listener: Listener): () => void {

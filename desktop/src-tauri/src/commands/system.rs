@@ -1,5 +1,6 @@
 mod ai_model_ops;
 mod app_actions;
+mod app_onboarding;
 pub(crate) mod app_update;
 mod clipboard_ops;
 mod feedback;
@@ -21,9 +22,13 @@ pub fn handle_system_channel(
 ) -> Option<Result<Value, String>> {
     let result = match channel {
         "app:get-version"
+        | "app:get-release-notes"
+        | "app:onboarding-status"
+        | "app:onboarding-mark-seen"
         | "app:check-update"
         | "app:open-release-page"
         | "app:open-external-url"
+        | "app:deep-link-consume-pending"
         | "app:startup-migration-start"
         | "app:startup-migration-status"
         | "app:open-knowledge-api-guide"
@@ -31,6 +36,7 @@ pub fn handle_system_channel(
         | "settings:pick-workspace-dir"
         | "ai-model-manager:snapshot"
         | "ai-model-manager:resolve"
+        | "ai-providers:fetch-models"
         | "db:get-settings"
         | "db:save-settings"
         | "debug:get-status"
@@ -52,6 +58,9 @@ pub fn handle_system_channel(
         | "clipboard:write-html" => (|| -> Result<Value, String> {
             match channel {
                 "app:get-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
+                "app:get-release-notes" => app_update::get_release_notes(payload),
+                "app:onboarding-status" => app_onboarding::get_status(state, payload),
+                "app:onboarding-mark-seen" => app_onboarding::mark_seen(state),
                 "app:check-update" => {
                     let force = payload_field(payload, "force")
                         .and_then(Value::as_bool)
@@ -60,6 +69,7 @@ pub fn handle_system_channel(
                 }
                 "app:open-release-page" => app_actions::open_release_page(payload),
                 "app:open-external-url" => app_actions::open_external_url(payload),
+                "app:deep-link-consume-pending" => Ok(crate::deep_link::consume_pending_events()),
                 "app:startup-migration-status" => crate::startup_migration_status_value(state),
                 "app:startup-migration-start" => crate::start_startup_migration(app, state),
                 "app:open-knowledge-api-guide" => app_actions::open_knowledge_api_guide(app),
@@ -67,6 +77,7 @@ pub fn handle_system_channel(
                 "settings:pick-workspace-dir" => app_actions::pick_workspace_dir(),
                 "ai-model-manager:snapshot" => ai_model_ops::snapshot(state),
                 "ai-model-manager:resolve" => ai_model_ops::resolve(state, payload),
+                "ai-providers:fetch-models" => ai_model_ops::fetch_models(state, payload),
                 "db:get-settings" => settings_ops::get_settings(state),
                 "db:save-settings" => settings_ops::save_settings(app, state, payload),
                 "debug:get-status" | "logs:get-status" => logging_ops::status(state),

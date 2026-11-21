@@ -196,7 +196,7 @@ fn parse_native_path(
     visual_config: &VisualIndexConfig,
 ) -> Result<(Option<Vec<ParsedSection>>, Option<Value>), String> {
     let parsed = match extension {
-        "txt" | "md" | "markdown" | "json" | "yaml" | "yml" | "xml" => {
+        "txt" | "md" | "markdown" | "srt" | "vtt" | "json" | "yaml" | "yml" | "xml" => {
             read_utf8_sections(path, "plain-text", vec!["body".to_string()])?
         }
         "html" | "htm" => {
@@ -526,6 +526,9 @@ fn parse_scanned_pdf_visual_manifest(
     path: &Path,
     visual_config: &VisualIndexConfig,
 ) -> Result<(Option<Vec<ParsedSection>>, Option<Value>), String> {
+    if !visual_config.is_enabled() {
+        return Ok((None, None));
+    }
     let rendered_pages = pdf_pages::render_pdf_pages(
         path,
         visual_config.pdf_max_pages,
@@ -542,6 +545,9 @@ fn parse_scanned_pdf_visual_manifest(
         .collect::<Vec<_>>()
         .chunks(concurrency)
     {
+        if !visual_config.is_enabled() {
+            break;
+        }
         let mut handles = Vec::new();
         for (index, rendered_path) in chunk {
             let config = visual_config.clone();

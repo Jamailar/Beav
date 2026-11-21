@@ -1181,6 +1181,13 @@ export interface RedboxCallRecordItem {
   endpoint: string;
   tokens: number;
   points: number;
+  pointsDelta?: number;
+  direction?: string;
+  title?: string;
+  entryType?: string;
+  eventType?: string;
+  referenceType?: string;
+  balanceAfter?: number | null;
   createdAt: string;
   status: string;
 }

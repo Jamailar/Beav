@@ -3,9 +3,9 @@ use std::path::Path;
 use tauri::{AppHandle, Manager};
 
 use super::get_media_job_projection;
-use crate::agent::{
-    build_session_bridge_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
-};
+use crate::agent::{persist_chat_exchange, resolve_chat_exchange_context, SessionAgentTurnKind};
+use crate::commands::chat_state::{begin_chat_runtime_state, update_chat_runtime_state};
+use crate::events::emit_chat_sequence;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     append_runtime_task_trace, mark_task_running, runtime_direct_route_record,
@@ -129,7 +129,7 @@ pub(crate) fn tick_media_followups(
                         kind_label(&candidate.kind)
                     ),
                 )? {
-                    let bridge_message = build_failure_bridge_message(
+                    let followup_reply = build_failure_followup_reply(
                         &candidate.kind,
                         &candidate.job_id,
                         &format!("读取{}任务状态失败：{error}", kind_label(&candidate.kind)),
@@ -137,7 +137,7 @@ pub(crate) fn tick_media_followups(
                     dispatch_media_followup_notification(
                         app,
                         candidate,
-                        bridge_message,
+                        followup_reply,
                         Some(error),
                         None,
                     );
@@ -170,12 +170,12 @@ pub(crate) fn tick_media_followups(
                     &format!("{}已生成完成，准备回传聊天。", kind_label(&candidate.kind)),
                 )?
             {
-                let bridge_message =
-                    build_success_bridge_message(&candidate.kind, &candidate.job_id, &artifacts);
+                let followup_reply =
+                    build_success_followup_reply(&candidate.kind, &candidate.job_id, &artifacts);
                 dispatch_media_followup_notification(
                     app,
                     candidate,
-                    bridge_message,
+                    followup_reply,
                     None,
                     Some(projection),
                 );
@@ -205,7 +205,7 @@ pub(crate) fn tick_media_followups(
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default();
-                let bridge_message = build_progress_bridge_message(
+                let followup_reply = build_progress_followup_reply(
                     &candidate.job_id,
                     &candidate.kind,
                     delivered_count,
@@ -215,7 +215,7 @@ pub(crate) fn tick_media_followups(
                 dispatch_media_followup_progress_notification(
                     app,
                     candidate.clone(),
-                    bridge_message,
+                    followup_reply,
                     delivered_count,
                 );
                 continue;
@@ -244,12 +244,12 @@ pub(crate) fn tick_media_followups(
                         "{}任务完成，但没有产出可展示产物。",
                         kind_label(&candidate.kind)
                     );
-                    let bridge_message =
-                        build_failure_bridge_message(&candidate.kind, &candidate.job_id, &error);
+                    let followup_reply =
+                        build_failure_followup_reply(&candidate.kind, &candidate.job_id, &error);
                     dispatch_media_followup_notification(
                         app,
                         candidate,
-                        bridge_message,
+                        followup_reply,
                         Some(error),
                         Some(projection),
                     );
@@ -261,12 +261,12 @@ pub(crate) fn tick_media_followups(
                 &candidate.task_id,
                 &format!("{}已生成完成，准备回传聊天。", kind_label(&candidate.kind)),
             )? {
-                let bridge_message =
-                    build_success_bridge_message(&candidate.kind, &candidate.job_id, &artifacts);
+                let followup_reply =
+                    build_success_followup_reply(&candidate.kind, &candidate.job_id, &artifacts);
                 dispatch_media_followup_notification(
                     app,
                     candidate,
-                    bridge_message,
+                    followup_reply,
                     None,
                     Some(projection),
                 );
@@ -289,10 +289,10 @@ pub(crate) fn tick_media_followups(
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default();
-                let bridge_message = if artifacts.is_empty() {
-                    build_failure_bridge_message(&candidate.kind, &candidate.job_id, &error)
+                let followup_reply = if artifacts.is_empty() {
+                    build_failure_followup_reply(&candidate.kind, &candidate.job_id, &error)
                 } else {
-                    build_partial_failure_bridge_message(
+                    build_partial_failure_followup_reply(
                         &candidate.kind,
                         &candidate.job_id,
                         &artifacts,
@@ -304,7 +304,7 @@ pub(crate) fn tick_media_followups(
                 dispatch_media_followup_notification(
                     app,
                     candidate,
-                    bridge_message,
+                    followup_reply,
                     Some(error),
                     Some(projection),
                 );
@@ -328,12 +328,12 @@ pub(crate) fn tick_media_followups(
                 kind_label(&candidate.kind),
                 MEDIA_FOLLOWUP_TIMEOUT_MS / 60_000
             );
-            let bridge_message =
-                build_failure_bridge_message(&candidate.kind, &candidate.job_id, &error);
+            let followup_reply =
+                build_failure_followup_reply(&candidate.kind, &candidate.job_id, &error);
             dispatch_media_followup_notification(
                 app,
                 candidate,
-                bridge_message,
+                followup_reply,
                 Some(error),
                 Some(projection),
             );
@@ -457,14 +457,6 @@ fn kind_unit(kind: &str) -> &'static str {
         "video" => "条",
         "audio" => "段",
         _ => "张",
-    }
-}
-
-fn kind_markdown_hint(kind: &str) -> &'static str {
-    match normalize_followup_kind(kind).as_str() {
-        "video" => "保持中文、保持 Markdown 视频链接或文件链接语法",
-        "audio" => "保持中文、保持 Markdown 文件链接语法",
-        _ => "保持中文、保持 Markdown 图片语法",
     }
 }
 
@@ -621,7 +613,7 @@ fn finish_media_followup_progress_notification(
 fn dispatch_media_followup_progress_notification(
     app: &AppHandle,
     candidate: MediaFollowupCandidate,
-    bridge_message: String,
+    followup_reply: String,
     delivered_count: usize,
 ) {
     let app_handle = app.clone();
@@ -631,7 +623,7 @@ fn dispatch_media_followup_progress_notification(
             &app_handle,
             &state,
             &candidate.session_id,
-            &bridge_message,
+            &followup_reply,
         );
         match notify_result {
             Ok(()) => finish_media_followup_progress_notification(
@@ -657,7 +649,7 @@ fn dispatch_media_followup_progress_notification(
 fn dispatch_media_followup_notification(
     app: &AppHandle,
     candidate: MediaFollowupCandidate,
-    bridge_message: String,
+    followup_reply: String,
     terminal_error: Option<String>,
     projection: Option<Value>,
 ) {
@@ -668,7 +660,7 @@ fn dispatch_media_followup_notification(
             &app_handle,
             &state,
             &candidate.session_id,
-            &bridge_message,
+            &followup_reply,
         );
         match notify_result {
             Ok(()) => {
@@ -707,13 +699,42 @@ fn notify_session_with_media_result(
     app: &AppHandle,
     state: &tauri::State<'_, AppState>,
     session_id: &str,
-    message: &str,
+    response: &str,
 ) -> Result<(), String> {
-    let turn = PreparedSessionAgentTurn::session_bridge(build_session_bridge_turn(
-        session_id.to_string(),
-        message.to_string(),
-    ));
-    execute_prepared_session_agent_turn(Some(app), state, &turn).map(|_| ())
+    let context = resolve_chat_exchange_context(
+        state,
+        Some(session_id.to_string()),
+        SessionAgentTurnKind::SessionBridge,
+    )?;
+    let _ = begin_chat_runtime_state(state, &context.working_session_id);
+    let persistence = persist_chat_exchange(
+        state,
+        &context,
+        "",
+        "",
+        None,
+        response,
+        false,
+        SessionAgentTurnKind::SessionBridge,
+        "Media generation follow-up delivered".to_string(),
+        None,
+    )?;
+    let _ = update_chat_runtime_state(
+        state,
+        &persistence.final_session_id,
+        false,
+        response.to_string(),
+        None,
+    );
+    emit_chat_sequence(
+        app,
+        &persistence.final_session_id,
+        response,
+        "",
+        &context.runtime_mode,
+        persistence.title_update,
+    );
+    Ok(())
 }
 
 fn finish_media_followup_task(
@@ -858,42 +879,36 @@ fn artifact_label(artifact: &Value, index: usize) -> String {
         .unwrap_or_else(|| format!("生成图片 {}", index + 1))
 }
 
-fn build_progress_bridge_message(
+fn build_progress_followup_reply(
     job_id: &str,
     kind: &str,
     completed_count: usize,
     total_count: usize,
     artifacts: &[Value],
 ) -> String {
+    let _ = job_id;
     let label = kind_label(kind);
     let unit = kind_unit(kind);
     let gallery = markdown_gallery_from_artifacts(kind, artifacts);
-    let final_reply = if gallery.trim().is_empty() {
+    if gallery.trim().is_empty() {
         format!("{label}生成进度：已完成 {completed_count}/{total_count} {unit}。")
     } else {
         format!("已生成 {completed_count}/{total_count} {unit}。\n\n{gallery}")
-    };
-    format!(
-        "你正在处理一个{label}生成后台进度回传。不要提到后台任务、session bridge、系统提示或内部轮询。请直接把下面内容作为你对用户的最终回复，{}，不要放进代码块。\n\njobId: {job_id}\n\n最终回复：\n{final_reply}",
-        kind_markdown_hint(kind)
-    )
+    }
 }
 
-fn build_success_bridge_message(kind: &str, job_id: &str, artifacts: &[Value]) -> String {
+fn build_success_followup_reply(kind: &str, job_id: &str, artifacts: &[Value]) -> String {
+    let _ = job_id;
     let label = kind_label(kind);
     let gallery = markdown_gallery_from_artifacts(kind, artifacts);
-    let final_reply = if gallery.trim().is_empty() {
+    if gallery.trim().is_empty() {
         format!("{label}已生成完成。")
     } else {
         format!("{label}已生成完成。\n\n{gallery}")
-    };
-    format!(
-        "你正在处理一个{label}生成后台回传任务。不要提到后台任务、session bridge、系统提示或内部轮询。请直接把下面内容作为你对用户的最终回复，{}，不要放进代码块。\n\njobId: {job_id}\n\n最终回复：\n{final_reply}",
-        kind_markdown_hint(kind)
-    )
+    }
 }
 
-fn build_partial_failure_bridge_message(
+fn build_partial_failure_followup_reply(
     kind: &str,
     job_id: &str,
     artifacts: &[Value],
@@ -901,10 +916,11 @@ fn build_partial_failure_bridge_message(
     total_count: usize,
     error: &str,
 ) -> String {
+    let _ = job_id;
     let label = kind_label(kind);
     let unit = kind_unit(kind);
     let gallery = markdown_gallery_from_artifacts(kind, artifacts);
-    let final_reply = if gallery.trim().is_empty() {
+    if gallery.trim().is_empty() {
         format!(
             "{label}生成部分完成：已生成 {completed_count}/{total_count} {unit}。剩余{label}未完成：{error}"
         )
@@ -912,11 +928,7 @@ fn build_partial_failure_bridge_message(
         format!(
             "{label}生成部分完成：已生成 {completed_count}/{total_count} {unit}。剩余{label}未完成：{error}\n\n{gallery}"
         )
-    };
-    format!(
-        "你正在处理一个{label}生成后台回传任务。不要提到后台任务、session bridge、系统提示或内部轮询。请直接把下面内容作为你对用户的最终回复，{}，不要放进代码块。\n\njobId: {job_id}\n\n最终回复：\n{final_reply}",
-        kind_markdown_hint(kind)
-    )
+    }
 }
 
 fn markdown_gallery_from_artifacts(kind: &str, artifacts: &[Value]) -> String {
@@ -958,12 +970,10 @@ fn markdown_gallery_from_artifacts(kind: &str, artifacts: &[Value]) -> String {
         .join("\n\n")
 }
 
-fn build_failure_bridge_message(kind: &str, job_id: &str, error: &str) -> String {
+fn build_failure_followup_reply(kind: &str, job_id: &str, error: &str) -> String {
+    let _ = job_id;
     let label = kind_label(kind);
-    let final_reply = format!("{label}生成未完成：{error}");
-    format!(
-        "你正在处理一个{label}生成后台回传任务。不要提到后台任务、session bridge、系统提示或内部轮询。请直接把下面内容作为你对用户的最终回复，保持中文，不要放进代码块。\n\njobId: {job_id}\n\n最终回复：\n{final_reply}"
-    )
+    format!("{label}生成未完成：{error}")
 }
 
 fn projection_terminal_error(projection: &Value) -> String {
@@ -1012,7 +1022,7 @@ mod tests {
 
     #[test]
     fn video_followup_uses_video_language_and_link_markdown() {
-        let message = build_success_bridge_message(
+        let message = build_success_followup_reply(
             "video",
             "media-job-1",
             &[json!({
@@ -1023,11 +1033,13 @@ mod tests {
         assert!(message.contains("视频已生成完成"));
         assert!(message.contains("[成片](<file:///tmp/redbox-video.mp4>)"));
         assert!(!message.contains("![成片]"));
+        assert!(!message.contains("session bridge"));
+        assert!(!message.contains("jobId:"));
     }
 
     #[test]
     fn image_followup_keeps_image_markdown() {
-        let message = build_success_bridge_message(
+        let message = build_success_followup_reply(
             "image",
             "media-job-1",
             &[json!({
@@ -1037,5 +1049,27 @@ mod tests {
         );
         assert!(message.contains("图片已生成完成"));
         assert!(message.contains("![图片](<file:///tmp/redbox-image.png>)"));
+        assert!(!message.contains("session bridge"));
+        assert!(!message.contains("jobId:"));
+    }
+
+    #[test]
+    fn progress_followup_reply_is_visible_content_only() {
+        let message = build_progress_followup_reply(
+            "media-job-1",
+            "image",
+            1,
+            3,
+            &[json!({
+                "absolutePath": "/tmp/redbox-image.png",
+                "metadata": { "title": "图片" }
+            })],
+        );
+
+        assert!(message.starts_with("已生成 1/3 张。"));
+        assert!(message.contains("![图片](<file:///tmp/redbox-image.png>)"));
+        assert!(!message.contains("后台"));
+        assert!(!message.contains("内部轮询"));
+        assert!(!message.contains("jobId:"));
     }
 }

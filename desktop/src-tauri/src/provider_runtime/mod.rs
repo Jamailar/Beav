@@ -1,10 +1,25 @@
+mod adapters;
+mod catalog;
+mod diagnostics;
+mod endpoint;
+mod model_fetch;
 mod openai;
+mod resolver;
+mod types;
 
 use std::fmt::{Display, Formatter};
 
 use crate::InteractiveToolCall;
 
+pub(crate) use catalog::{catalog_entry_for, provider_key_from_parts};
+pub(crate) use endpoint::{model_list_candidates, resolve_endpoint};
+pub(crate) use model_fetch::{fetch_models_blocking, FetchModelsInput};
 pub(crate) use openai::{run_openai_provider_turn, should_prefer_non_streaming_openai_turn};
+pub(crate) use resolver::resolve_provider_request;
+pub(crate) use types::{
+    AuthStrategy, CapabilityDeclaration, CapabilityScope, EndpointBaseKind, EndpointPolicy,
+    ModelListPolicy, ProviderCatalogEntry, ProviderQuirk, ResolvedProviderRequest, RouteMode,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProviderErrorKind {

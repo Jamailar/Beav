@@ -27,6 +27,7 @@ pub struct KnowledgeListPageRequest {
     pub cursor: Option<String>,
     pub limit: Option<usize>,
     pub kind: Option<String>,
+    pub type_filter: Option<String>,
     pub query: Option<String>,
     pub sort: Option<String>,
     pub ready_for_wander_only: Option<bool>,
@@ -1028,6 +1029,7 @@ pub(crate) fn knowledge_list_value(state: &State<'_, AppState>) -> Result<Value,
         Some("redbook-note"),
         None,
         None,
+        None,
         false,
     )?;
     Ok(Value::Array(
@@ -1046,6 +1048,7 @@ pub(crate) fn knowledge_list_youtube_value(state: &State<'_, AppState>) -> Resul
         Some("youtube-video"),
         None,
         None,
+        None,
         false,
     )?;
     Ok(Value::Array(
@@ -1062,6 +1065,7 @@ pub(crate) fn knowledge_docs_list_value(state: &State<'_, AppState>) -> Result<V
         None,
         200,
         Some("document-source"),
+        None,
         None,
         None,
         false,
@@ -1083,6 +1087,7 @@ pub(crate) fn knowledge_list_page_value(
         payload.cursor.as_deref(),
         payload.limit.unwrap_or(60),
         payload.kind.as_deref(),
+        payload.type_filter.as_deref(),
         payload.query.as_deref(),
         payload.sort.as_deref(),
         payload.ready_for_wander_only.unwrap_or(false),
@@ -1716,7 +1721,20 @@ pub fn handle_library_channel(
             "media:list" => {
                 let _ = ensure_store_hydrated_for_media(state);
                 schedule_video_thumbnail_backfill(app);
+                let manuscript_path_filter = payload_string(payload, "manuscriptPath")
+                    .or_else(|| payload_string(payload, "boundManuscriptPath"))
+                    .map(|value| normalize_relative_path(&value))
+                    .filter(|value| !value.is_empty());
                 let mut assets = with_store(state, |store| Ok(media_store::list_assets(&store)))?;
+                if let Some(target_path) = manuscript_path_filter.as_deref() {
+                    assets.retain(|asset| {
+                        asset
+                            .bound_manuscript_path
+                            .as_deref()
+                            .map(|path| normalize_relative_path(path) == target_path)
+                            .unwrap_or(false)
+                    });
+                }
                 assets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                 let total = assets.len();
                 let offset = payload
@@ -1804,13 +1822,14 @@ pub fn handle_library_channel(
                 Ok(result)
             }
             "media:bind" => {
-                let manuscript_path =
-                    normalize_optional_string(payload_string(payload, "manuscriptPath"));
+                let manuscript_path = payload_string(payload, "manuscriptPath")
+                    .map(|value| normalize_relative_path(&value))
+                    .and_then(|value| normalize_optional_string(Some(value)));
                 let role = payload_string(payload, "role")
                     .map(|value| value.trim().to_ascii_lowercase())
                     .filter(|value| !value.is_empty());
+                let asset_id = payload_string(payload, "assetId").unwrap_or_default();
                 let result = with_store_mut(state, |store| {
-                    let asset_id = payload_string(payload, "assetId").unwrap_or_default();
                     let result = media_store::update_asset(store, &asset_id, |asset| {
                         asset.bound_manuscript_path = manuscript_path.clone();
                         asset.updated_at = now_rfc3339();
@@ -1823,6 +1842,16 @@ pub fn handle_library_channel(
                 })?;
                 persist_media_workspace_catalog(state)?;
                 if result.get("success").and_then(Value::as_bool) == Some(true) {
+                    let _ = app.emit(
+                        "data:changed",
+                        json!({
+                            "scope": "media",
+                            "action": "bind",
+                            "entityId": asset_id,
+                            "filePath": manuscript_path.clone().unwrap_or_default(),
+                            "timestamp": now_i64(),
+                        }),
+                    );
                     if let (Some(file_path), Some(role)) =
                         (manuscript_path.as_deref(), role.as_deref())
                     {

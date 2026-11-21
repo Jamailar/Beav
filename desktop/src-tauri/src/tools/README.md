@@ -57,6 +57,7 @@
 - `Operate` 使用 `resource + operation + id? + input?` 协议。
 - `Operate(resource="image", operation="generate")` 的比例、尺寸、质量必须放在 `input.aspectRatio` / `input.size` / `input.quality`，不要只写进自然语言 prompt。支持的 `aspectRatio` 为 `1:1`、`3:4`、`4:3`、`9:16`、`16:9`。
 - `Operate(resource="media", operation="videoRetalk")` 只接收已可远程访问的 `input.video_url` 与 `input.audio_url`，并必须携带计费字段 `durationSeconds` / `resolution`；本地上传、数字人角色资产创建和首页入口由上层产品流负责。
+- 内容采集统一走 canonical action `capture.collect`，不要拆成内容 / 主页 / 评论多个顶层工具。输入用 `platform`（`auto|xhs|douyin|youtube`）、`target`（`auto|content|profile|comments`）和 `url` 表达差异；默认通过现有 capture server contract 下载媒体并入库到 Knowledge。`capture.status` 只负责按 `jobId` 查询或列出最近采集任务。
 - `Operate(resource="task", operation="preview|list|stats|create|confirm|update|cancel")` 必须映射到 consolidated `task.read` / `task.manage` action；`create` 没有 `previewToken` 时只能先跑真实 policy preview 并创建待确认 draft，只有显式 `confirm=true` 或 `createAndConfirm` 才能激活任务。
 - `Operate(resource="session", operation="list|get")` 只负责读取当前会话可见资源索引，返回用户附件和工具结果里出现过的文件 / 媒体引用；模型需要复用上一轮附件或生成产物时，必须使用返回的 `reference` / `path`，不要编造本地路径。
 - `Operate(resource="browser", operation="control")` 是 Codex-style 浏览器 facade；普通浏览器自动化必须通过 `input.operation` 表达 `open|goto|back|forward|getTab|domSnapshot|queryElements|count|allTextContents|waitForSelector|waitForURL|click|type|press|scroll|screenshot|finalizeTabs` 等动作，不要把 `mcp.call` 当浏览器执行入口。

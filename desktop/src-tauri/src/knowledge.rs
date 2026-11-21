@@ -1865,6 +1865,7 @@ fn ingest_youtube_entry(
         "dedupeKey": normalize_string(request.options.dedupe_key.clone()),
     });
     write_json_value(&entry_dir.join("meta.json"), &meta)?;
+    persist_generic_xhs_comments_snapshot(&entry_dir, &entry_id, &request.content.metadata)?;
     refresh_knowledge_projection_and_emit(
         app,
         state,
@@ -1887,6 +1888,16 @@ fn ingest_youtube_entry(
                 entry_dir,
             );
         }
+    }
+    if existing.is_none() {
+        crate::analytics::observe_knowledge_item_added(
+            state,
+            "youtube-video",
+            1,
+            request.source.app_id.as_deref(),
+            request.source.plugin_id.as_deref(),
+            "entry-ingest",
+        );
     }
     Ok(json!({
         "success": true,
@@ -2091,6 +2102,20 @@ fn ingest_note_entry(
                 );
             }
         }
+    } else if transcript.is_some() {
+        if let Some(app) = app {
+            crate::knowledge_index::jobs::schedule_rebuild(app, "note-transcript-ingest");
+        }
+    }
+    if existing_match.is_none() {
+        crate::analytics::observe_knowledge_item_added(
+            state,
+            &normalized_kind,
+            1,
+            request.source.app_id.as_deref(),
+            request.source.plugin_id.as_deref(),
+            "entry-ingest",
+        );
     }
     Ok(json!({
         "success": true,
@@ -2107,6 +2132,45 @@ fn ingest_note_entry(
             "autoTranscribe": should_process_transcription,
         },
     }))
+}
+
+fn persist_generic_xhs_comments_snapshot(
+    entry_dir: &Path,
+    entry_id: &str,
+    metadata: &Option<Value>,
+) -> Result<(), String> {
+    let Some(snapshot) = metadata
+        .as_ref()
+        .and_then(|value| value.get("xhsComments"))
+        .filter(|value| value.is_object())
+    else {
+        return Ok(());
+    };
+    let mut comments_doc = snapshot.clone();
+    if let Some(object) = comments_doc.as_object_mut() {
+        object
+            .entry("schemaVersion".to_string())
+            .or_insert_with(|| json!(1));
+        object
+            .entry("platform".to_string())
+            .or_insert_with(|| json!("xiaohongshu"));
+        object
+            .entry("entryId".to_string())
+            .or_insert_with(|| json!(entry_id));
+        object
+            .entry("capturedAt".to_string())
+            .or_insert_with(|| json!(now_iso()));
+    }
+    let has_comments = comments_doc
+        .get("comments")
+        .and_then(Value::as_array)
+        .map(|items| !items.is_empty())
+        .unwrap_or(false);
+    if !has_comments {
+        return Ok(());
+    }
+    write_json_value(&entry_dir.join("comments.json"), &comments_doc)?;
+    Ok(())
 }
 
 pub(crate) fn ingest_zhihu_answer(
@@ -2344,6 +2408,14 @@ pub(crate) fn ingest_media_assets(
         crate::commands::library::persist_media_workspace_catalog(state)?;
         emit_media_assets_changed(app);
     }
+    crate::analytics::observe_knowledge_item_added(
+        state,
+        "media-assets",
+        new_assets.len(),
+        request.source.app_id.as_deref(),
+        request.source.plugin_id.as_deref(),
+        "media-assets-ingest",
+    );
 
     Ok(json!({
         "success": true,
@@ -2422,7 +2494,8 @@ pub(crate) fn knowledge_http_health(
 ) -> Result<Value, String> {
     let _ = ensure_store_hydrated_for_knowledge(state);
     let _ = ensure_store_hydrated_for_media(state);
-    let page = crate::knowledge_index::catalog::list_page(state, None, 1, None, None, None, false)?;
+    let page =
+        crate::knowledge_index::catalog::list_page(state, None, 1, None, None, None, None, false)?;
     let snapshot = with_store(state, |store| {
         let catalog_entries = page
             .kind_counts
@@ -2826,6 +2899,7 @@ pub(crate) fn add_document_source(
     let sample_files = collect_sample_files(root_path, 6)?;
     let root_display = root_path.display().to_string();
     let mut sources = read_document_sources_index(state)?;
+    let mut created_source = false;
     let source = if let Some(existing) = sources.iter_mut().find(|item| {
         item.get("rootPath")
             .or_else(|| item.get("root_path"))
@@ -2839,6 +2913,7 @@ pub(crate) fn add_document_source(
         }
         existing.clone()
     } else {
+        created_source = true;
         let source = json!({
             "id": make_id("doc-source"),
             "kind": kind,
@@ -2865,6 +2940,16 @@ pub(crate) fn add_document_source(
         )),
     )?;
     crate::knowledge_index::jobs::schedule_rebuild(app, "document-source-mutation");
+    if created_source {
+        crate::analytics::observe_knowledge_item_added(
+            state,
+            kind,
+            1,
+            None,
+            None,
+            "document-source",
+        );
+    }
     Ok(json!({ "success": true, "source": source }))
 }
 
@@ -3004,6 +3089,7 @@ pub(crate) fn persist_note_transcript(
         let _ = crate::accounts::sync_completed_transcript_from_knowledge(
             state, note_id, &meta, transcript,
         );
+        crate::knowledge_index::jobs::schedule_rebuild(app, "note-transcript-completed");
         return Ok(json!({ "success": true, "transcript": transcript }));
     }
 
@@ -3034,6 +3120,7 @@ pub(crate) fn persist_note_transcript(
         &json!({ "id": note_id }),
         transcript,
     );
+    crate::knowledge_index::jobs::schedule_rebuild(app, "note-transcript-completed");
     Ok(json!({ "success": true, "transcript": transcript, "legacyFallback": true }))
 }
 

@@ -1,6 +1,6 @@
-# Beav · Tauri 2.5.0 source
+# Beav 2.6.0 源码
 
-本目录提供 Beav 2.5.0 的 Tauri v2 + Rust 源码。它不是当前正式安装版的完整源码。许可范围见仓库根目录 [LICENSE](../LICENSE)。
+本目录提供 Beav 2.6.0 的 Tauri v2 + Rust 源码，许可范围见仓库根目录 [LICENSE](../LICENSE)。
 
 ## 文件结构
 
@@ -13,7 +13,7 @@
 
 ## 本地构建
 
-准备 Node.js 22、pnpm 10、Rust stable，以及对应平台的 Tauri v2 系统依赖。先在仓库根目录构建浏览器扩展：
+准备 Node.js 22、pnpm 10.28.2、Rust stable，以及对应平台的 Tauri v2 系统依赖。先在仓库根目录构建浏览器扩展：
 
 ```sh
 cd Plugin
@@ -21,17 +21,17 @@ pnpm install --frozen-lockfile
 pnpm check
 cd ../desktop
 pnpm install --frozen-lockfile
-pnpm build
+pnpm build:beav
 ```
 
-`pnpm build` 检查 TypeScript 并构建前端。启动桌面应用前，按 [FFmpeg 二进制说明](src-tauri/binaries/README.md) 准备本平台带 target triple 后缀的 FFmpeg 和 FFprobe；它们是未纳入 Git 的第三方构建资源，不是缺失的应用源码。Tauri 打包还会使用刚构建的 `Plugin/dist/extension`。
+`pnpm build:beav` 检查 TypeScript 并构建 Beav 前端。启动桌面应用前，按 [FFmpeg 二进制说明](src-tauri/binaries/README.md) 准备本平台带 target triple 后缀的 FFmpeg 和 FFprobe；这两项是从第三方获取的构建依赖。Tauri 打包还会使用刚构建的 `Plugin/dist/extension`。
 
 ```sh
-pnpm tauri:dev
+pnpm tauri:dev:beav
 ```
 
-AI、发布及第三方平台能力需要自行配置账号、模型 endpoint 和密钥。仓库不提供生产凭证、签名私钥或公证账号。正式签名、跨平台安装包和线上服务兼容性不由前端构建通过来保证。
+AI、发布及第三方平台能力需要自行配置账号、模型 endpoint 和密钥。正式签名和公证使用维护者自己的凭证。
 
 ## 历史与验证范围
 
-详见 [源码基线与历史说明](docs/source-baseline.md)。模块说明保留在相邻目录；内部规划、事故复盘、本机 Agent 配置不属于公开源码文档。
+详见 [源码基线与历史说明](docs/source-baseline.md)。模块说明位于相邻源码目录。
