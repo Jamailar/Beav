@@ -23,7 +23,16 @@ export interface RedClawHistoryListItem extends ContextChatSessionListItem {
 
 export type RedClawHistorySessionActivity = 'running' | 'unread-complete';
 
-type RedClawSidebarTab = 'chat' | 'manuscripts';
+type RedClawSidebarTab = 'chat' | 'manuscripts' | 'archived';
+
+interface ArchivedSessionItem {
+    id: string;
+    title: string;
+    createdAt?: string;
+    updatedAt?: string;
+    archivedAt?: number | null;
+    messageCount?: number;
+}
 
 type RedClawManuscriptNode = {
     name: string;
@@ -72,6 +81,7 @@ interface RedClawHistorySidebarSectionProps {
     onSwitchSession: (session: RedClawHistoryListItem) => void;
     onSetSessionUnread?: (sessionId: string, unread: boolean) => void;
     onArchiveSession?: (session: RedClawHistoryListItem) => void | Promise<void>;
+    onRestoreSession?: (sessionId: string) => void | Promise<void>;
     onRenameSession?: (session: RedClawHistoryListItem, title: string) => void | Promise<void>;
     onOpenManuscript?: (filePath: string) => void;
     activeManuscriptPath?: string | null;
@@ -210,6 +220,7 @@ export function RedClawHistorySidebarSection({
     onSwitchSession,
     onSetSessionUnread,
     onArchiveSession,
+    onRestoreSession,
     onRenameSession,
     onOpenManuscript,
     activeManuscriptPath,
@@ -240,6 +251,67 @@ export function RedClawHistorySidebarSection({
     const manuscriptDialogInputRef = useRef<HTMLInputElement | null>(null);
     const manuscriptRequestIdRef = useRef(0);
     const manuscriptClickTimerRef = useRef<number | null>(null);
+    const [archivedSessions, setArchivedSessions] = useState<ArchivedSessionItem[]>([]);
+    const [archivedLoading, setArchivedLoading] = useState(false);
+    const [restoringSessionId, setRestoringSessionId] = useState('');
+    const [deletingSessionId, setDeletingSessionId] = useState('');
+
+    const loadArchivedSessions = useCallback(async () => {
+        setArchivedLoading(true);
+        try {
+            const result = await window.ipcRenderer.chat.listArchivedSessions() as ArchivedSessionItem[] | undefined;
+            const items = Array.isArray(result) ? result : [];
+            items.sort((a, b) => {
+                const aTime = a.archivedAt ?? 0;
+                const bTime = b.archivedAt ?? 0;
+                return bTime - aTime;
+            });
+            setArchivedSessions(items);
+        } catch (error) {
+            console.error('Failed to list archived sessions:', error);
+            setArchivedSessions([]);
+        } finally {
+            setArchivedLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (activeTab !== 'archived') return;
+        void loadArchivedSessions();
+    }, [activeTab, loadArchivedSessions]);
+
+    const handleRestoreSession = useCallback(async (session: ArchivedSessionItem) => {
+        if (restoringSessionId) return;
+        const confirmed = await appConfirm(`恢复会话「${session.title || '未命名会话'}」？恢复后会重新出现在对话列表中。`);
+        if (!confirmed) return;
+        setRestoringSessionId(session.id);
+        try {
+            await window.ipcRenderer.chat.unarchiveSession(session.id);
+            setArchivedSessions((prev) => prev.filter((item) => item.id !== session.id));
+            await onRestoreSession?.(session.id);
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '恢复会话失败');
+        } finally {
+            setRestoringSessionId('');
+        }
+    }, [onRestoreSession, restoringSessionId]);
+
+    const handleDeleteArchivedSession = useCallback(async (session: ArchivedSessionItem) => {
+        if (restoringSessionId || deletingSessionId) return;
+        const confirmed = await appConfirm(
+            `永久删除归档会话「${session.title || '未命名会话'}」？此操作不可恢复。`,
+        );
+        if (!confirmed) return;
+        setDeletingSessionId(session.id);
+        try {
+            await window.ipcRenderer.chat.deleteSession(session.id);
+            setArchivedSessions((prev) => prev.filter((item) => item.id !== session.id));
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '删除归档会话失败');
+        } finally {
+            setDeletingSessionId('');
+        }
+    }, [deletingSessionId, restoringSessionId]);
 
     const pinnedRoomIdSet = useMemo(() => new Set(pinnedRoomIds), [pinnedRoomIds]);
     const pinnedSessionIdSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
@@ -912,6 +984,7 @@ export function RedClawHistorySidebarSection({
                 {[
                     { id: 'chat' as const, label: '对话' },
                     { id: 'manuscripts' as const, label: '稿件' },
+                    { id: 'archived' as const, label: '归档' },
                 ].map((tab) => (
                     <button
                         key={tab.id}
@@ -995,6 +1068,63 @@ export function RedClawHistorySidebarSection({
                         ) : (
                             sortManuscriptNodes(manuscriptTree).map((node) => renderManuscriptNode(node))
                         )}
+                    </div>
+                ) : activeTab === 'archived' ? (
+                    <div className="space-y-0.5 pb-6">
+                        <div className="mb-1.5 px-3 text-[11px] font-bold text-text-tertiary">已归档的会话</div>
+                        {archivedLoading ? (
+                            <div className="flex items-center justify-center py-10">
+                                <Loader2 className="w-5 h-5 animate-spin text-accent-primary/50" />
+                            </div>
+                        ) : archivedSessions.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center px-8 py-10 text-center">
+                                <Archive className="w-8 h-8 text-accent-primary/20 mb-3" />
+                                <h3 className="text-[13px] font-bold text-text-primary">暂无归档会话</h3>
+                            </div>
+                        ) : archivedSessions.map((session) => (
+                            <div
+                                key={session.id}
+                                className="group flex items-center gap-2 rounded-lg px-3 py-2 text-[12px] text-text-secondary hover:bg-surface-secondary/60"
+                            >
+                                <div className="min-w-0 flex-1">
+                                    <div className="truncate font-semibold text-text-primary" title={session.title}>
+                                        {session.title || '未命名会话'}
+                                    </div>
+                                    <div className="mt-0.5 truncate text-[10px] text-text-tertiary">
+                                        {session.messageCount ?? 0} 条消息
+                                        {session.archivedAt ? ` · 归档于 ${new Date(session.archivedAt).toLocaleString('zh-CN')}` : ''}
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    title="恢复会话"
+                                    aria-label="恢复会话"
+                                    disabled={Boolean(restoringSessionId || deletingSessionId)}
+                                    onClick={() => void handleRestoreSession(session)}
+                                    className="shrink-0 rounded-md p-1.5 text-text-tertiary hover:bg-surface-primary hover:text-accent-primary disabled:opacity-50"
+                                >
+                                    {restoringSessionId === session.id ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                        <RefreshCw className="w-4 h-4" />
+                                    )}
+                                </button>
+                                <button
+                                    type="button"
+                                    title="永久删除"
+                                    aria-label="永久删除归档会话"
+                                    disabled={Boolean(restoringSessionId || deletingSessionId)}
+                                    onClick={() => void handleDeleteArchivedSession(session)}
+                                    className="shrink-0 rounded-md p-1.5 text-text-tertiary hover:bg-surface-primary hover:text-red-500 disabled:opacity-50"
+                                >
+                                    {deletingSessionId === session.id ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                        <Trash2 className="w-4 h-4" />
+                                    )}
+                                </button>
+                            </div>
+                        ))}
                     </div>
                 ) : (
                     <>

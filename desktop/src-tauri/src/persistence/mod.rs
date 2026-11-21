@@ -1074,7 +1074,16 @@ pub fn persist_store(path: &PathBuf, store: &AppStore) -> Result<(), String> {
         .into_iter()
         .map(|entry| (entry.id.clone(), entry))
         .collect::<HashMap<_, _>>();
-    let mut index_entries: Vec<SessionIndexEntry> = Vec::new();
+    let current_ids: std::collections::HashSet<String> =
+        sessions.iter().map(|session| session.id.clone()).collect();
+    // Archived sessions are removed from the in-memory store, so rebuilding the
+    // index purely from `sessions` would drop their records permanently. Keep
+    // archived entries that are no longer present in the live store.
+    let mut index_entries: Vec<SessionIndexEntry> = existing_index
+        .values()
+        .filter(|entry| entry.archived && !current_ids.contains(&entry.id))
+        .cloned()
+        .collect();
     for session in &sessions {
         let session_id = &session.id;
         let mut entries: Vec<SessionFileEntry> = Vec::new();
@@ -1132,8 +1141,8 @@ pub fn persist_store(path: &PathBuf, store: &AppStore) -> Result<(), String> {
             created_at: session.created_at.clone(),
             updated_at: session.updated_at.clone(),
             metadata: session.metadata.clone(),
-            archived: false,
-            archived_at: None,
+            archived: session.archived,
+            archived_at: session.archived_at,
             starred: session.starred,
             message_count,
             working_directory: session
@@ -1420,7 +1429,14 @@ fn schedule_store_persist(state: &State<'_, AppState>) {
                 .into_iter()
                 .map(|entry| (entry.id.clone(), entry))
                 .collect::<HashMap<_, _>>();
-            let mut index_entries: Vec<SessionIndexEntry> = Vec::new();
+            let current_ids: std::collections::HashSet<String> =
+                sessions.iter().map(|session| session.id.clone()).collect();
+            // Preserve archived entries that are no longer in the live store.
+            let mut index_entries: Vec<SessionIndexEntry> = existing_index
+                .values()
+                .filter(|entry| entry.archived && !current_ids.contains(&entry.id))
+                .cloned()
+                .collect();
             for session in &sessions {
                 let session_id = &session.id;
                 let mut entries: Vec<SessionFileEntry> = Vec::new();
@@ -1475,8 +1491,8 @@ fn schedule_store_persist(state: &State<'_, AppState>) {
                     created_at: session.created_at.clone(),
                     updated_at: session.updated_at.clone(),
                     metadata: session.metadata.clone(),
-                    archived: false,
-                    archived_at: None,
+                    archived: session.archived,
+                    archived_at: session.archived_at,
                     starred: session.starred,
                     message_count,
                     working_directory: session

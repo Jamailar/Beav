@@ -32,3 +32,5 @@ src-tauri/gen/
 .omx/
 desktop/src-tauri/binaries/ffmpeg*
 desktop/src-tauri/binaries/ffprobe*
+AGENTS.md
+start-beav.bat

@@ -1129,7 +1129,9 @@ export function RedClaw({
                 return;
             }
 
-            let items = sortContextSessionItems(listResult);
+            let items = sortContextSessionItems(
+                listResult.filter((item) => !item.archived),
+            );
             const rememberedSessionId = readRedClawLastSessionId(nextActiveSpaceId);
 
             const preserveManualDraft = manualDraftActiveRef.current
@@ -1772,6 +1774,19 @@ export function RedClaw({
         }
     }, [activeSpaceId]);
 
+    const restoreArchivedSession = useCallback(async (sessionId: string) => {
+        const targetSessionId = String(sessionId || '').trim();
+        if (!targetSessionId) return;
+        try {
+            await window.ipcRenderer.chat.unarchiveSession(targetSessionId);
+            // Reload the session list so the restored session reappears.
+            await initSession();
+        } catch (error) {
+            console.error('Failed to restore archived session:', error);
+            setChatActionMessage(error instanceof Error ? error.message : '恢复会话失败');
+        }
+    }, [initSession]);
+
     const deleteRoomFromRedClaw = useCallback(async (room: RedClawTeamRoom) => {
         if (!room?.id) return;
         try {
@@ -2250,6 +2265,7 @@ export function RedClaw({
                 onSwitchSession={switchHistorySession}
                 onSetSessionUnread={setHistorySessionUnread}
                 onArchiveSession={(session) => void archiveUnifiedHistorySession(session)}
+                onRestoreSession={(sessionId) => void restoreArchivedSession(sessionId)}
                 onRenameSession={renameUnifiedHistorySession}
                 onOpenManuscript={handleOpenManuscript}
                 activeManuscriptPath={activeManuscriptPath}
@@ -2266,6 +2282,7 @@ export function RedClaw({
         activeManuscriptPath,
         onGlobalSidebarContentChange,
         renameUnifiedHistorySession,
+        restoreArchivedSession,
         selectedRoomId,
         setHistorySessionUnread,
         sessionActivityById,

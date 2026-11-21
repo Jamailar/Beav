@@ -98,7 +98,12 @@ pub(crate) struct ForkSessionOutcome {
 }
 
 pub(crate) fn list_sessions(store: &AppStore) -> Vec<ChatSessionRecord> {
-    let mut sessions = store.chat_sessions.clone();
+    let mut sessions = store
+        .chat_sessions
+        .iter()
+        .filter(|session| !session.archived)
+        .cloned()
+        .collect::<Vec<_>>();
     sessions.sort_by(|a, b| compare_session_updated_at_desc(a, b));
     sessions
 }
@@ -111,6 +116,7 @@ pub(crate) fn list_context_sessions(
     let mut sessions = store
         .chat_sessions
         .iter()
+        .filter(|session| !session.archived)
         .filter(|session| session_matches_context_binding(session, context_type, context_id))
         .cloned()
         .collect::<Vec<_>>();

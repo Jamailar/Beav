@@ -344,18 +344,28 @@ function getAttachmentKindIcon(kind: ComposerAttachmentVisualKind, className: st
 
 function getClipboardImageFiles(dataTransfer: DataTransfer | null): File[] {
   if (!dataTransfer) return [];
-  const bySignature = new Map<string, File>();
-  const addFile = (file: File | null | undefined) => {
-    if (!file || !file.type.toLowerCase().startsWith('image/')) return;
-    const key = `${file.name || 'clipboard-image'}:${file.type}:${file.size}:${file.lastModified}`;
-    bySignature.set(key, file);
-  };
+  const isImage = (file: File | null | undefined): file is File => (
+    !!file && file.type.toLowerCase().startsWith('image/')
+  );
 
-  Array.from(dataTransfer.items || []).forEach((item) => {
-    if (item.kind !== 'file' || !item.type.toLowerCase().startsWith('image/')) return;
-    addFile(item.getAsFile());
+  // Use a single source: `items` and `files` often expose the SAME clipboard
+  // image as two distinct File objects with different name/lastModified, which
+  // previously produced two attachments for one paste. Prefer `items`, fall
+  // back to `files` only when `items` yielded nothing.
+  const fromItems = Array.from(dataTransfer.items || [])
+    .filter((item) => item.kind === 'file' && item.type.toLowerCase().startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter(isImage);
+  const source = fromItems.length > 0
+    ? fromItems
+    : Array.from(dataTransfer.files || []).filter(isImage);
+
+  // De-duplicate by stable content characteristics only (name/lastModified are
+  // unreliable for clipboard images and caused two entries to slip through).
+  const bySignature = new Map<string, File>();
+  source.forEach((file) => {
+    bySignature.set(`${file.type}:${file.size}`, file);
   });
-  Array.from(dataTransfer.files || []).forEach(addFile);
   return Array.from(bySignature.values());
 }
 

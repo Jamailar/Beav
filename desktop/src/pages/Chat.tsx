@@ -1593,6 +1593,25 @@ function applyPersistedRuntimeEventsToMessages(
   return next;
 }
 
+const SELECTED_CHAT_MODEL_KEY_STORAGE = 'beav.chat.selectedChatModelKey';
+
+function loadPersistedChatModelKey(): string {
+  try {
+    return window.localStorage.getItem(SELECTED_CHAT_MODEL_KEY_STORAGE) || '';
+  } catch {
+    return '';
+  }
+}
+
+function persistChatModelKey(key: string): void {
+  try {
+    if (key) window.localStorage.setItem(SELECTED_CHAT_MODEL_KEY_STORAGE, key);
+    else window.localStorage.removeItem(SELECTED_CHAT_MODEL_KEY_STORAGE);
+  } catch {
+    // localStorage may be unavailable; selection still lives in component state
+  }
+}
+
 export function Chat({
   isActive = true,
   onExecutionStateChange,
@@ -1720,7 +1739,7 @@ export function Chat({
       onExecutionStateChange?.(false);
     };
   }, [onExecutionStateChange]);
-  const [selectedChatModelKey, setSelectedChatModelKey] = useState('');
+  const [selectedChatModelKey, setSelectedChatModelKey] = useState(() => loadPersistedChatModelKey());
   const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -2029,7 +2048,11 @@ export function Chat({
       const options = buildChatModelOptions(settings);
       setChatModelOptions(options);
       setSelectedChatModelKey((current) => {
-        if (current && options.some((item) => item.key === current)) return current;
+        // Preserve the user's explicit choice whenever it is still available.
+        const keys = new Set(options.map((item) => item.key));
+        if (current && keys.has(current)) return current;
+        const persisted = loadPersistedChatModelKey();
+        if (persisted && keys.has(persisted)) return persisted;
         return options.find((item) => item.isDefault)?.key || options[0]?.key || '';
       });
     } catch (error) {
@@ -2195,12 +2218,20 @@ export function Chat({
       return undefined;
     }
     setChatModelOptions(options);
-    const resolvedKey = options.find((item) => item.isDefault)?.key || options[0]?.key || '';
+    const keys = new Set(options.map((item) => item.key));
+    const preferredKey = selectedChatModelKey && keys.has(selectedChatModelKey)
+      ? selectedChatModelKey
+      : (() => {
+          const persisted = loadPersistedChatModelKey();
+          return persisted && keys.has(persisted) ? persisted : '';
+        })();
+    const resolvedKey = preferredKey
+      || options.find((item) => item.isDefault)?.key
+      || options[0]?.key
+      || '';
     if (resolvedKey) {
-      setSelectedChatModelKey((current) => {
-        if (current && options.some((item) => item.key === current)) return current;
-        return resolvedKey;
-      });
+      setSelectedChatModelKey(resolvedKey);
+      persistChatModelKey(resolvedKey);
     }
     const resolved = options.find((item) => item.key === resolvedKey) || options[0];
     if (!resolved) {
@@ -4741,7 +4772,10 @@ export function Chat({
         onRemoveAttachment={removePendingAttachment}
         modelOptions={chatModelOptions}
         selectedModelKey={selectedChatModelKey}
-        onSelectedModelKeyChange={setSelectedChatModelKey}
+        onSelectedModelKeyChange={(key) => {
+          setSelectedChatModelKey(key);
+          persistChatModelKey(key);
+        }}
         isBusy={isProcessing}
         allowInputWhileBusy={keepComposerInputActive}
         audioState={isTranscribingAudio ? 'transcribing' : audioRecording.isRecording ? 'recording' : 'idle'}

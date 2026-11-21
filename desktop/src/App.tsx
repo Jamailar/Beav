@@ -391,6 +391,8 @@ function App() {
   const officialAuthNeedsLogin = officialAuthBootstrapped
     && !officialAuthPending
     && !officialAuthLoggedIn;
+  // 自定义 / 本地模型源已就绪时，无需官方账号登录即可进入工作台。
+  const customSourceReady = Boolean(llmReadinessState?.canUseCustom);
   const llmReadinessPending = officialAuthLoggedIn && !llmReadinessBootstrapped;
 
   const openAppOnboarding = useCallback(() => {
@@ -417,7 +419,7 @@ function App() {
     );
   }
 
-  if (officialAuthNeedsLogin) {
+  if (officialAuthNeedsLogin && !customSourceReady) {
     return (
       <>
         <OfficialLoginGate mode={officialAuthStatus === 'reauthRequired' ? 'expired' : 'login'} />

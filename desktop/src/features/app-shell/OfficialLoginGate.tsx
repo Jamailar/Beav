@@ -133,6 +133,7 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
     presetId: DEFAULT_AI_PRESET_ID,
     baseURL: AI_SOURCE_PRESETS.find((preset) => preset.id === DEFAULT_AI_PRESET_ID)?.baseURL || '',
     apiKey: '',
+    model: '',
   });
   const [wechatBusy, setWechatBusy] = useState(false);
   const [wechatQrUrl, setWechatQrUrl] = useState('');
@@ -344,8 +345,13 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
     const preset = AI_SOURCE_PRESETS.find((item) => item.id === customForm.presetId);
     const baseURL = String(customForm.baseURL || '').trim();
     const apiKey = String(customForm.apiKey || '').trim();
+    const model = String(customForm.model || '').trim();
     if (!baseURL) {
       setLoginNotice('error', '请先填写 API Base URL');
+      return;
+    }
+    if (!model) {
+      setLoginNotice('error', '请先填写模型名称');
       return;
     }
     setCustomBusy(true);
@@ -356,20 +362,21 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
         apiKey,
         presetId: customForm.presetId,
         protocol: preset?.protocol,
+        preferredModel: model,
         name: preset?.label || 'Custom API',
       });
       if (!result?.success) {
         throw new Error(result?.error || '自定义 API 配置失败');
       }
-      const model = String((result.source as { model?: unknown } | undefined)?.model || '').trim();
-      setLoginNotice('success', model ? `已选择 ${model}，正在进入工作台…` : '配置成功，正在进入工作台…');
+      const savedModel = String((result.source as { model?: unknown } | undefined)?.model || '').trim();
+      setLoginNotice('success', savedModel ? `已选择 ${savedModel}，正在进入工作台…` : '配置成功，正在进入工作台…');
       void window.ipcRenderer.llmReadiness.refresh();
     } catch (error) {
       setLoginNotice('error', error instanceof Error ? error.message : '自定义 API 配置失败');
     } finally {
       setCustomBusy(false);
     }
-  }, [customForm.apiKey, customForm.baseURL, customForm.presetId, setLoginNotice]);
+  }, [customForm.apiKey, customForm.baseURL, customForm.model, customForm.presetId, setLoginNotice]);
 
   const returnToSmsLogin = useCallback(() => {
     stopWechatPolling();
@@ -472,6 +479,15 @@ export function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         value={customForm.apiKey}
                         onChange={(event) => setCustomForm((prev) => ({ ...prev, apiKey: event.target.value }))}
                         placeholder="API Key"
+                        autoComplete="off"
+                        disabled={authBusy}
+                        className={inputClassName}
+                      />
+                      <input
+                        type="text"
+                        value={customForm.model}
+                        onChange={(event) => setCustomForm((prev) => ({ ...prev, model: event.target.value }))}
+                        placeholder="模型名称（如 group/never-stuck）"
                         autoComplete="off"
                         disabled={authBusy}
                         className={inputClassName}

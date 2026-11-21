@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?$/;
 
 function replaceCargoPackageVersion(contents, version) {
-  const pattern = /(\[package\][\s\S]*?\nversion = )"[^"]+"/;
+  const pattern = /(\[package\][\s\S]*?\r?\nversion = )"[^"]+"/;
   if (!pattern.test(contents)) {
     throw new Error('Failed to locate src-tauri/Cargo.toml package.version');
   }
@@ -19,7 +19,7 @@ function replaceCargoPackageVersion(contents, version) {
 
 function replaceCargoLockRootVersion(contents, packageName, version) {
   const escapedPackageName = packageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`(\\[\\[package\\]\\]\\nname = "${escapedPackageName}"\\nversion = )"[^"]+"`);
+  const pattern = new RegExp(`(\\[\\[package\\]\\]\\r?\\nname = "${escapedPackageName}"\\r?\\nversion = )"[^"]+"`);
   if (!pattern.test(contents)) {
     throw new Error('Failed to locate src-tauri/Cargo.lock root package version');
   }
