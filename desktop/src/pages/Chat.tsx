@@ -72,6 +72,9 @@ interface KnowledgeMentionCatalogRecord {
 }
 
 interface SkillMentionCatalogRecord {
+  id?: string;
+  packageId?: string;
+  package_id?: string;
   name?: string;
   description?: string;
   location?: string;
@@ -79,6 +82,18 @@ interface SkillMentionCatalogRecord {
   sourceScope?: string;
   isBuiltin?: boolean;
   disabled?: boolean;
+  avatarUrl?: string;
+  avatar_url?: string;
+  iconUrl?: string;
+  icon_url?: string;
+  logoUrl?: string;
+  logo_url?: string;
+  imageUrl?: string;
+  image_url?: string;
+  thumbnailUrl?: string;
+  thumbnail_url?: string;
+  authorAvatarUrl?: string;
+  author_avatar_url?: string;
 }
 
 interface AssetMentionCatalogRecord {
@@ -99,6 +114,103 @@ interface KnowledgeMentionListPageResponse {
   items?: KnowledgeMentionCatalogRecord[];
   nextCursor?: string | null;
   total?: number;
+}
+
+const SKILL_MARKETPLACE_CACHE_STORAGE_KEY = 'redbox:skill-marketplace-cache:v2';
+const skillMentionMarketAvatarCache = new Map<string, Partial<ChatSkillMentionOption>>();
+let skillMentionMarketAvatarCacheHydrated = false;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function normalizeSkillMentionLookupKey(value: unknown) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function recordString(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function avatarFieldsFromMarketRecord(record: Record<string, unknown>): Partial<ChatSkillMentionOption> {
+  const fields: Partial<ChatSkillMentionOption> = {
+    packageId: recordString(record, ['packageId', 'package_id', 'packageKey', 'package_key']),
+    avatarUrl: recordString(record, ['avatarUrl', 'avatar_url']),
+    iconUrl: recordString(record, ['iconUrl', 'icon_url']),
+    logoUrl: recordString(record, ['logoUrl', 'logo_url']),
+    imageUrl: recordString(record, ['imageUrl', 'image_url']),
+    thumbnailUrl: recordString(record, ['thumbnailUrl', 'thumbnail_url']),
+    authorAvatarUrl: recordString(record, ['authorAvatarUrl', 'author_avatar_url']),
+  };
+  const publisher = isPlainRecord(record.publisher) ? record.publisher : null;
+  if (!fields.authorAvatarUrl && publisher) {
+    fields.authorAvatarUrl = recordString(publisher, ['avatarUrl', 'avatar_url', 'imageUrl', 'image_url']);
+  }
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => Boolean(value))) as Partial<ChatSkillMentionOption>;
+}
+
+function marketRecordLookupKeys(record: Record<string, unknown>) {
+  const keys = [
+    recordString(record, ['packageId', 'package_id', 'packageKey', 'package_key']),
+    recordString(record, ['id']),
+    recordString(record, ['name', 'title', 'displayName', 'display_name']),
+  ];
+  const installedSkillNames = Array.isArray(record.installedSkillNames)
+    ? record.installedSkillNames
+    : Array.isArray(record.installed_skill_names)
+      ? record.installed_skill_names
+      : [];
+  installedSkillNames.forEach((name) => keys.push(String(name || '').trim()));
+  return keys.map(normalizeSkillMentionLookupKey).filter(Boolean);
+}
+
+function hydrateSkillMentionMarketAvatarCache(options: { force?: boolean } = {}) {
+  if (skillMentionMarketAvatarCacheHydrated && !options.force) return;
+  skillMentionMarketAvatarCacheHydrated = true;
+  if (options.force) {
+    skillMentionMarketAvatarCache.clear();
+  }
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(SKILL_MARKETPLACE_CACHE_STORAGE_KEY);
+    if (!raw) return;
+    const snapshot = JSON.parse(raw) as unknown;
+    const entries = isPlainRecord(snapshot) && isPlainRecord(snapshot.entries) ? snapshot.entries : {};
+    Object.values(entries).forEach((entry) => {
+      if (!isPlainRecord(entry) || !Array.isArray(entry.items)) return;
+      entry.items.forEach((item) => {
+        if (!isPlainRecord(item)) return;
+        const fields = avatarFieldsFromMarketRecord(item);
+        if (!fields.avatarUrl && !fields.iconUrl && !fields.logoUrl && !fields.imageUrl && !fields.thumbnailUrl && !fields.authorAvatarUrl) {
+          return;
+        }
+        marketRecordLookupKeys(item).forEach((key) => {
+          skillMentionMarketAvatarCache.set(key, fields);
+        });
+      });
+    });
+  } catch (error) {
+    console.warn('Failed to read cached skill marketplace avatars:', error);
+  }
+}
+
+function cachedSkillMentionAvatarFields(item: SkillMentionCatalogRecord) {
+  hydrateSkillMentionMarketAvatarCache();
+  const keys = [
+    item.packageId,
+    item.package_id,
+    item.id,
+    item.name,
+  ].map(normalizeSkillMentionLookupKey).filter(Boolean);
+  for (const key of keys) {
+    const fields = skillMentionMarketAvatarCache.get(key);
+    if (fields) return fields;
+  }
+  return {};
 }
 
 function memberActorFromMessageMetadata(metadata: unknown): ChatMessageMemberActor | undefined {
@@ -146,6 +258,7 @@ function normalizeKnowledgeMentionRecord(item: KnowledgeMentionCatalogRecord): C
 function normalizeSkillMentionRecord(item: SkillMentionCatalogRecord): ChatSkillMentionOption | null {
   const name = String(item.name || '').trim();
   if (!name || item.disabled) return null;
+  const cachedAvatarFields = cachedSkillMentionAvatarFields(item);
   return {
     name,
     description: String(item.description || '').trim() || undefined,
@@ -153,7 +266,31 @@ function normalizeSkillMentionRecord(item: SkillMentionCatalogRecord): ChatSkill
     sourceScope: String(item.sourceScope || '').trim() || undefined,
     isBuiltin: Boolean(item.isBuiltin),
     aliases: Array.isArray(item.aliases) ? item.aliases.map((alias) => String(alias || '').trim()).filter(Boolean) : [],
+    packageId: String(item.packageId || item.package_id || cachedAvatarFields.packageId || '').trim() || undefined,
+    avatarUrl: String(item.avatarUrl || item.avatar_url || cachedAvatarFields.avatarUrl || '').trim() || undefined,
+    iconUrl: String(item.iconUrl || item.icon_url || cachedAvatarFields.iconUrl || '').trim() || undefined,
+    logoUrl: String(item.logoUrl || item.logo_url || cachedAvatarFields.logoUrl || '').trim() || undefined,
+    imageUrl: String(item.imageUrl || item.image_url || cachedAvatarFields.imageUrl || '').trim() || undefined,
+    thumbnailUrl: String(item.thumbnailUrl || item.thumbnail_url || cachedAvatarFields.thumbnailUrl || '').trim() || undefined,
+    authorAvatarUrl: String(item.authorAvatarUrl || item.author_avatar_url || cachedAvatarFields.authorAvatarUrl || '').trim() || undefined,
   };
+}
+
+function normalizePendingSkillMentions(pendingMessage: PendingChatMessage): ChatSkillMentionOption[] {
+  const byName = new Map<string, ChatSkillMentionOption>();
+  const add = (item: SkillMentionCatalogRecord | string | null | undefined) => {
+    const record = typeof item === 'string' ? { name: item } : item;
+    if (!record) return;
+    const normalized = normalizeSkillMentionRecord(record);
+    if (!normalized) return;
+    byName.set(normalized.name, normalized);
+  };
+  (pendingMessage.skillMentions || []).forEach(add);
+  const activeSkills = pendingMessage.taskHints?.activeSkills;
+  if (byName.size === 0 && Array.isArray(activeSkills)) {
+    activeSkills.forEach(add);
+  }
+  return [...byName.values()];
 }
 
 function normalizeAssetMentionRecord(item: AssetMentionCatalogRecord): ChatAssetMentionOption | null {
@@ -191,6 +328,17 @@ function mergeSkillMentionsIntoTaskHints(
     : [];
   base.activeSkills = Array.from(new Set([...existing, ...skillNames]));
   return base;
+}
+
+function chatModelConfigFromOption(option: ChatModelOption | null | undefined) {
+  if (!option) return undefined;
+  return {
+    apiKey: option.apiKey,
+    baseURL: option.baseURL,
+    modelName: option.modelName,
+    sourceId: option.sourceId,
+    presetId: option.presetId,
+  };
 }
 
 function knowledgeReferencesFromMessageMetadata(metadata: unknown): ChatKnowledgeMentionOption[] {
@@ -299,6 +447,8 @@ interface ChatProps {
   fixedSessionId?: string | null;
   fixedSessionDraft?: boolean;
   onEnsureSessionForSend?: (defaultTitle?: string, options?: EnsureSessionForSendOptions) => Promise<string | null>;
+  initialChatModelKey?: string;
+  onChatModelKeyChange?: (key: string) => void;
   showClearButton?: boolean;
   fixedSessionBannerText?: string;
   shortcuts?: ChatShortcutProvider;
@@ -340,6 +490,10 @@ interface ChatProps {
   placeholder?: string;
   fixedMemberMention?: ChatMemberMentionOption | null;
   onSessionActivity?: (sessionId: string, updatedAt: string) => void;
+  analyticsContext?: {
+    surface?: string;
+    runtimeMode?: string;
+  };
   clearSignal?: number;
 }
 
@@ -1294,6 +1448,12 @@ const INTERNAL_RUNTIME_STATUS_PREFIXES = [
   '系统状态更新：以下技能已激活并写入当前会话：',
   '系统状态更新：以下技能已激活并加入当前轮上下文：',
   '系统状态更新：以下技能已激活：',
+  '你正在处理一个图片生成后台进度回传。',
+  '你正在处理一个图片生成后台回传任务。',
+  '你正在处理一个视频生成后台进度回传。',
+  '你正在处理一个视频生成后台回传任务。',
+  '你正在处理一个音频生成后台进度回传。',
+  '你正在处理一个音频生成后台回传任务。',
 ];
 
 function isInternalRuntimeStatusText(value: unknown): boolean {
@@ -1601,6 +1761,8 @@ export function Chat({
   fixedSessionId,
   fixedSessionDraft = false,
   onEnsureSessionForSend,
+  initialChatModelKey = '',
+  onChatModelKeyChange,
   showClearButton = true,
   fixedSessionBannerText = '当前对话已关联到文档',
   shortcuts: shortcutsProp,
@@ -1642,6 +1804,7 @@ export function Chat({
   placeholder,
   fixedMemberMention = null,
   onSessionActivity,
+  analyticsContext,
   clearSignal = 0,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
@@ -1720,11 +1883,14 @@ export function Chat({
       onExecutionStateChange?.(false);
     };
   }, [onExecutionStateChange]);
-  const [selectedChatModelKey, setSelectedChatModelKey] = useState('');
+  const [selectedChatModelKey, setSelectedChatModelKeyState] = useState(() => String(initialChatModelKey || '').trim());
   const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const currentSessionIdRef = useRef<string | null>(fixedSessionId ?? null);
+  const chatModelOptionsRef = useRef<ChatModelOption[]>([]);
+  const selectedChatModelKeyRef = useRef(String(initialChatModelKey || '').trim());
+  const hasManualChatModelSelectionRef = useRef(Boolean(String(initialChatModelKey || '').trim()));
   const chatInstanceIdRef = useRef(
     `chat-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
   );
@@ -2000,6 +2166,39 @@ export function Chat({
     }
   }, [fixedSessionId]);
 
+  useEffect(() => {
+    const next = String(initialChatModelKey || '').trim();
+    hasManualChatModelSelectionRef.current = Boolean(next);
+    if (!next) {
+      if (!selectedChatModelKeyRef.current) return;
+      selectedChatModelKeyRef.current = '';
+      setSelectedChatModelKeyState('');
+      return;
+    }
+    if (next === selectedChatModelKeyRef.current) return;
+    selectedChatModelKeyRef.current = next;
+    setSelectedChatModelKeyState(next);
+  }, [initialChatModelKey]);
+
+  const applyChatModelOptions = useCallback((options: ChatModelOption[]) => {
+    chatModelOptionsRef.current = options;
+    setChatModelOptions(options);
+  }, []);
+
+  const handleSelectedChatModelKeyChange = useCallback((key: string) => {
+    const next = String(key || '').trim();
+    hasManualChatModelSelectionRef.current = Boolean(next);
+    selectedChatModelKeyRef.current = next;
+    setSelectedChatModelKeyState(next);
+    onChatModelKeyChange?.(next);
+  }, [onChatModelKeyChange]);
+
+  const resolveSelectedChatModelFromRefs = useCallback(() => {
+    const options = chatModelOptionsRef.current.length > 0 ? chatModelOptionsRef.current : chatModelOptions;
+    const key = selectedChatModelKeyRef.current || selectedChatModelKey;
+    return options.find((item) => item.key === key) || null;
+  }, [chatModelOptions, selectedChatModelKey]);
+
   const selectedChatModel = chatModelOptions.find((item) => item.key === selectedChatModelKey) || null;
 
   const buildPendingAssistantTimeline = useCallback((label: string): ProcessItem[] => ([
@@ -2027,15 +2226,23 @@ export function Chat({
         window.ipcRenderer.getSettings() as Promise<ChatSettingsSnapshot | undefined>
       ));
       const options = buildChatModelOptions(settings);
-      setChatModelOptions(options);
-      setSelectedChatModelKey((current) => {
-        if (current && options.some((item) => item.key === current)) return current;
-        return options.find((item) => item.isDefault)?.key || options[0]?.key || '';
+      applyChatModelOptions(options);
+      setSelectedChatModelKeyState((current) => {
+        const preferred = hasManualChatModelSelectionRef.current
+          ? selectedChatModelKeyRef.current || current
+          : '';
+        if (preferred && options.some((item) => item.key === preferred)) {
+          selectedChatModelKeyRef.current = preferred;
+          return preferred;
+        }
+        const next = options.find((item) => item.isDefault)?.key || options[0]?.key || '';
+        selectedChatModelKeyRef.current = next;
+        return next;
       });
     } catch (error) {
       console.error('Failed to load chat model options:', error);
     }
-  }, []);
+  }, [applyChatModelOptions]);
 
   const normalizeMemberMentionOptions = useCallback((records: AdvisorMentionRecord[] | null | undefined): ChatMemberMentionOption[] => (
     (records || [])
@@ -2062,6 +2269,7 @@ export function Chat({
   const loadSkillMentionOptions = useCallback(async () => {
     if (!isActiveRef.current) return;
     try {
+      hydrateSkillMentionMarketAvatarCache({ force: true });
       const skills = await window.ipcRenderer.listSkills();
       setSkillMentionOptions(
         (skills || [])
@@ -2178,14 +2386,9 @@ export function Chat({
   }, [isActive, loadKnowledgeMentionOptions]);
 
   const ensureChatModelConfig = useCallback(async () => {
-    if (selectedChatModel) {
-      return {
-        apiKey: selectedChatModel.apiKey,
-        baseURL: selectedChatModel.baseURL,
-        modelName: selectedChatModel.modelName,
-        sourceId: selectedChatModel.sourceId,
-        presetId: selectedChatModel.presetId,
-      };
+    const selected = resolveSelectedChatModelFromRefs();
+    if (selected) {
+      return chatModelConfigFromOption(selected);
     }
     const settings = await uiMeasure('chat', 'ensure_chat_model_config', async () => (
       window.ipcRenderer.getSettings() as Promise<ChatSettingsSnapshot | undefined>
@@ -2194,26 +2397,18 @@ export function Chat({
     if (options.length === 0) {
       return undefined;
     }
-    setChatModelOptions(options);
-    const resolvedKey = options.find((item) => item.isDefault)?.key || options[0]?.key || '';
+    applyChatModelOptions(options);
+    const preferredKey = selectedChatModelKeyRef.current;
+    const resolvedKey = preferredKey && options.some((item) => item.key === preferredKey)
+      ? preferredKey
+      : options.find((item) => item.isDefault)?.key || options[0]?.key || '';
     if (resolvedKey) {
-      setSelectedChatModelKey((current) => {
-        if (current && options.some((item) => item.key === current)) return current;
-        return resolvedKey;
-      });
+      selectedChatModelKeyRef.current = resolvedKey;
+      setSelectedChatModelKeyState((current) => current === resolvedKey ? current : resolvedKey);
     }
     const resolved = options.find((item) => item.key === resolvedKey) || options[0];
-    if (!resolved) {
-      return undefined;
-    }
-    return {
-      apiKey: resolved.apiKey,
-      baseURL: resolved.baseURL,
-      modelName: resolved.modelName,
-      sourceId: resolved.sourceId,
-      presetId: resolved.presetId,
-    };
-  }, [selectedChatModel]);
+    return chatModelConfigFromOption(resolved);
+  }, [applyChatModelOptions, resolveSelectedChatModelFromRefs]);
 
   // 判断是否是空会话（新建或无消息）
   const isEmptySession = visibleMessages.length === 0;
@@ -2357,8 +2552,10 @@ export function Chat({
           fileCount: item.fileCount,
           hasTranscript: item.hasTranscript,
         }));
+      const draftSkillMentions = normalizePendingSkillMentions(pendingMessage);
       setInput(String(pendingMessage.content || ''));
       setSelectedKnowledgeMentions(draftKnowledgeReferences);
+      setSelectedSkillMentions(draftSkillMentions);
       if (pendingMessageAttachments.length > 0) {
         setPendingAttachments(pendingMessageAttachments);
       }
@@ -4231,15 +4428,8 @@ export function Chat({
   ]);
 
   const getChatModelConfig = useCallback(() => {
-    if (!selectedChatModel) return undefined;
-    return {
-      apiKey: selectedChatModel.apiKey,
-      baseURL: selectedChatModel.baseURL,
-      modelName: selectedChatModel.modelName,
-      sourceId: selectedChatModel.sourceId,
-      presetId: selectedChatModel.presetId,
-    };
-  }, [selectedChatModel]);
+    return chatModelConfigFromOption(resolveSelectedChatModelFromRefs());
+  }, [resolveSelectedChatModelFromRefs]);
 
   const transcribeAudioClip = useCallback(async (clip: AudioRecordingClip) => {
     setIsTranscribingAudio(true);
@@ -4446,6 +4636,21 @@ export function Chat({
     );
     const committedAttachments = commitAttachmentsForSend(resolvedAttachments);
     const resolvedAttachment = createAttachmentPayload(committedAttachments);
+    if (analyticsContext?.surface === 'redclaw') {
+      void window.ipcRenderer.analytics.track('redclaw_task_submitted', {
+        surface: 'redclaw',
+        origin: 'chat',
+        properties: {
+          runtimeMode: analyticsContext.runtimeMode || 'redclaw',
+          inputKind: committedAttachments.length > 0 ? (runtimeMessage.trim() ? 'mixed' : 'attachment') : 'text',
+          hasAttachment: committedAttachments.length > 0,
+          attachmentCount: committedAttachments.length,
+          knowledgeReferenceCount: safeKnowledgeMentions.length,
+          assetReferenceCount: assetReferencesForSend.length,
+          hasMemberMention: Boolean(memberMention),
+        },
+      });
+    }
 
     dispatchChatSend({
       sessionId: targetSessionId || undefined,
@@ -4540,11 +4745,12 @@ export function Chat({
 
   const currentAttachmentActionKey = attachmentActionKey(pendingAttachments);
   const attachmentActionKindValue = attachmentShortcutKind(pendingAttachment);
+  const isNewAttachmentActionSession = isEmptySession && messages.length === 0;
   const showAttachmentActionOverlay = Boolean(
     showComposerShortcuts &&
     showComposer &&
     allowFileUpload &&
-    isEmptySession &&
+    isNewAttachmentActionSession &&
     pendingAttachment &&
     attachmentActionKindValue &&
     currentAttachmentActionKey &&
@@ -4555,7 +4761,8 @@ export function Chat({
   const dismissAttachmentActionOverlay = useCallback(() => {
     if (!currentAttachmentActionKey) return;
     setDismissedAttachmentActionKey(currentAttachmentActionKey);
-  }, [currentAttachmentActionKey]);
+    activateComposerInput('composer');
+  }, [activateComposerInput, currentAttachmentActionKey]);
   const applyAttachmentAction = useCallback((shortcut: ChatShortcut) => {
     if (currentAttachmentActionKey) {
       setDismissedAttachmentActionKey(currentAttachmentActionKey);
@@ -4741,7 +4948,7 @@ export function Chat({
         onRemoveAttachment={removePendingAttachment}
         modelOptions={chatModelOptions}
         selectedModelKey={selectedChatModelKey}
-        onSelectedModelKeyChange={setSelectedChatModelKey}
+        onSelectedModelKeyChange={handleSelectedChatModelKeyChange}
         isBusy={isProcessing}
         allowInputWhileBusy={keepComposerInputActive}
         audioState={isTranscribingAudio ? 'transcribing' : audioRecording.isRecording ? 'recording' : 'idle'}

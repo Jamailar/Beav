@@ -1583,6 +1583,94 @@ fn generic_state_output_schema() -> Value {
     }))
 }
 
+fn capture_collect_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "url",
+                string_schema("HTTP/HTTPS content or profile URL to capture."),
+            ),
+            (
+                "platform",
+                json!({
+                    "type": "string",
+                    "enum": ["auto", "xhs", "xiaohongshu", "douyin", "youtube"],
+                    "description": "Source platform. Use auto only when the URL host is enough to infer the platform."
+                }),
+            ),
+            (
+                "target",
+                json!({
+                    "type": "string",
+                    "enum": ["auto", "content", "profile", "comments"],
+                    "description": "Capture target: one content item, a profile/home page, or comments for one content item."
+                }),
+            ),
+            (
+                "includeComments",
+                bool_schema("Whether to include comments for supported content captures."),
+            ),
+            (
+                "limit",
+                integer_schema("Maximum profile items or comment/page items to request.", 1, 100),
+            ),
+            (
+                "downloadMedia",
+                bool_schema("Whether server capture should download media assets when supported. Defaults to true."),
+            ),
+            (
+                "ingestToKnowledge",
+                bool_schema("Whether to write completed capture entries into the local knowledge base. Defaults to true."),
+            ),
+            (
+                "waitForCompletion",
+                bool_schema("Whether to poll the capture job until completed or failed. Defaults to true."),
+            ),
+            (
+                "maxWaitMs",
+                integer_schema("Maximum time to wait for a server capture job.", 1_000, 300_000),
+            ),
+            (
+                "pollIntervalMs",
+                integer_schema("Polling interval for server capture jobs.", 500, 10_000),
+            ),
+            (
+                "externalId",
+                string_schema("Optional platform id when already known."),
+            ),
+            (
+                "title",
+                string_schema("Optional title for YouTube legacy local ingest."),
+            ),
+            (
+                "description",
+                string_schema("Optional description for YouTube legacy local ingest."),
+            ),
+            (
+                "thumbnailUrl",
+                string_schema("Optional thumbnail URL for YouTube legacy local ingest."),
+            ),
+        ],
+        &["url"],
+        Some("Capture one platform URL through the existing server capture contract or YouTube local ingest, then optionally save results to Knowledge."),
+    )
+}
+
+fn capture_status_input_schema() -> Value {
+    object_schema(
+        &[
+            ("jobId", string_schema("Capture job id returned by capture.collect.")),
+            ("id", string_schema("Alias for jobId.")),
+            (
+                "limit",
+                integer_schema("When no job id is provided, maximum recent jobs to list.", 1, 50),
+            ),
+        ],
+        &[],
+        Some("Read one capture job status by id, or list recent capture jobs when no id is provided."),
+    )
+}
+
 fn manuscripts_list_input_schema() -> Value {
     no_payload_schema()
 }
@@ -3522,7 +3610,17 @@ fn skills_manage_input_schema() -> Value {
                 json!({
                     "type": "string",
                     "description": "Skill management operation.",
-                    "enum": ["installFromRepo", "uninstall"]
+                    "enum": [
+                        "installFromRepo",
+                        "uninstall",
+                        "marketplaceList",
+                        "readMarketPackage",
+                        "installFromMarket",
+                        "updateFromMarket",
+                        "listMarketSources",
+                        "addMarketSource",
+                        "removeMarketSource"
+                    ]
                 }),
             ),
             (
@@ -3548,6 +3646,22 @@ fn skills_manage_input_schema() -> Value {
                 }),
             ),
             ("name", string_schema("Skill name when operation=uninstall.")),
+            (
+                "marketId",
+                string_schema("Skill market source id when operating on one configured market."),
+            ),
+            (
+                "packageId",
+                string_schema("Marketplace package id when reading, installing, or updating a skill-pack."),
+            ),
+            (
+                "kind",
+                string_schema("Marketplace source kind when operation=addMarketSource: github, local, url, or legacy-thrive."),
+            ),
+            (
+                "registryUrl",
+                string_schema("GitHub-hosted registry URL when operation=addMarketSource with kind=url or legacy-thrive."),
+            ),
             (
                 "scope",
                 json!({
@@ -4390,6 +4504,7 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
             "voice",
             "generation",
             "media",
+            "capture",
             "session",
             "web",
             "task",
@@ -4427,6 +4542,7 @@ fn redbox_operation_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'
             "update",
             "delete",
             "run",
+            "collect",
             "generate",
             "speech",
             "transcribe",
@@ -4467,6 +4583,7 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "voice" => Some("voice"),
         "generation" => Some("generation"),
         "media" => Some("media"),
+        "capture" => Some("capture"),
         "spaces" => Some("space"),
         "workspace" => Some("workspace"),
         "session" => Some("session"),
@@ -4503,6 +4620,7 @@ fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
         "cancel" => Some("cancel"),
         "resume" => Some("resume"),
         "confirm" | "approve" => Some("confirm"),
+        "collect" => Some("collect"),
         "invoke" | "call" | "execute" => Some("run"),
         "generate" => Some("generate"),
         "speech" => Some("speech"),
@@ -4518,6 +4636,13 @@ fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
 
 fn redbox_tool_schema(descriptors: Option<&[ActionDescriptor]>) -> Value {
     let descriptors = descriptors.unwrap_or(&[]);
+    let mut description = REDBOX_DESCRIPTION.to_string();
+    if descriptors
+        .iter()
+        .any(|descriptor| descriptor.action == "capture.collect")
+    {
+        description.push_str(" For saving, importing, downloading, or collecting platform URLs into Knowledge, use resource=\"capture\", operation=\"collect\", input={\"url\":\"...\",\"platform\":\"auto\",\"target\":\"content\"}; use browser.control only when the user asks to inspect or interact with the web page.");
+    }
     let resource_schema = if descriptors.is_empty() {
         redbox_resource_schema()
     } else {
@@ -4532,7 +4657,7 @@ fn redbox_tool_schema(descriptors: Option<&[ActionDescriptor]>) -> Value {
         "type": "function",
         "function": {
             "name": "Operate",
-            "description": REDBOX_DESCRIPTION,
+            "description": description,
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -4553,6 +4678,13 @@ fn redbox_input_schema() -> Value {
         "type": "object",
         "description": "Structured operation input. For image generation, put prompt/count/aspectRatio/resolution/quality/referenceImages here; aspectRatio, resolution, and quality are required and must be non-empty.",
         "properties": {
+            "url": { "type": "string", "description": "HTTP(S) URL for the operation. For platform content/profile/comment capture and save-to-Knowledge requests, pass this to Operate(resource=\"capture\", operation=\"collect\", input={\"url\":\"...\"}) instead of opening the page in browser.control." },
+            "platform": { "type": "string", "enum": ["auto", "xhs", "xiaohongshu", "douyin", "youtube"], "description": "Source platform for capture.collect. Use auto when the URL host can identify Xiaohongshu/xhslink, Douyin, or YouTube." },
+            "target": { "type": "string", "enum": ["auto", "content", "profile", "comments"], "description": "Capture target for capture.collect: one content item, a creator profile/homepage, or comments for one content item." },
+            "includeComments": { "type": "boolean", "description": "For capture.collect, request supported comments together with the content capture." },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum items for paged operations such as capture profile/comment requests." },
+            "downloadMedia": { "type": "boolean", "description": "For capture.collect, download supported media assets. Defaults to true." },
+            "ingestToKnowledge": { "type": "boolean", "description": "For capture.collect, write completed capture entries into the local Knowledge base. Defaults to true." },
             "prompt": { "type": "string", "description": "Generation or operation prompt." },
             "input": { "type": "string", "description": "Literal text input for speech/TTS. If the user asks for any video or 口播视频, start from video-director instead of voice.speech. For CosyVoice, activate cosyvoice-ssml only inside a video-director managed digital-human / VideoRetalk / asset-library talking-head TTS substep after the script, role voiceId, and character video reference are resolved. In that narrow flow, segments may use complete <speak rate pitch volume> SSML input and segment-specific prompt. Outside that flow, keep CosyVoice payloads conservative and do not activate cosyvoice-ssml. For MiniMax expressive narration, invoke tts-director and prefer segments. MiniMax pause markers like <#0.6#> and tone tags like (laughs) are allowed only for MiniMax." },
             "segments": {
@@ -4590,7 +4722,7 @@ fn redbox_input_schema() -> Value {
             "prefer_sync_tts": { "type": "boolean", "description": "Prefer synchronous TTS when supported." },
             "prefer_async_tts": { "type": "boolean", "description": "Prefer asynchronous TTS for long narration when supported." },
             "async_tts": { "type": "boolean", "description": "Force async TTS when supported." },
-            "waitForCompletion": { "type": "boolean", "description": "For generated media needed by the next step, set true so the tool returns the completed asset path." },
+            "waitForCompletion": { "type": "boolean", "description": "For generated media or capture results needed by the next step, set true so the tool returns the completed asset or saved Knowledge result when supported." },
             "count": { "type": "integer", "minimum": 1, "maximum": 6, "description": "Number of images or generated items." },
             "aspectRatio": image_aspect_ratio_schema("Required image output ratio for image generation. Pick one explicitly, such as 1:1, 3:4, 4:3, 9:16, or 16:9."),
             "ratio": image_aspect_ratio_schema("Alias for aspectRatio; prefer aspectRatio in new calls."),
@@ -4667,6 +4799,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "capture.collect",
+        namespace: "capture",
+        description: "Capture and save a Xiaohongshu/xhslink, Douyin, or YouTube content URL, profile/homepage URL, or comments target through the RedBox capture pipeline. Use this, not browser.control or web.fetch, when the user asks to save/import/download a platform URL into Knowledge; defaults to downloading supported media and ingesting completed results into Knowledge.",
+        input_schema: capture_collect_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "capture.status",
+        namespace: "capture",
+        description: "Read one capture job status by jobId, or list recent capture jobs when jobId is omitted.",
+        input_schema: capture_status_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
@@ -6235,7 +6389,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "skills.manage",
         namespace: "skills",
-        description: "Run one explicit skill management operation such as installing skills from a repository or uninstalling a managed skill. Use this consolidated action instead of skills.installFromRepo or skills.uninstall compatibility actions.",
+        description: "Run one explicit skill management operation: install/uninstall skills, list skill marketplace packages, manage skill marketplace sources, or install/update a package from a configured skill market. Use this consolidated action instead of compatibility actions.",
         input_schema: skills_manage_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -7640,6 +7794,47 @@ mod tests {
             redbox.pointer("/function/parameters/properties/input/properties/aspectRatio/enum/1"),
             Some(&json!("3:4"))
         );
+    }
+
+    #[test]
+    fn operate_direct_schema_guides_platform_capture_to_knowledge() {
+        let actions =
+            action_descriptors_for_tool("workflow", Some("redclaw"), ActionVisibility::Model);
+        let schema = schema_for_tool_from_action_descriptors("Operate", &actions)
+            .expect("Operate schema should be generated");
+
+        let description = schema
+            .pointer("/function/description")
+            .and_then(Value::as_str)
+            .expect("Operate description");
+        assert!(description.contains("resource=\"capture\""));
+        assert!(description.contains("Knowledge"));
+        assert!(description.contains("browser.control only"));
+
+        let resources = schema
+            .pointer("/function/parameters/properties/resource/enum")
+            .and_then(Value::as_array)
+            .expect("resource enum should exist");
+        assert!(resources.contains(&json!("capture")));
+        let operations = schema
+            .pointer("/function/parameters/properties/operation/enum")
+            .and_then(Value::as_array)
+            .expect("operation enum should exist");
+        assert!(operations.contains(&json!("collect")));
+
+        let input = &schema["function"]["parameters"]["properties"]["input"]["properties"];
+        assert!(input["url"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("save-to-Knowledge"));
+        assert!(input["platform"]["enum"]
+            .as_array()
+            .expect("platform enum")
+            .contains(&json!("xiaohongshu")));
+        assert!(input["target"]["enum"]
+            .as_array()
+            .expect("target enum")
+            .contains(&json!("comments")));
     }
 
     #[test]

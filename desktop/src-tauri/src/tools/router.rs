@@ -355,6 +355,25 @@ impl ToolRouter {
         matches!(name.trim(), "workflow")
             && arguments.get("action").and_then(Value::as_str).is_none()
             && arguments.get("command").and_then(Value::as_str).is_some()
+            && !self.has_structured_operate_payload(arguments)
+    }
+
+    fn has_structured_operate_payload(&self, arguments: &Value) -> bool {
+        arguments
+            .get("payload")
+            .and_then(Value::as_object)
+            .is_some_and(|payload| {
+                payload
+                    .get("resource")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty())
+                    && payload
+                        .get("operation")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .is_some_and(|value| !value.is_empty())
+            })
     }
 
     fn validate_operate_call(&self, arguments: &Value) -> Result<(), String> {
@@ -573,6 +592,76 @@ mod tests {
         assert_eq!(
             prepared.arguments.get("action"),
             Some(&json!("image.generate"))
+        );
+    }
+
+    #[test]
+    fn router_prepares_capture_operate_run() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "resource": "capture",
+                    "operation": "run",
+                    "input": {
+                        "url": "http://xhslink.com/o/6ea4DsyOJtR",
+                        "platform": "auto",
+                        "target": "content",
+                        "ingestToKnowledge": true
+                    }
+                }),
+            )
+            .expect("capture run should prepare");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("capture.collect"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/url"),
+            Some(&json!("http://xhslink.com/o/6ea4DsyOJtR"))
+        );
+    }
+
+    #[test]
+    fn router_recovers_structured_capture_operate_nested_under_workflow_payload() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "workflow",
+                &json!({
+                    "command": "help",
+                    "payload": {
+                        "resource": "capture",
+                        "operation": "collect",
+                        "input": {
+                            "url": "http://xhslink.com/o/6ea4DsyOJtR",
+                            "platform": "auto",
+                            "ingestToKnowledge": true
+                        }
+                    }
+                }),
+            )
+            .expect("nested structured capture payload should prepare");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("capture.collect"))
+        );
+        assert_eq!(
+            prepared.arguments.pointer("/payload/url"),
+            Some(&json!("http://xhslink.com/o/6ea4DsyOJtR"))
         );
     }
 

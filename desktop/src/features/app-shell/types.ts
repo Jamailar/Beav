@@ -16,6 +16,14 @@ export type RedClawNavigationAction = {
   nonce: number;
 };
 
+export type SkillsNavigationTarget = {
+  packageId?: string;
+  id?: string;
+  marketId?: string;
+  query?: string;
+  nonce: number;
+};
+
 export type AppIntent =
   | {
       type: 'settings.open';
@@ -26,6 +34,13 @@ export type AppIntent =
       type: 'redclaw.open';
       action?: RedClawNavigationAction['action'];
       sessionId?: string;
+    }
+  | {
+      type: 'skills.open';
+      packageId?: string;
+      id?: string;
+      marketId?: string;
+      query?: string;
     }
   | {
       type: 'approval.open';
@@ -56,12 +71,29 @@ export type LegacyNavigateEventDetail = {
 
 export type AppNavigateEventDetail = AppIntent | LegacyNavigateEventDetail;
 
+export interface PendingChatSkillMention {
+  name: string;
+  description?: string;
+  location?: string;
+  sourceScope?: string;
+  isBuiltin?: boolean;
+  aliases?: string[];
+  packageId?: string;
+  avatarUrl?: string;
+  iconUrl?: string;
+  logoUrl?: string;
+  imageUrl?: string;
+  thumbnailUrl?: string;
+  authorAvatarUrl?: string;
+}
+
 export interface PendingChatMessage {
   content: string;
   displayContent?: string;
   sessionRouting?: 'current' | 'new';
   deliveryMode?: 'send' | 'draft';
   taskHints?: AuthoringTaskHints;
+  skillMentions?: PendingChatSkillMention[];
   knowledgeReferences?: Array<{
     id: string;
     title: string;

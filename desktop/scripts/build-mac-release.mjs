@@ -103,14 +103,22 @@ function resolveNotaryAuth({ args, inferredTeamId }) {
   );
 }
 
-function buildSigningOnlyEnv(signingIdentity) {
+async function buildSigningOnlyEnv(signingIdentity) {
   const env = {
     ...process.env,
     APPLE_SIGNING_IDENTITY: signingIdentity,
   };
 
-  if (!env.TAURI_SIGNING_PRIVATE_KEY && !env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
-    env.TAURI_SIGNING_PRIVATE_KEY_PATH = path.join(process.env.HOME || '', '.tauri', 'redbox-updater.key');
+  if (!env.TAURI_SIGNING_PRIVATE_KEY) {
+    const signingKeyPath = String(
+      env.TAURI_SIGNING_PRIVATE_KEY_PATH ||
+        path.join(process.env.HOME || '', '.tauri', 'redbox-updater.key'),
+    ).trim();
+    const signingKey = await fs.readFile(signingKeyPath, 'utf8').catch(() => '');
+    if (signingKey.trim()) {
+      env.TAURI_SIGNING_PRIVATE_KEY = signingKey;
+    }
+    env.TAURI_SIGNING_PRIVATE_KEY_PATH = signingKeyPath;
   }
 
   delete env.APPLE_API_ISSUER;
@@ -441,7 +449,7 @@ async function main() {
     logStep(`Using notarization auth: ${notaryAuth.summary}`);
   }
 
-  const buildEnv = buildSigningOnlyEnv(signingIdentity);
+  const buildEnv = await buildSigningOnlyEnv(signingIdentity);
   logStep(
     `Using browser plugin ${pluginInfo.version} (${pluginInfo.fileCount} files, ${pluginInfo.digest.slice(0, 12)})`,
   );

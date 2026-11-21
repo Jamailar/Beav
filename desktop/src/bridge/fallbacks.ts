@@ -251,7 +251,7 @@ export function buildFallbackResponse(channel: string, error: unknown, payload?:
   ) {
     return { success: false, error: `${APP_BRAND.displayName} audio action failed for "${channel}": ${message}` };
   }
-  if (channel === 'file:show-in-folder' || channel === 'file:copy-image' || channel === 'file:save-as' || channel === 'file:save-zip' || channel === 'file:preview-resolve') {
+  if (channel === 'file:show-in-folder' || channel === 'file:copy-image' || channel === 'file:download-to-downloads' || channel === 'file:save-as' || channel === 'file:save-zip' || channel === 'file:preview-resolve') {
     return { success: false, error: `${APP_BRAND.displayName} file action failed for "${channel}": ${message}` };
   }
   if (channel === 'plugins:list') {

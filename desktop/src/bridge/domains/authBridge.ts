@@ -1,5 +1,20 @@
 import type { BridgeCore, Listener } from '../types';
 
+type LlmReadinessSnapshot = {
+  ready?: boolean;
+  mode?: 'official' | 'custom' | 'local' | 'none' | string;
+  reason?: string;
+  sourceId?: string;
+  sourceName?: string;
+  baseURL?: string;
+  model?: string;
+  protocol?: 'openai' | 'anthropic' | 'gemini' | string;
+  officialLoggedIn?: boolean;
+  canUseOfficial?: boolean;
+  canUseCustom?: boolean;
+  updatedAt?: string;
+};
+
 export function createAuthBridge(core: BridgeCore) {
   return {
     officialAuth: {
@@ -28,6 +43,8 @@ export function createAuthBridge(core: BridgeCore) {
         core.invokeChannel('redbox-auth:login-sms', payload),
       registerSms: (payload: { phone: string; code: string; inviteCode?: string }) =>
         core.invokeChannel('redbox-auth:register-sms', payload),
+      redeemInviteCode: (payload: { inviteCode: string }) =>
+        core.invokeChannel('redbox-auth:redeem-invite-code', payload),
       logout: () => core.invokeChannel('redbox-auth:logout'),
       createPagePayOrder: (payload: Record<string, unknown>) =>
         core.invokeChannel('redbox-auth:create-page-pay-order', payload),
@@ -39,7 +56,7 @@ export function createAuthBridge(core: BridgeCore) {
       refreshPricing: () => core.invokeChannel('redbox-auth:pricing-refresh'),
     },
     llmReadiness: {
-      getState: () => core.invokeChannelGuarded(
+      getState: () => core.invokeChannelGuarded<LlmReadinessSnapshot>(
         'llm-readiness:get-state',
         undefined,
         {

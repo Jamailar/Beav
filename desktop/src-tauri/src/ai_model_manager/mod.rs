@@ -11,11 +11,8 @@ mod types;
 use serde_json::{json, Value};
 use std::path::Path;
 
-use crate::runtime::{ProviderWireApi, ResolvedChatConfig};
-use crate::{
-    infer_protocol, official_ai_api_key_from_settings, official_base_url_from_settings,
-    payload_string,
-};
+use crate::payload_string;
+use crate::runtime::ResolvedChatConfig;
 
 pub(crate) use routes::{scope_for_runtime_mode, scope_for_tool_action};
 pub(crate) use types::{
@@ -24,9 +21,8 @@ pub(crate) use types::{
 };
 
 use credentials::{
-    is_local_base_url, normalize_base_url, official_plaintext_key, source_api_key, source_base_url,
-    source_id, source_is_official, source_model, source_name, source_preset_id, source_protocol,
-    source_wire_api, source_without_secrets,
+    is_local_base_url, source_api_key, source_base_url, source_id, source_is_official,
+    source_model, source_name, source_preset_id, source_protocol, source_wire_api,
 };
 
 pub(crate) struct AiModelManager;
@@ -62,210 +58,6 @@ fn route_model(route: &Value) -> String {
         .map(str::trim)
         .unwrap_or_default()
         .to_string()
-}
-
-fn override_string(value: Option<&Value>, keys: &[&str]) -> Option<String> {
-    let value = value?;
-    keys.iter().find_map(|key| {
-        value
-            .get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(ToString::to_string)
-    })
-}
-
-fn scoped_endpoint_key(scope: AiModelScope) -> Option<&'static str> {
-    match scope {
-        AiModelScope::Transcription => Some("transcription_endpoint"),
-        AiModelScope::Embedding => Some("embedding_endpoint"),
-        AiModelScope::Image => Some("image_endpoint"),
-        AiModelScope::Video => Some("video_endpoint"),
-        AiModelScope::VisualIndex => Some("visual_index_endpoint"),
-        AiModelScope::VideoAnalysis => Some("video_analysis_endpoint"),
-        AiModelScope::VoiceTts | AiModelScope::VoiceClone => Some("voice_endpoint"),
-        _ => None,
-    }
-}
-
-fn scoped_api_key(scope: AiModelScope, settings: &Value) -> Option<String> {
-    match scope {
-        AiModelScope::Transcription => payload_string(settings, "transcription_key"),
-        AiModelScope::Embedding => payload_string(settings, "embedding_key"),
-        AiModelScope::Image => payload_string(settings, "image_api_key"),
-        AiModelScope::Video => payload_string(settings, "video_api_key"),
-        AiModelScope::VisualIndex => payload_string(settings, "visual_index_api_key"),
-        AiModelScope::VideoAnalysis => payload_string(settings, "video_analysis_api_key"),
-        AiModelScope::VoiceTts | AiModelScope::VoiceClone => {
-            payload_string(settings, "voice_api_key")
-                .or_else(|| payload_string(settings, "tts_api_key"))
-        }
-        _ => None,
-    }
-}
-
-fn scoped_endpoint(scope: AiModelScope, settings: &Value) -> Option<String> {
-    scoped_endpoint_key(scope)
-        .and_then(|key| payload_string(settings, key))
-        .or_else(|| {
-            if matches!(scope, AiModelScope::VoiceTts | AiModelScope::VoiceClone) {
-                payload_string(settings, "tts_endpoint")
-            } else {
-                None
-            }
-        })
-        .or_else(|| payload_string(settings, "api_endpoint"))
-}
-
-fn scoped_model(scope: AiModelScope, settings: &Value) -> Option<String> {
-    payload_string(settings, scope.legacy_model_key()).or_else(|| {
-        if scope == AiModelScope::VoiceTts {
-            payload_string(settings, "tts_model")
-        } else {
-            None
-        }
-    })
-}
-
-fn scope_allows_source_model_fallback(scope: AiModelScope) -> bool {
-    matches!(
-        scope,
-        AiModelScope::Chat
-            | AiModelScope::Wander
-            | AiModelScope::Team
-            | AiModelScope::Knowledge
-            | AiModelScope::Redclaw
-    )
-}
-
-fn model_id_from_value(value: &Value) -> String {
-    if let Some(id) = value.as_str() {
-        return id.trim().to_string();
-    }
-    value
-        .get("id")
-        .or_else(|| value.get("model"))
-        .or_else(|| value.get("modelName"))
-        .or_else(|| value.get("model_name"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_string()
-}
-
-fn source_models_with_capability(source: &Value, capability: &str) -> Vec<String> {
-    let mut models = Vec::<String>::new();
-    let mut seen = std::collections::HashSet::<String>::new();
-    let mut add_model = |model: &Value| {
-        let id = model_id_from_value(model);
-        if id.is_empty() || !seen.insert(id.clone()) {
-            return;
-        }
-        let metadata = if model.is_object() {
-            model.clone()
-        } else {
-            json!({ "id": id })
-        };
-        if crate::official_support::official_model_capabilities(&metadata)
-            .iter()
-            .any(|item| item == capability)
-        {
-            models.push(id);
-        }
-    };
-
-    if let Some(items) = source.get("modelsMeta").and_then(Value::as_array) {
-        for item in items {
-            add_model(item);
-        }
-    }
-    if let Some(items) = source.get("models").and_then(Value::as_array) {
-        for item in items {
-            add_model(item);
-        }
-    }
-    if let Some(model) = source.get("model") {
-        add_model(model);
-    }
-    models
-}
-
-fn sanitize_model_for_source_scope(
-    scope: AiModelScope,
-    source: Option<&Value>,
-    model_name: &str,
-) -> String {
-    let normalized_model = model_name.trim();
-    if scope != AiModelScope::Image {
-        return normalized_model.to_string();
-    }
-    let Some(source) = source else {
-        return normalized_model.to_string();
-    };
-    if !source_is_official(source) {
-        return normalized_model.to_string();
-    }
-
-    let image_models = source_models_with_capability(source, "image");
-    if image_models.is_empty() {
-        return normalized_model.to_string();
-    }
-    if image_models.iter().any(|item| item == normalized_model) {
-        return normalized_model.to_string();
-    }
-    image_models[0].clone()
-}
-
-fn route_source<'a>(
-    sources: &'a [Value],
-    route: &Value,
-    default_source_id: &str,
-) -> Option<&'a Value> {
-    let mode = route
-        .get("mode")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
-    if mode == "official" {
-        return sources.iter().find(|source| source_is_official(source));
-    }
-    let explicit_source_id = route_source_id(route);
-    if !explicit_source_id.is_empty() {
-        if let Some(source) = sources
-            .iter()
-            .find(|source| source_id(source) == explicit_source_id)
-        {
-            return Some(source);
-        }
-    }
-    if mode == "custom" {
-        if let Some(source) = sources.iter().find(|source| !source_is_official(source)) {
-            return Some(source);
-        }
-    }
-    if !default_source_id.trim().is_empty() {
-        if let Some(source) = sources
-            .iter()
-            .find(|source| source_id(source) == default_source_id.trim())
-        {
-            return Some(source);
-        }
-    }
-    sources.first()
-}
-
-fn normalize_reasoning_effort(value: Option<&str>) -> Option<String> {
-    let normalized = value?.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "minimal" | "low" | "medium" | "high" => Some(normalized),
-        _ => None,
-    }
-}
-
-fn urls_match(left: &str, right: &str) -> bool {
-    let normalize = |value: &str| value.trim().trim_end_matches('/').to_ascii_lowercase();
-    !left.trim().is_empty() && normalize(left) == normalize(right)
 }
 
 impl AiModelManager {
@@ -317,149 +109,30 @@ impl AiModelManager {
         scope: AiModelScope,
         request_override: Option<&Value>,
     ) -> Option<AiResolvedRoute> {
-        let sources = parse_json_array_setting(settings, "ai_sources_json");
-        let routes = parse_json_object_setting(settings, "ai_model_routes_json");
-        let route = routes
-            .get(scope.as_str())
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        if route
-            .get("mode")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .is_some_and(|mode| mode == "disabled")
-        {
-            return None;
-        }
-        let default_source_id =
-            payload_string(settings, "default_ai_source_id").unwrap_or_default();
-        let override_source_id = override_string(request_override, &["sourceId", "source_id"]);
-        let source = override_source_id
-            .as_deref()
-            .and_then(|source_id_value| {
-                sources
-                    .iter()
-                    .find(|source| source_id(source) == source_id_value)
-            })
-            .or_else(|| route_source(&sources, &route, &default_source_id))
-            .cloned();
-        let source_id_value = override_source_id
-            .or_else(|| source.as_ref().map(source_id))
-            .unwrap_or_default();
-        let source_name_value = source.as_ref().map(source_name).unwrap_or_default();
-        let preset_id = override_string(request_override, &["presetId", "preset_id"])
-            .or_else(|| source.as_ref().map(source_preset_id))
-            .unwrap_or_default();
-        let source_base_url_value = source.as_ref().map(source_base_url).unwrap_or_default();
-        let base_url = override_string(request_override, &["baseURL", "baseUrl", "base_url"])
-            .or_else(|| (!source_base_url_value.is_empty()).then_some(source_base_url_value))
-            .or_else(|| scoped_endpoint(scope, settings))
-            .unwrap_or_default();
-        let base_url = normalize_base_url(&base_url);
-        let source_key = source.as_ref().map(source_api_key).unwrap_or_default();
-        let is_official = source.as_ref().map(source_is_official).unwrap_or_else(|| {
-            route_source_id(&route).eq_ignore_ascii_case(credentials::OFFICIAL_SOURCE_ID)
-                || preset_id.eq_ignore_ascii_case(credentials::OFFICIAL_PRESET_ID)
-                || urls_match(&base_url, &official_base_url_from_settings(settings))
-        });
-        let configured_api_key = override_string(request_override, &["apiKey", "api_key"])
-            .or_else(|| (!source_key.is_empty()).then_some(source_key))
-            .or_else(|| scoped_api_key(scope, settings))
-            .or_else(|| payload_string(settings, "api_key"));
-        let api_key = if is_official {
-            official_ai_api_key_from_settings(settings)
-                .or_else(|| official_plaintext_key(settings))
-                .or(configured_api_key)
-        } else {
-            configured_api_key
-        }
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-        let model_name = override_string(request_override, &["modelName", "model_name", "model"])
-            .or_else(|| {
-                let route_model = route_model(&route);
-                (!route_model.is_empty()).then_some(route_model)
-            })
-            .or_else(|| scoped_model(scope, settings))
-            .or_else(|| {
-                scope_allows_source_model_fallback(scope)
-                    .then(|| source.as_ref().map(source_model))
-                    .flatten()
-            })
-            .unwrap_or_default();
-        let model_name = sanitize_model_for_source_scope(scope, source.as_ref(), &model_name);
-        let source_protocol_value = source.as_ref().map(source_protocol).unwrap_or_default();
-        let protocol = override_string(request_override, &["protocol"])
-            .or_else(|| (!source_protocol_value.is_empty()).then_some(source_protocol_value))
-            .unwrap_or_else(|| infer_protocol(&base_url, Some(&preset_id), None));
-        let source_wire_api_value = source.as_ref().map(source_wire_api).unwrap_or_default();
-        let wire_api = override_string(request_override, &["wireApi", "wire_api"])
-            .or_else(|| (!source_wire_api_value.is_empty()).then_some(source_wire_api_value))
-            .or_else(|| {
-                route
-                    .get("wireApi")
-                    .or_else(|| route.get("wire_api"))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToString::to_string)
-            })
-            .or_else(|| payload_string(settings, "wire_api"))
-            .or_else(|| payload_string(settings, "wireApi"))
-            .as_deref()
-            .and_then(|value| ProviderWireApi::from_config(Some(value)))
-            .unwrap_or_else(|| ProviderWireApi::infer_for_endpoint(&protocol, &base_url));
-        let reasoning_effort = normalize_reasoning_effort(
-            override_string(request_override, &["reasoningEffort", "reasoning_effort"])
-                .or_else(|| payload_string(settings, "reasoning_effort"))
-                .or_else(|| payload_string(settings, "reasoningEffort"))
-                .as_deref(),
-        );
-        let mode = route
-            .get("mode")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-            .unwrap_or_else(|| {
-                if is_official {
-                    "official".to_string()
-                } else if is_local_base_url(&base_url) {
-                    "local".to_string()
-                } else {
-                    "custom".to_string()
-                }
-            });
-
+        let resolved = crate::provider_runtime::resolve_provider_request(
+            settings,
+            crate::provider_runtime::CapabilityScope::from_route_scope(scope.as_str()),
+            request_override,
+        )?;
         Some(AiResolvedRoute {
-            scope: scope.as_str().to_string(),
-            mode,
-            source_id: source_id_value,
-            source_name: source_name_value,
-            preset_id,
-            base_url,
-            api_key,
-            model_name,
-            protocol,
-            wire_api,
-            reasoning_effort,
-            provider_template: override_string(
-                request_override,
-                &["providerTemplate", "provider_template"],
-            )
-            .or_else(|| payload_string(settings, "image_provider_template")),
-            provider: override_string(request_override, &["provider"])
-                .or_else(|| payload_string(settings, "image_provider")),
-            is_official,
-            is_local: false,
-            source: source
-                .as_ref()
-                .map(source_without_secrets)
-                .unwrap_or(Value::Null),
-        })
-        .map(|mut route| {
-            route.is_local = is_local_base_url(&route.base_url);
-            route
+            scope: resolved.scope.as_str().to_string(),
+            mode: resolved.mode.as_str().to_string(),
+            source_id: resolved.source_id,
+            source_name: resolved.source_name,
+            preset_id: resolved.preset_id,
+            provider_key: resolved.provider_key,
+            adapter_key: resolved.adapter_key,
+            base_url: resolved.base_url,
+            api_key: resolved.api_key,
+            model_name: resolved.model,
+            protocol: resolved.protocol,
+            wire_api: resolved.wire_api,
+            reasoning_effort: resolved.reasoning_effort,
+            provider_template: resolved.provider_template,
+            provider: resolved.provider,
+            is_official: resolved.is_official,
+            is_local: resolved.is_local,
+            source: resolved.source,
         })
     }
 
@@ -533,6 +206,8 @@ pub(crate) fn resolved_value_for_debug(route: &AiResolvedRoute) -> Value {
         "sourceId": route.source_id,
         "sourceName": route.source_name,
         "presetId": route.preset_id,
+        "providerKey": route.provider_key,
+        "adapterKey": route.adapter_key,
         "baseURL": route.base_url,
         "modelName": route.model_name,
         "protocol": route.protocol,
@@ -548,6 +223,7 @@ pub(crate) fn resolved_value_for_debug(route: &AiResolvedRoute) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::ProviderWireApi;
 
     fn routed_settings(route: Value) -> Value {
         json!({

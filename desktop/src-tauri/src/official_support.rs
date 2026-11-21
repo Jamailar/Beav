@@ -1,12 +1,14 @@
 use serde_json::{json, Value};
 use std::fs;
-use tauri::{AppHandle, Emitter};
+use tauri::{
+    AppHandle, Emitter, LogicalSize, Manager, Size, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+};
+use url::Url;
 
 use crate::{
-    app_brand_display_name, app_brand_slug, append_debug_trace_global, escape_html,
-    format_http_error_message, http_error_debug_line, http_error_details_from_value,
-    normalize_anthropic_base_url, normalize_base_url, now_ms, payload_field, payload_string,
-    run_curl_json_response,
+    app_brand_display_name, app_brand_slug, append_debug_trace_global, format_http_error_message,
+    http_error_debug_line, http_error_details_from_value, normalize_anthropic_base_url,
+    normalize_base_url, now_ms, payload_field, payload_string, run_curl_json_response,
 };
 
 const REDBOX_OFFICIAL_CN_GATEWAY_ROOT: &str = "https://api.ziz.hk";
@@ -16,6 +18,11 @@ pub(crate) const REDBOX_AUTH_SESSION_UPDATED_EVENT: &str = "redbox-auth:session-
 pub(crate) const REDBOX_AUTH_DATA_UPDATED_EVENT: &str = "redbox-auth:data-updated";
 pub(crate) const AI_MODEL_DEFAULTS_INITIALIZED_AT_KEY: &str = "ai_model_defaults_initialized_at";
 const OFFICIAL_HTTP_TIMEOUT_SECONDS: u64 = 15;
+const PAYMENT_WINDOW_LABEL: &str = "redbox-payment";
+const PAYMENT_WINDOW_WIDTH: f64 = 860.0;
+const PAYMENT_WINDOW_HEIGHT: f64 = 760.0;
+const PAYMENT_WINDOW_MIN_WIDTH: f64 = 760.0;
+const PAYMENT_WINDOW_MIN_HEIGHT: f64 = 620.0;
 
 fn log_non_200_http(scope: &str, method: &str, url: &str, status: u16, body: &Value) {
     let details = http_error_details_from_value(status, body);
@@ -2354,27 +2361,55 @@ pub(crate) fn emit_redbox_auth_data_updated(app: &AppHandle, payload: Value) {
     let _ = app.emit(REDBOX_AUTH_DATA_UPDATED_EVENT, payload);
 }
 
-pub(crate) fn create_official_payment_form(order_no: &str, amount: f64, subject: &str) -> String {
-    let safe_subject = escape_html(subject);
-    let brand_name = app_brand_display_name();
-    format!(
-        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>{brand_name} 支付</title></head><body><div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:24px;\"><h3>{brand_name} 充值订单</h3><p>订单号：{order_no}</p><p>金额：¥{amount:.2}</p><p>{safe_subject}</p><button style=\"padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#111;color:#fff;\">请在正式环境接入支付网关</button></div></body></html>"
-    )
-}
-
-pub(crate) fn open_payment_form(payment_form: &str) -> Result<String, String> {
+pub(crate) fn open_payment_form(app: &AppHandle, payment_form: &str) -> Result<String, String> {
     let normalized = payment_form.trim();
     if normalized.is_empty() {
         return Err("payment_form 不能为空".to_string());
     }
     if normalized.starts_with("http://") || normalized.starts_with("https://") {
-        open::that(normalized).map_err(|error| error.to_string())?;
-        return Ok("external-url".to_string());
+        let url = Url::parse(normalized).map_err(|error| error.to_string())?;
+        open_payment_url_window(app.clone(), url);
+        return Ok("app-window-url".to_string());
     }
     let target_path = std::env::temp_dir().join(format!("redbox-payment-{}.html", now_ms()));
     fs::write(&target_path, normalized).map_err(|error| error.to_string())?;
     open::that(&target_path).map_err(|error| error.to_string())?;
     Ok("external-html".to_string())
+}
+
+fn open_payment_url_window(app: AppHandle, url: Url) {
+    std::thread::spawn(move || {
+        let fallback_url = url.as_str().to_string();
+        let result = if let Some(window) = app.get_webview_window(PAYMENT_WINDOW_LABEL) {
+            configure_payment_window(&window);
+            window.navigate(url).and_then(|_| window.set_focus())
+        } else {
+            WebviewWindowBuilder::new(&app, PAYMENT_WINDOW_LABEL, WebviewUrl::External(url))
+                .title(format!("{} 支付", app_brand_display_name()))
+                .inner_size(PAYMENT_WINDOW_WIDTH, PAYMENT_WINDOW_HEIGHT)
+                .min_inner_size(PAYMENT_WINDOW_MIN_WIDTH, PAYMENT_WINDOW_MIN_HEIGHT)
+                .resizable(true)
+                .maximizable(false)
+                .center()
+                .focused(true)
+                .build()
+                .and_then(|window| window.set_focus())
+        };
+        if result.is_err() {
+            let _ = open::that(fallback_url);
+        }
+    });
+}
+
+fn configure_payment_window(window: &WebviewWindow) {
+    let _ = window.set_min_size(Some(Size::Logical(LogicalSize::new(
+        PAYMENT_WINDOW_MIN_WIDTH,
+        PAYMENT_WINDOW_MIN_HEIGHT,
+    ))));
+    let _ = window.set_size(Size::Logical(LogicalSize::new(
+        PAYMENT_WINDOW_WIDTH,
+        PAYMENT_WINDOW_HEIGHT,
+    )));
 }
 
 pub(crate) fn invoke_chat_by_protocol(

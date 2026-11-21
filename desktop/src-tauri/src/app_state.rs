@@ -26,6 +26,7 @@ pub(crate) struct AppState {
     pub(crate) official_auth_refresh_lock: Mutex<()>,
     pub(crate) official_wechat_status_lock: Mutex<()>,
     pub(crate) official_cache_refresh_inflight: AtomicBool,
+    pub(crate) visual_index_enabled_runtime: Arc<AtomicBool>,
     pub(crate) mcp_manager: mcp::McpManager,
     pub(crate) chat_runtime_states:
         Mutex<std::collections::HashMap<String, ChatRuntimeStateRecord>>,

@@ -1,6 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
+    AlertTriangle,
+    Check,
+    Download,
+    Eye,
     FileText,
+    FileAudio,
+    FileVideo,
     Folder,
     FolderOpen,
     FolderPlus,
@@ -8,6 +14,8 @@ import {
     Image as ImageIcon,
     ImagePlus,
     Loader2,
+    Paperclip,
+    Pencil,
     Plus,
     RefreshCw,
     Search,
@@ -18,6 +26,8 @@ import {
 import clsx from 'clsx';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { EditorLayoutToggleButton } from './EditorLayoutToggleButton';
+import type { EditorBodyViewMode } from './WritingDraftWorkbench';
+import { MediaAssetPreviewOverlay } from '../../pages/media-library/MediaAssetPreviewOverlay';
 import { subscribeDataChanged } from '../../bridge/appEvents';
 import { appAlert, appConfirm } from '../../utils/appDialogs';
 import type { GenerationIntent, ImmersiveMode, PendingChatMessage } from '../../features/app-shell/types';
@@ -27,6 +37,7 @@ import { isMediaJobSuccessful, isMediaJobTerminal } from '../../features/media-j
 import type { MediaJobProjection } from '../../features/media-jobs/types';
 import { usePageRefresh } from '../../hooks/usePageRefresh';
 import { composeMarkdownWithFrontmatter } from '../../utils/markdownFrontmatter';
+import { resolveAssetUrl } from '../../utils/pathManager';
 import { parseTimestampMs } from '../../utils/time';
 import { uiDebug, uiMeasure } from '../../utils/uiDebug';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../../shared/redboxVideo';
@@ -84,6 +95,7 @@ import {
     buildDraftStorageName,
     pathBasenameSafe,
     normalizeAssetKindReference,
+    manuscriptContentFormatFromPath,
     isSameDraftRelativePath,
     inferAssetKind,
     isVideoAsset,
@@ -130,6 +142,19 @@ const FILTER_OPTIONS: Array<{ id: DraftFilter; label: string }> = [
     { id: 'audio', label: '音频' },
     { id: 'folders', label: '文件夹' },
 ];
+
+function mergeMediaAssets(current: MediaAsset[], incoming: MediaAsset[]): MediaAsset[] {
+    if (incoming.length === 0) return current;
+    const byId = new Map(current.map((asset) => [asset.id, asset]));
+    for (const asset of incoming) {
+        byId.set(asset.id, asset);
+    }
+    return Array.from(byId.values()).sort((left, right) => {
+        const rightKey = String(right.updatedAt || right.createdAt || '');
+        const leftKey = String(left.updatedAt || left.createdAt || '');
+        return rightKey.localeCompare(leftKey);
+    });
+}
 
 export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigateToGenerationStudio, isActive = false, onClose, onImmersiveModeChange }: ManuscriptEditorHostProps) {
     const [mode, setMode] = useState<'editor' | 'list'>('editor');
@@ -184,7 +209,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         filePath: '',
         title: '',
     });
-    const [previewAsset, setPreviewAsset] = useState<MediaAsset | null>(null);
+    const [previewAsset, setPreviewAsset] = useState<{ asset: MediaAsset; src: string } | null>(null);
     const [workingId, setWorkingId] = useState<string | null>(null);
     const [pendingDeleteDraftPath, setPendingDeleteDraftPath] = useState<string | null>(null);
     const [settings, setSettings] = useState<SettingsShape>({});
@@ -239,6 +264,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const [editorWriteProposal, setEditorWriteProposal] = useState<ManuscriptWriteProposal | null>(null);
     const [editorReviewBody, setEditorReviewBody] = useState('');
     const [editorBodyDirty, setEditorBodyDirty] = useState(false);
+    const [editorBodyViewMode, setEditorBodyViewMode] = useState<EditorBodyViewMode>('edit');
     const [isSavingEditorBody, setIsSavingEditorBody] = useState(false);
     const [isApplyingWriteProposal, setIsApplyingWriteProposal] = useState(false);
     const [isRejectingWriteProposal, setIsRejectingWriteProposal] = useState(false);
@@ -250,6 +276,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const [immersiveTimelineCollapsed, setImmersiveTimelineCollapsed] = useState(false);
     const treeRequestIdRef = useRef(0);
     const assetsRequestIdRef = useRef(0);
+    const boundAssetsRequestIdRef = useRef(0);
     const hasLoadedSnapshotRef = useRef(false);
     const deferredAssetsTimerRef = useRef<number | null>(null);
     const searchPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -265,11 +292,15 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const editorFrontmatterBlockRef = useRef<string | null>(null);
     const editorMetadataRef = useRef<Record<string, unknown>>({});
     const editorBodyDirtyRef = useRef(false);
+    const isSavingEditorBodyRef = useRef(false);
     const editorSavePromiseRef = useRef<Promise<boolean> | null>(null);
+    const editorBodyReadRequestIdRef = useRef(0);
+    const editorBodyRefreshTimerRef = useRef<number | null>(null);
     const skipEditorTitleBlurCommitRef = useRef(false);
     const handledImageTerminalJobIdRef = useRef<string | null>(null);
     const handledVideoTerminalJobIdRef = useRef<string | null>(null);
     const fileMetaMap = useMemo(() => collectFileMetaMap(tree), [tree]);
+    const editorFileContentFormat = editorFile ? fileMetaMap[editorFile]?.contentFormat : undefined;
     const isMediaScope = filter === 'media' || filter === 'image' || filter === 'video' || filter === 'audio';
     const mediaFolderTree = useMemo(() => buildMediaFolderTree(assets), [assets]);
     const currentEditorContent = useMemo(
@@ -289,6 +320,15 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             });
         }
     }, [isEditorTitleEditing]);
+
+    useEffect(() => {
+        if (mode !== 'editor' || !editorFile) return;
+        const metadataFormat = String(editorMetadata.contentFormat || editorFileContentFormat || '').trim();
+        const nextContentFormat = metadataFormat === 'html'
+            ? 'html'
+            : manuscriptContentFormatFromPath(editorFile);
+        setEditorBodyViewMode(nextContentFormat === 'html' ? 'preview' : 'edit');
+    }, [editorFile, editorFileContentFormat, editorMetadata.contentFormat, mode]);
 
     useEffect(() => {
         if (!isEditorTitleEditing) {
@@ -372,6 +412,10 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     }, [editorBodyDirty]);
 
     useEffect(() => {
+        isSavingEditorBodyRef.current = isSavingEditorBody;
+    }, [isSavingEditorBody]);
+
+    useEffect(() => {
         setActiveImageJobId(null);
         setActiveVideoJobId(null);
         setIsGenerating(false);
@@ -427,6 +471,44 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
     }, [isActive, mode]);
 
+    const loadBoundAssetsForEditor = useCallback(async (targetPath: string | null | undefined = editorFileRef.current) => {
+        const manuscriptPath = String(targetPath || '').trim();
+        if (!manuscriptPath) return;
+        const requestId = ++boundAssetsRequestIdRef.current;
+        try {
+            const mediaResult = await uiMeasure('manuscripts', 'load_bound_assets', async () => (
+                window.ipcRenderer.media.list({ manuscriptPath }) as Promise<{ success?: boolean; assets?: MediaAsset[]; error?: string }>
+            ), { requestId, mode, isActive, manuscriptPath });
+            if (requestId !== boundAssetsRequestIdRef.current) return;
+            if (!mediaResult?.success) {
+                throw new Error(mediaResult?.error || '加载稿件配图失败');
+            }
+            const nextAssets = Array.isArray(mediaResult.assets) ? mediaResult.assets : [];
+            const nextAssetIds = new Set(nextAssets.map((asset) => asset.id));
+            setAssets((current) => {
+                const currentWithoutStaleBindings = current.filter((asset) => (
+                    !isSameDraftRelativePath(asset.boundManuscriptPath, manuscriptPath)
+                    || nextAssetIds.has(asset.id)
+                ));
+                return mergeMediaAssets(currentWithoutStaleBindings, nextAssets);
+            });
+        } catch (loadError) {
+            if (requestId !== boundAssetsRequestIdRef.current) return;
+            console.error('Failed to load bound manuscript media assets:', loadError);
+        }
+    }, [isActive, mode]);
+
+    useEffect(() => {
+        if (!isBindAssetModalOpen) return;
+        void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT)
+            .catch(() => undefined)
+            .finally(() => {
+                if (editorFileRef.current) {
+                    void loadBoundAssetsForEditor(editorFileRef.current);
+                }
+            });
+    }, [isBindAssetModalOpen, loadAssets, loadBoundAssetsForEditor]);
+
     const loadData = useCallback(async () => {
         uiDebug('manuscripts', 'load_data:start', { mode, isActive, hasSnapshot: hasLoadedSnapshotRef.current });
         if (hasLoadedSnapshotRef.current) {
@@ -436,7 +518,11 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
         setError('');
         try {
+            const activeEditorFile = editorFileRef.current;
             await Promise.all([loadTree(), loadAssets(MANUSCRIPTS_INITIAL_ASSET_LIMIT)]);
+            if (activeEditorFile && mode === 'editor') {
+                await loadBoundAssetsForEditor(activeEditorFile);
+            }
             hasLoadedSnapshotRef.current = true;
             uiDebug('manuscripts', 'load_data:done', {
                 mode,
@@ -450,7 +536,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             setLoading(false);
             setIsRefreshing(false);
         }
-    }, [assets.length, isActive, loadAssets, loadTree, mode, tree.length]);
+    }, [assets.length, isActive, loadAssets, loadBoundAssetsForEditor, loadTree, mode, tree.length]);
 
     const handleImportMediaFiles = useCallback(async () => {
         setWorkingId('media-import');
@@ -489,11 +575,73 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
     }, []);
 
+    const reloadEditorBodyFromDisk = useCallback(async (
+        targetPath: string | null,
+        options?: { force?: boolean; reason?: string },
+    ) => {
+        const normalizedTarget = String(targetPath || '').trim();
+        if (!normalizedTarget || mode !== 'editor') return false;
+        if (!options?.force && (editorBodyDirtyRef.current || isSavingEditorBodyRef.current || editorSavePromiseRef.current)) {
+            return false;
+        }
+        const requestId = ++editorBodyReadRequestIdRef.current;
+        try {
+            const result = await window.ipcRenderer.manuscripts.read(normalizedTarget) as ManuscriptReadResult;
+            if (requestId !== editorBodyReadRequestIdRef.current) return false;
+            if (!isSameDraftRelativePath(editorFileRef.current, normalizedTarget)) return false;
+            if (!options?.force && (editorBodyDirtyRef.current || isSavingEditorBodyRef.current || editorSavePromiseRef.current)) {
+                return false;
+            }
+            const nextContent = String(result?.content || '');
+            const nextDraft = splitWritingDraftContent(nextContent, editorDescriptor?.draftType);
+            const nextMetadata = (result?.metadata || {}) as Record<string, unknown>;
+            const currentContent = composeMarkdownWithFrontmatter(
+                editorBodyRef.current,
+                editorFrontmatterBlockRef.current
+            );
+            const metadataKey = JSON.stringify(editorMetadataRef.current || {});
+            const nextMetadataKey = JSON.stringify(nextMetadata || {});
+            if (nextContent === currentContent && nextMetadataKey === metadataKey) {
+                return false;
+            }
+            editorBodyRef.current = nextDraft.body;
+            editorFrontmatterBlockRef.current = nextDraft.frontmatterBlock;
+            editorMetadataRef.current = nextMetadata;
+            editorBodyDirtyRef.current = false;
+            setEditorBody(nextDraft.body);
+            setEditorFrontmatterBlock(nextDraft.frontmatterBlock);
+            setEditorMetadata(nextMetadata);
+            setEditorBodyDirty(false);
+            const nextTitle = String(nextMetadata.title || '').trim();
+            const nextDraftType = String(nextMetadata.draftType || '').trim();
+            if (nextTitle || nextDraftType) {
+                setEditorDescriptor((current) => current ? {
+                    ...current,
+                    title: nextTitle || current.title,
+                    draftType: (nextDraftType as CreateKind | '') || current.draftType,
+                } : current);
+            }
+            uiDebug('manuscripts', 'editor_body_refreshed', {
+                reason: options?.reason || 'manual',
+                filePath: normalizedTarget,
+            });
+            return true;
+        } catch (readError) {
+            console.error('Failed to refresh editor body:', readError);
+            return false;
+        }
+    }, [editorDescriptor?.draftType, mode]);
+
     const refreshWorkspace = useCallback(async () => {
         // Keep editor interactions smooth: skip heavy media refresh while actively editing.
         if (mode === 'editor') {
             uiDebug('manuscripts', 'refresh_workspace:editor_fast_path');
-            await loadTree();
+            const activeEditorFile = editorFileRef.current;
+            await Promise.all([
+                loadTree(),
+                reloadEditorBodyFromDisk(activeEditorFile, { reason: 'page-refresh' }),
+                loadBoundAssetsForEditor(activeEditorFile),
+            ]);
             return;
         }
         uiDebug('manuscripts', 'refresh_workspace:gallery_split_load');
@@ -516,9 +664,11 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         }
         deferredAssetsTimerRef.current = window.setTimeout(() => {
             deferredAssetsTimerRef.current = null;
-            void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT).finally(() => setIsRefreshing(false));
+            void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT)
+                .catch(() => undefined)
+                .finally(() => setIsRefreshing(false));
         }, 0);
-    }, [loadAssets, loadTree, mode]);
+    }, [loadAssets, loadBoundAssetsForEditor, loadTree, mode, reloadEditorBodyFromDisk]);
 
     usePageRefresh({
         isActive,
@@ -532,17 +682,48 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
 
     useEffect(() => {
         if (!isActive) return;
-        const handleDataChanged = (_event: unknown, payload?: { scope?: string }) => {
+        const handleDataChanged = (_event: unknown, payload?: { scope?: string; filePath?: string; entityId?: string }) => {
             if (payload?.scope === 'manuscripts') {
                 void loadTree();
+                const changedPath = String(payload.filePath || payload.entityId || '').trim();
+                const activeEditorFile = editorFileRef.current;
+                if (mode === 'editor' && activeEditorFile && (!changedPath || isSameDraftRelativePath(changedPath, activeEditorFile))) {
+                    if (editorBodyRefreshTimerRef.current != null) {
+                        window.clearTimeout(editorBodyRefreshTimerRef.current);
+                    }
+                    editorBodyRefreshTimerRef.current = window.setTimeout(() => {
+                        editorBodyRefreshTimerRef.current = null;
+                        void reloadEditorBodyFromDisk(activeEditorFile, { reason: 'data-changed' });
+                    }, 160);
+                }
                 return;
             }
             if (payload?.scope === 'media') {
-                void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT);
+                void loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT)
+                    .catch(() => undefined)
+                    .finally(() => {
+                        const activeEditorFile = editorFileRef.current;
+                        if (mode === 'editor' && activeEditorFile) {
+                            void loadBoundAssetsForEditor(activeEditorFile);
+                        }
+                    });
             }
         };
         return subscribeDataChanged(handleDataChanged);
-    }, [isActive, loadAssets, loadTree]);
+    }, [isActive, loadAssets, loadBoundAssetsForEditor, loadTree, mode, reloadEditorBodyFromDisk]);
+
+    useEffect(() => {
+        if (!isActive || mode !== 'editor' || !editorFile) return;
+        const interval = window.setInterval(() => {
+            void reloadEditorBodyFromDisk(editorFileRef.current, { reason: 'auto-poll' });
+        }, 1500);
+        return () => window.clearInterval(interval);
+    }, [editorFile, isActive, mode, reloadEditorBodyFromDisk]);
+
+    useEffect(() => {
+        if (!isActive || mode !== 'editor' || !editorFile) return;
+        void loadBoundAssetsForEditor(editorFile);
+    }, [editorFile, isActive, loadBoundAssetsForEditor, mode]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -568,6 +749,10 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             if (deferredAssetsTimerRef.current != null) {
                 window.clearTimeout(deferredAssetsTimerRef.current);
                 deferredAssetsTimerRef.current = null;
+            }
+            if (editorBodyRefreshTimerRef.current != null) {
+                window.clearTimeout(editorBodyRefreshTimerRef.current);
+                editorBodyRefreshTimerRef.current = null;
             }
         };
     }, []);
@@ -1289,6 +1474,8 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             if (!result?.success) {
                 throw new Error(result?.error || '导入素材失败');
             }
+            await loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT);
+            await loadBoundAssetsForEditor(editorFile);
             if (result.state) {
                 applyPackageState(editorFile, result.state);
             } else {
@@ -1299,7 +1486,27 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         } finally {
             setWorkingId(null);
         }
-    }, [applyPackageState, editorFile, refreshPackageState]);
+    }, [applyPackageState, editorFile, loadAssets, loadBoundAssetsForEditor, refreshPackageState]);
+
+    const handleDownloadEditorFile = useCallback(async () => {
+        if (!editorFileRef.current || workingId) return;
+        const saved = await ensureLatestEditorContentSaved();
+        if (!saved) return;
+        const snapshotFile = editorFileRef.current;
+        setWorkingId('download:editor');
+        try {
+            const result = await window.ipcRenderer.manuscripts.download({
+                filePath: snapshotFile,
+            }) as { success?: boolean; error?: string; path?: string; format?: string };
+            if (!result?.success) {
+                throw new Error(result?.error || '下载稿件失败');
+            }
+        } catch (downloadError) {
+            void appAlert(downloadError instanceof Error ? downloadError.message : '下载稿件失败');
+        } finally {
+            setWorkingId(null);
+        }
+    }, [ensureLatestEditorContentSaved, workingId]);
 
     const handleGenerateRemotionScene = useCallback(async (instructionsOverride?: string) => {
         if (!editorFile || String(editorDescriptor?.draftType || '') !== 'video') return;
@@ -1754,7 +1961,11 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             if (!result?.success) {
                 throw new Error(result?.error || '绑定素材失败');
             }
-            await loadData();
+            await Promise.all([
+                loadTree(),
+                loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT),
+            ]);
+            await loadBoundAssetsForEditor(editorFile);
             if (result.state) {
                 applyPackageState(editorFile, result.state);
             } else {
@@ -1764,7 +1975,45 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         } catch (bindError) {
             void appAlert(bindError instanceof Error ? bindError.message : '绑定素材失败');
         }
-    }, [applyPackageState, bindAssetRole, editorFile, loadData, refreshPackageState]);
+    }, [applyPackageState, bindAssetRole, editorFile, loadAssets, loadBoundAssetsForEditor, loadTree, refreshPackageState]);
+
+    const handlePreviewBoundAsset = useCallback((asset: MediaAsset) => {
+        const src = asset.previewUrl || asset.absolutePath || asset.relativePath || '';
+        if (!src || asset.exists === false) {
+            void appAlert('媒体资产没有可预览的文件');
+            return;
+        }
+        setPreviewAsset({ asset, src });
+    }, []);
+
+    const handleUnbindBoundAsset = useCallback(async (asset: MediaAsset) => {
+        if (!editorFile) return;
+        setWorkingId(`unbind:${asset.id}`);
+        try {
+            const result = await window.ipcRenderer.media.bind({
+                assetId: asset.id,
+                manuscriptPath: '',
+            }) as { success?: boolean; error?: string; asset?: MediaAsset };
+            if (!result?.success) {
+                throw new Error(result?.error || '移除配图失败');
+            }
+            setPreviewAsset((current) => current?.asset.id === asset.id ? null : current);
+            setAssets((current) => current.map((item) => (
+                item.id === asset.id
+                    ? {
+                        ...(result.asset || item),
+                        boundManuscriptPath: undefined,
+                    }
+                    : item
+            )));
+            await loadAssets(MANUSCRIPTS_ACTIVE_ASSET_LIMIT);
+            await loadBoundAssetsForEditor(editorFile);
+        } catch (unbindError) {
+            void appAlert(unbindError instanceof Error ? unbindError.message : '移除配图失败');
+        } finally {
+            setWorkingId(null);
+        }
+    }, [editorFile, loadAssets, loadBoundAssetsForEditor]);
 
     const pushToRedClaw = useCallback((filePath: string) => {
         const meta = fileMetaMap[filePath];
@@ -2021,9 +2270,15 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             draftType: fileMetaMap[editorFile]?.draftType || 'unknown',
         };
         const draftType = currentDescriptor.draftType;
+        const metaContentFormat = String(editorMetadata.contentFormat || fileMetaMap[editorFile]?.contentFormat || '').trim();
+        const contentFormat = metaContentFormat === 'html'
+            ? 'html'
+            : manuscriptContentFormatFromPath(editorFile);
+        const fileBaseUrl = String(editorMetadata.fileBaseUrl || '').trim();
         const draftStyle = resolveDraftTypeStyle(draftType);
         const isImmersiveWorkbench = mode === 'editor';
         const isArticlePackage = draftType === 'longform';
+        const canBindMediaAssets = isArticlePackage || contentFormat === 'markdown';
         const isScriptConfirmed = (
             packageState?.videoProject?.scriptApproval?.status
             || packageState?.editorProject?.ai?.scriptApproval?.status
@@ -2048,7 +2303,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             ...timelineClips.map((item) => String(item?.assetId || '').trim()),
         ].filter(Boolean));
         const manuscriptBoundAssets = assets
-            .filter((asset) => String(asset.boundManuscriptPath || '').trim() === editorFile)
+            .filter((asset) => isSameDraftRelativePath(asset.boundManuscriptPath, editorFile))
             .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
         const timelineFallbackAssets = timelineClips
             .filter((item) => {
@@ -2183,24 +2438,105 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                         </div>
                     </div>
                     <div className="flex items-center gap-1.5">
-                        {isArticlePackage && (
-                            <div className="flex items-center gap-1">
+                        <div className={clsx(
+                            'flex shrink-0 items-center gap-0.5 rounded-lg p-0.5',
+                            isImmersiveWorkbench
+                                ? 'border border-border bg-surface-secondary/50'
+                                : 'border border-black/[0.04] bg-black/[0.03]'
+                        )}>
+                            <button
+                                type="button"
+                                onClick={() => setEditorBodyViewMode('edit')}
+                                aria-label="编辑"
+                                title="编辑"
+                                aria-pressed={editorBodyViewMode === 'edit'}
+                                className={clsx(
+                                    'inline-flex h-8 w-8 items-center justify-center rounded-md transition-all active:scale-95',
+                                    editorBodyViewMode === 'edit'
+                                        ? 'bg-accent-primary text-white shadow-sm'
+                                        : 'text-text-tertiary hover:bg-surface-secondary/80 hover:text-text-primary'
+                                )}
+                            >
+                                <Pencil className="h-4 w-4" />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setEditorBodyViewMode('preview')}
+                                aria-label="预览"
+                                title="预览"
+                                aria-pressed={editorBodyViewMode === 'preview'}
+                                className={clsx(
+                                    'inline-flex h-8 w-8 items-center justify-center rounded-md transition-all active:scale-95',
+                                    editorBodyViewMode === 'preview'
+                                        ? 'bg-accent-primary text-white shadow-sm'
+                                        : 'text-text-tertiary hover:bg-surface-secondary/80 hover:text-text-primary'
+                                )}
+                            >
+                                <Eye className="h-4 w-4" />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    void handleDownloadEditorFile();
+                                }}
+                                aria-label="下载"
+                                title="下载"
+                                disabled={!editorFile || Boolean(workingId) || isSavingEditorBody}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition-all hover:bg-surface-secondary/80 hover:text-text-primary active:scale-95 disabled:opacity-35"
+                            >
+                                {workingId === 'download:editor' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                            </button>
+                        </div>
+                        {(editorBodyDirty || isSavingEditorBody) ? (
+                            <div className={clsx(
+                                'shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium',
+                                isImmersiveWorkbench
+                                    ? 'border border-border bg-surface-secondary/50 text-text-tertiary'
+                                    : 'border border-black/[0.04] bg-black/[0.03] text-text-tertiary'
+                            )}>
+                                {isSavingEditorBody ? '保存中' : '未保存'}
+                            </div>
+                        ) : null}
+                        {editorWriteProposalView ? (
+                            <div className={clsx(
+                                'flex shrink-0 items-center gap-1 rounded-lg p-0.5',
+                                isImmersiveWorkbench
+                                    ? 'border border-border bg-surface-secondary/50'
+                                    : 'border border-black/[0.04] bg-black/[0.03]'
+                            )}>
+                                {editorWriteProposalView.isStale ? (
+                                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-md text-amber-700" title="稿件在提案生成后发生过变化" aria-label="稿件在提案生成后发生过变化">
+                                        <AlertTriangle className="h-4 w-4" />
+                                    </span>
+                                ) : null}
                                 <button
                                     type="button"
                                     onClick={() => {
-                                        setBindAssetRole('cover');
-                                        setIsBindAssetModalOpen(true);
+                                        void handleRejectEditorWriteProposal();
                                     }}
-                                    className={clsx(
-                                        'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all active:scale-95',
-                                        isImmersiveWorkbench
-                                            ? 'border border-border bg-surface-secondary/50 text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary'
-                                            : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
-                                    )}
+                                    disabled={isApplyingWriteProposal || isRejectingWriteProposal}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-tertiary transition hover:bg-surface-secondary/80 hover:text-text-primary disabled:opacity-35"
+                                    aria-label="拒绝 AI 修改"
+                                    title="拒绝 AI 修改"
                                 >
-                                    <ImageIcon className="h-3.5 w-3.5" />
-                                    绑定封面
+                                    {isRejectingWriteProposal ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
                                 </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        void handleAcceptEditorWriteProposal();
+                                    }}
+                                    disabled={isApplyingWriteProposal || isRejectingWriteProposal}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-accent-primary text-white transition hover:bg-accent-primary/92 disabled:opacity-35"
+                                    aria-label="接受 AI 修改"
+                                    title="接受 AI 修改"
+                                >
+                                    {isApplyingWriteProposal ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                                </button>
+                            </div>
+                        ) : null}
+                        {canBindMediaAssets && (
+                            <div className="flex items-center gap-1">
                                 <button
                                     type="button"
                                     onClick={() => {
@@ -2225,35 +2561,123 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">写作工作台加载中...</div>}>
                     <WritingDraftWorkbench
                         isActive={isActive}
-                        draftType={draftType === 'longform' ? 'longform' : 'unknown'}
+                        draftType={draftType === 'longform' || draftType === 'html' ? draftType : 'unknown'}
                         title={currentDescriptor.title}
                         filePath={editorFile}
                         editorBody={editorWriteProposalView ? editorReviewBody : editorBody}
+                        bodyViewMode={editorBodyViewMode}
+                        contentFormat={contentFormat}
+                        fileBaseUrl={fileBaseUrl}
+                        boundAssets={manuscriptBoundAssets}
                         writeProposal={editorWriteProposalView}
-                        editorBodyDirty={editorBodyDirty}
-                        isSavingEditorBody={isSavingEditorBody}
-                        isApplyingWriteProposal={isApplyingWriteProposal}
-                        isRejectingWriteProposal={isRejectingWriteProposal}
                         editorChatSessionId={editorChatSessionId}
                         editorChatReady={editorChatSessionReady}
                         editorSessionMetadata={editorChatBinding?.metadata ?? null}
                         onEditorBodyChange={(value) => {
                             if (editorWriteProposalView) {
+                                editorReviewBodyRef.current = value;
                                 setEditorReviewBody(value);
                                 return;
                             }
+                            editorBodyRef.current = value;
+                            editorBodyDirtyRef.current = true;
                             setEditorBody(value);
                             setEditorBodyDirty(true);
                         }}
-                        onAcceptWriteProposal={() => {
-                            void handleAcceptEditorWriteProposal();
+                        onRequestBindImages={() => {
+                            setBindAssetRole('image');
+                            setIsBindAssetModalOpen(true);
+                        }}
+                        onPreviewAsset={handlePreviewBoundAsset}
+                        onRemoveBoundImage={(asset) => {
+                            void handleUnbindBoundAsset(asset);
                         }}
                         onAiWorkspaceModeChange={setEditorAiWorkspaceMode}
-                        onRejectWriteProposal={() => {
-                            void handleRejectEditorWriteProposal();
-                        }}
                     />
                 </Suspense>
+                {isBindAssetModalOpen && (
+                    <div
+                        className="fixed inset-0 z-[9990] flex items-center justify-center bg-black/38 p-6 backdrop-blur-sm"
+                        onClick={() => setIsBindAssetModalOpen(false)}
+                    >
+                        <div
+                            className="flex max-h-[78vh] w-[min(760px,92vw)] min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-surface-primary shadow-2xl"
+                            onClick={(event) => event.stopPropagation()}
+                        >
+                            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+                                <div className="flex items-center gap-2 text-sm font-bold text-text-primary">
+                                    <Paperclip className="h-4 w-4 text-text-tertiary" />
+                                    {bindAssetRole === 'cover' ? '绑定封面' : bindAssetRole === 'image' ? '插入配图' : '绑定素材'}
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleImportAndBindAssetsToPackage()}
+                                        disabled={workingId === 'media-import-bind'}
+                                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface-secondary/60 px-2.5 text-xs font-bold text-text-secondary transition hover:bg-surface-secondary hover:text-text-primary disabled:opacity-45"
+                                    >
+                                        {workingId === 'media-import-bind' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                                        导入
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsBindAssetModalOpen(false)}
+                                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary"
+                                        aria-label="关闭"
+                                        title="关闭"
+                                    >
+                                        <X className="h-4 w-4" />
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                                {bindableAssets.length === 0 ? (
+                                    <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-border text-sm text-text-tertiary">
+                                        暂无可绑定素材
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-3">
+                                        {bindableAssets.map((asset) => {
+                                            const kind = inferAssetKind(asset);
+                                            const src = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
+                                            const isWorking = workingId === asset.id;
+                                            return (
+                                                <button
+                                                    key={asset.id}
+                                                    type="button"
+                                                    onClick={() => void handleBindAssetToPackage(asset.id)}
+                                                    disabled={isWorking}
+                                                    className="group min-w-0 overflow-hidden rounded-lg border border-border bg-surface-secondary/45 text-left transition hover:border-accent-primary/40 hover:bg-surface-secondary disabled:opacity-55"
+                                                >
+                                                    <div className="flex aspect-square items-center justify-center overflow-hidden bg-background text-text-tertiary">
+                                                        {kind === 'image' && src ? (
+                                                            <img src={src} alt={asset.title || asset.id} className="h-full w-full object-cover transition group-hover:scale-[1.02]" loading="lazy" />
+                                                        ) : kind === 'video' ? (
+                                                            <FileVideo className="h-7 w-7" />
+                                                        ) : kind === 'audio' ? (
+                                                            <FileAudio className="h-7 w-7" />
+                                                        ) : (
+                                                            <FileText className="h-7 w-7" />
+                                                        )}
+                                                    </div>
+                                                    <div className="min-w-0 px-2.5 py-2">
+                                                        <div className="truncate text-xs font-bold text-text-primary">
+                                                            {asset.title || asset.relativePath || asset.id}
+                                                        </div>
+                                                        <div className="mt-1 truncate text-[10px] uppercase tracking-tight text-text-tertiary">
+                                                            {isWorking ? '绑定中' : kind}
+                                                        </div>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+                <MediaAssetPreviewOverlay preview={previewAsset} onClose={() => setPreviewAsset(null)} />
             </div>
         );
     }

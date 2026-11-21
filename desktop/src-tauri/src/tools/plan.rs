@@ -507,6 +507,8 @@ const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "web.fetch",
     "web.search",
     "browser.control",
+    "capture.collect",
+    "capture.status",
     "taskBrief.get",
     "taskBrief.update",
     "taskBrief.context",
@@ -964,6 +966,14 @@ mod tests {
 
             assert!(
                 plan.has_direct_app_cli_action("browser.control"),
+                "{runtime_mode}"
+            );
+            assert!(
+                plan.has_direct_app_cli_action("capture.collect"),
+                "{runtime_mode}"
+            );
+            assert!(
+                plan.has_direct_app_cli_action("capture.status"),
                 "{runtime_mode}"
             );
         }

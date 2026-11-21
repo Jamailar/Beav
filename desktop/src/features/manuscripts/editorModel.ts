@@ -2,11 +2,19 @@ import type { MediaJobProjection } from '../media-jobs/types';
 import { resolveAssetUrl } from '../../utils/pathManager';
 import { formatTimestampDate, parseTimestampMs } from '../../utils/time';
 import { parseMarkdownFrontmatter } from '../../utils/markdownFrontmatter';
-import { ensureManuscriptFileName, stripManuscriptExtension } from '../../../shared/manuscriptFiles';
+import {
+    MANUSCRIPT_HTML_EXTENSION,
+    MANUSCRIPT_MARKDOWN_EXTENSION,
+    ensureManuscriptFileName,
+    getManuscriptFileKind,
+    stripManuscriptExtension,
+    type ManuscriptExtension,
+    type ManuscriptFileKind,
+} from '../../../shared/manuscriptFiles';
 
 export type DraftFilter = 'all' | 'drafts' | 'media' | 'image' | 'video' | 'audio' | 'folders';
 export type DraftLayout = 'gallery' | 'list';
-export type CreateKind = 'folder' | 'longform';
+export type CreateKind = 'folder' | 'longform' | 'html';
 export type FileNode = {
     name: string;
     path: string;
@@ -15,6 +23,7 @@ export type FileNode = {
     status?: 'writing' | 'completed' | 'abandoned';
     title?: string;
     draftType?: CreateKind | 'unknown';
+    contentFormat?: ManuscriptFileKind;
     updatedAt?: number;
     summary?: string;
 };
@@ -104,6 +113,7 @@ export type ManuscriptWriteProposal = {
 export type FileCardMeta = {
     title: string;
     draftType: CreateKind | 'unknown';
+    contentFormat?: ManuscriptFileKind;
     updatedAt?: number;
     summary: string;
 };
@@ -220,7 +230,8 @@ export type ExportVideoResolution = 'source' | '1080p' | '720p';
 export const DEFAULT_UNTITLED_DRAFT_TITLE = '未命名';
 export function resolveDraftExtension(kind: CreateKind | 'unknown'): string {
     if (kind === 'longform') return '';
-    return '.md';
+    if (kind === 'html') return MANUSCRIPT_HTML_EXTENSION;
+    return MANUSCRIPT_MARKDOWN_EXTENSION;
 }
 
 export function stripDraftExtension(fileName: string): string {
@@ -259,7 +270,7 @@ export function exportResolutionDimensions(
 
 export function ensureDraftFileName(baseName: string, kind: CreateKind | 'unknown'): string {
     const extension = resolveDraftExtension(kind);
-    return extension ? ensureManuscriptFileName(baseName, extension as '.md') : baseName;
+    return extension ? ensureManuscriptFileName(baseName, extension as ManuscriptExtension) : baseName;
 }
 
 export const MANUSCRIPTS_INITIAL_ASSET_LIMIT = 0;
@@ -329,7 +340,7 @@ export function isInternalPackageFile(filePath: string): boolean {
 }
 
 export function isPackageDraftPath(filePath: string): boolean {
-    return !filePath.endsWith('.md');
+    return getManuscriptFileKind(filePath) === null;
 }
 
 export function getFolderTrail(folderPath: string): Array<{ label: string; path: string }> {
@@ -413,7 +424,7 @@ export function buildDraftTemplate(title: string, kind: Exclude<CreateKind, 'fol
 }
 
 export function shouldHideFrontmatterInEditor(draftType: CreateKind | 'unknown' | null | undefined): boolean {
-    void draftType;
+    if (draftType === 'html') return false;
     return true;
 }
 
@@ -454,6 +465,10 @@ export function pathBasenameSafe(rawPath: string): string {
     return parts[parts.length - 1] || '';
 }
 
+export function manuscriptContentFormatFromPath(filePath: string | null | undefined): ManuscriptFileKind {
+    return getManuscriptFileKind(String(filePath || '')) || 'markdown';
+}
+
 export function normalizeAssetKindReference(value: string | null | undefined): string {
     const trimmed = String(value || '').trim().toLowerCase();
     if (!trimmed) return '';
@@ -461,7 +476,13 @@ export function normalizeAssetKindReference(value: string | null | undefined): s
 }
 
 export function isSameDraftRelativePath(left: string | null | undefined, right: string | null | undefined): boolean {
-    return String(left || '').replace(/\\/g, '/').trim() === String(right || '').replace(/\\/g, '/').trim();
+    const normalize = (value: string | null | undefined) => String(value || '')
+        .replace(/\\/g, '/')
+        .trim()
+        .split('/')
+        .filter((segment) => segment && segment !== '.')
+        .join('/');
+    return normalize(left) === normalize(right);
 }
 
 export function inferAssetKind(asset: MediaAsset): 'image' | 'video' | 'audio' | 'unknown' {
@@ -577,6 +598,7 @@ export function formatDateLabel(input?: string | number): string {
 
 export function resolveDraftTypeLabel(type: CreateKind | 'unknown'): string {
     if (type === 'longform') return '长文';
+    if (type === 'html') return 'HTML';
     return '稿件';
 }
 
@@ -616,6 +638,7 @@ export function collectFileMetaMap(nodes: FileNode[]): Record<string, FileCardMe
             next[item.path] = {
                 title: item.title || DEFAULT_UNTITLED_DRAFT_TITLE,
                 draftType: item.draftType || 'unknown',
+                contentFormat: item.contentFormat,
                 updatedAt: Number(item.updatedAt || 0) || undefined,
                 summary: item.summary || '',
             };

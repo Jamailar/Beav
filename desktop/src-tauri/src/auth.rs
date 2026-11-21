@@ -63,6 +63,8 @@ pub(crate) struct AuthRuntimeState {
     pub last_refresh_at: Option<String>,
     pub last_refresh_at_ms: Option<i64>,
     pub next_refresh_at_ms: Option<i64>,
+    pub background_refresh_failures: u32,
+    pub background_refresh_backoff_until_ms: Option<i64>,
     pub unknown_expiry_refresh_attempted: bool,
     pub secrets: AuthSecretBundle,
 }
@@ -82,6 +84,8 @@ impl Default for AuthRuntimeState {
             last_refresh_at: None,
             last_refresh_at_ms: None,
             next_refresh_at_ms: None,
+            background_refresh_failures: 0,
+            background_refresh_backoff_until_ms: None,
             unknown_expiry_refresh_attempted: false,
             secrets: AuthSecretBundle::default(),
         }
@@ -340,6 +344,11 @@ pub(crate) fn classify_auth_error(error: &str) -> AuthErrorKind {
         || normalized.contains("refresh_token_expired")
         || normalized.contains("token_expired")
         || normalized.contains("token expired")
+        || normalized.contains("authentication required")
+        || normalized.contains("auth_required")
+        || normalized.contains("登录态已失效")
+        || normalized.contains("登录失效")
+        || normalized.contains("请重新登录")
         || normalized.contains("旧账号体系")
         || normalized.contains("legacy account realm")
     {
@@ -417,6 +426,15 @@ fn points_refresh_due(runtime: &AuthRuntimeState) -> bool {
                 >= OFFICIAL_POINTS_BACKGROUND_REFRESH_INTERVAL_MS
         }
         _ => runtime.session.is_some() || runtime.secrets.refresh_token.is_some(),
+    }
+}
+
+fn background_refresh_backoff_ms(failures: u32) -> i64 {
+    match failures {
+        0 | 1 => 2 * 60 * 1000,
+        2 => 5 * 60 * 1000,
+        3 => 10 * 60 * 1000,
+        _ => 15 * 60 * 1000,
     }
 }
 
@@ -781,6 +799,38 @@ pub(crate) fn mark_auth_degraded(
     Ok(snapshot)
 }
 
+pub(crate) fn record_background_refresh_success(state: &State<'_, AppState>) {
+    let _ = with_auth_runtime_mut(state, |runtime| {
+        runtime.background_refresh_failures = 0;
+        runtime.background_refresh_backoff_until_ms = None;
+    });
+}
+
+pub(crate) fn record_background_refresh_failure(
+    state: &State<'_, AppState>,
+    message: impl Into<String>,
+    kind: AuthErrorKind,
+) {
+    let message = message.into();
+    let _ = with_auth_runtime_mut(state, |runtime| {
+        runtime.background_refresh_failures = runtime.background_refresh_failures.saturating_add(1);
+        let backoff_ms = background_refresh_backoff_ms(runtime.background_refresh_failures);
+        runtime.background_refresh_backoff_until_ms =
+            Some((now_ms() as i64).saturating_add(backoff_ms));
+        runtime.last_error = Some(message.clone());
+        runtime.last_error_kind = Some(kind);
+        if runtime.session.is_some() || runtime.secrets.refresh_token.is_some() {
+            runtime.status = AuthStatus::Degraded;
+            runtime.degraded_reason = Some(message.clone());
+        }
+    });
+    log_auth_runtime(
+        state,
+        "background-refresh-backoff",
+        format!("kind={kind:?} message={message}"),
+    );
+}
+
 pub(crate) fn mark_auth_refreshing(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -845,6 +895,12 @@ pub(crate) fn should_run_background_refresh(state: &State<'_, AppState>) -> bool
             return false;
         }
         let now = now_ms() as i64;
+        if runtime
+            .background_refresh_backoff_until_ms
+            .is_some_and(|backoff_until| backoff_until > now)
+        {
+            return false;
+        }
         if let Some(refresh_at) = runtime.next_refresh_at_ms {
             if refresh_at <= now {
                 return true;
@@ -1072,6 +1128,14 @@ mod tests {
         );
         assert_eq!(
             classify_auth_error("refresh token expired"),
+            AuthErrorKind::ReauthRequired
+        );
+        assert_eq!(
+            classify_auth_error("Authentication required"),
+            AuthErrorKind::ReauthRequired
+        );
+        assert_eq!(
+            classify_auth_error("auth_required"),
             AuthErrorKind::ReauthRequired
         );
         assert_eq!(

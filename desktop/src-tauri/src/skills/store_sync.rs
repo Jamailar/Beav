@@ -7,8 +7,8 @@ use tauri::State;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::SkillRecord;
 use crate::skills::{
-    build_market_skill_record, build_user_skill_record, canonical_skill_name,
-    discover_builtin_skill_records, discover_skill_records_from_root,
+    build_user_skill_record, canonical_skill_name, discover_builtin_skill_records,
+    discover_skill_records_from_root,
 };
 use crate::{redbox_builtin_skills_root, slug_from_relative_path, workspace_root, AppState};
 
@@ -175,12 +175,6 @@ pub fn write_skill_record_to_path(record: &SkillRecord, path: &Path) -> Result<(
 pub fn build_workspace_skill_record(name: &str) -> SkillRecord {
     let mut record = build_user_skill_record(name);
     record.source_scope = Some("workspace".to_string());
-    record
-}
-
-pub fn build_market_file_skill_record(slug: &str) -> SkillRecord {
-    let mut record = build_market_skill_record(slug);
-    record.source_scope = Some("market".to_string());
     record
 }
 

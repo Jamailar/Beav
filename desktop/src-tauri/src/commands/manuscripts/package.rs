@@ -3,6 +3,21 @@ use super::package_video::{get_video_project_state_value, save_video_project_bri
 use super::*;
 use crate::store::media as media_store;
 
+fn bind_media_asset_to_manuscript(
+    state: &State<'_, AppState>,
+    asset_id: &str,
+    file_path: &str,
+) -> Result<MediaAssetRecord, String> {
+    with_store_mut(state, |store| {
+        media_store::update_asset(store, asset_id, |asset| {
+            asset.bound_manuscript_path = Some(file_path.to_string());
+            asset.updated_at = now_rfc3339();
+            asset.clone()
+        })
+        .ok_or_else(|| "媒体资产不存在".to_string())
+    })
+}
+
 pub(super) fn handle_package_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -149,11 +164,12 @@ pub(super) fn handle_package_channel(
                 return Ok(json!({ "success": false, "error": "filePath is required" }));
             }
             let full_path = resolve_manuscript_path(state, &file_path)?;
-            if !is_manuscript_package_path(&full_path) {
-                return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
-            }
-            let package_kind =
-                get_package_kind_from_manifest(&full_path).unwrap_or_else(|| "article".to_string());
+            let is_package = is_manuscript_package_path(&full_path);
+            let package_kind = if is_package {
+                get_package_kind_from_manifest(&full_path).unwrap_or_else(|| "article".to_string())
+            } else {
+                "standalone".to_string()
+            };
             let picked = pick_files_native("选择要导入的素材文件", false, true)?;
             if picked.is_empty() {
                 return Ok(json!({ "success": true, "canceled": true, "imported": [] }));
@@ -167,7 +183,11 @@ pub(super) fn handle_package_channel(
                     state,
                     &content_hash,
                 )? {
-                    ensure_package_asset_entry(&full_path, &asset, None, None, None)?;
+                    let asset = bind_media_asset_to_manuscript(state, &asset.id, &file_path)?;
+                    persist_media_workspace_catalog(state)?;
+                    if is_package {
+                        ensure_package_asset_entry(&full_path, &asset, None, None, None)?;
+                    }
                     let mime_type = asset.mime_type.clone().unwrap_or_else(|| {
                         let (mime_type, _, _) = guess_mime_and_kind(&file);
                         mime_type
@@ -177,7 +197,7 @@ pub(super) fn handle_package_channel(
                     } else {
                         "V1"
                     };
-                    if package_kind != "video" {
+                    if is_package && package_kind != "video" {
                         let _ = handle_manuscripts_channel(
                             app,
                             state,
@@ -238,13 +258,15 @@ pub(super) fn handle_package_channel(
                     Ok(asset)
                 })?;
                 persist_media_workspace_catalog(state)?;
-                ensure_package_asset_entry(&full_path, &asset, None, None, None)?;
+                if is_package {
+                    ensure_package_asset_entry(&full_path, &asset, None, None, None)?;
+                }
                 let track = if mime_type.starts_with("audio/") {
                     "A1"
                 } else {
                     "V1"
                 };
-                if package_kind != "video" {
+                if is_package && package_kind != "video" {
                     let _ = handle_manuscripts_channel(
                         app,
                         state,
@@ -263,12 +285,20 @@ pub(super) fn handle_package_channel(
                     "assetId": asset.id,
                 }));
             }
-            Ok(json!({
+            let mut response = json!({
                 "success": true,
                 "canceled": false,
-                "imported": imported,
-                "state": get_manuscript_package_state(&full_path)?,
-            }))
+                "imported": imported
+            });
+            if is_package {
+                if let Some(object) = response.as_object_mut() {
+                    object.insert(
+                        "state".to_string(),
+                        get_manuscript_package_state(&full_path)?,
+                    );
+                }
+            }
+            Ok(response)
         })()),
         _ => None,
     }

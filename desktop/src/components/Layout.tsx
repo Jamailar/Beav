@@ -1,5 +1,5 @@
 import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, Folder, Dices, Pencil, ChevronDown, Sun, Moon, AlertCircle, Bell, Clock3, Edit, BookOpenText, Trash2, Crown, BadgeCheck, X, Loader2, ExternalLink, RefreshCw, Gift, Monitor, Box, ShieldCheck, Coins, Headphones, Sparkles } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Folder, Dices, Pencil, ChevronDown, Sun, Moon, AlertCircle, Bell, Clock3, Edit, BookOpenText, Trash2, Crown, BadgeCheck, X, Loader2, ExternalLink, RefreshCw, Gift, Monitor, Box, ShieldCheck, Coins, Headphones, Sparkles, Puzzle } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { ImmersiveMode, ViewType } from '../features/app-shell/types';
 import { NotificationCenterDrawer } from './NotificationCenterDrawer';
@@ -19,6 +19,7 @@ import { useLayoutTheme } from '../features/app-shell/useLayoutTheme';
 import { ENTITLEMENTS } from '../features/membership/entitlementKeys';
 import { useMembership } from '../features/membership/useMembership';
 import { asRecord, resolveFounderSponsorState, valueContainsFounder } from '../utils/membership';
+import { getAppAcquisitionSource } from './AppOnboarding';
 
 interface LayoutProps {
   children: ReactNode;
@@ -48,6 +49,7 @@ const NAV_ITEMS: SidebarNavItem[] = [
   { key: 'search', view: 'knowledge', labelKey: 'nav.search', icon: BookOpenText, primary: true },
   { key: 'assets', view: 'subjects', labelKey: 'nav.assets', icon: Folder, primary: true },
   { key: 'automation', view: 'automation', labelKey: 'nav.automation', icon: Clock3, primary: true },
+  { key: 'skills', view: 'skills', labelKey: 'nav.skills', icon: Puzzle, primary: true },
   { key: 'free-creation', view: 'generation-studio', labelKey: 'nav.home', icon: Pencil },
   { key: 'wander', view: 'wander', labelKey: 'nav.wander', icon: Dices },
   // { id: 'archives', label: '档案', icon: Archive },
@@ -134,6 +136,11 @@ function formatFounderProductPrice(product: FounderSponsorProduct | null): strin
   const prefix = currency === 'CNY' || currency === 'RMB' ? '¥' : `${currency} `;
   const fractionDigits = Number.isInteger(amount) ? 0 : 2;
   return `${prefix}${amount.toLocaleString(undefined, { minimumFractionDigits: fractionDigits, maximumFractionDigits: 2 })}`;
+}
+
+function founderProductAmountValue(product: FounderSponsorProduct | null): number | null {
+  const amount = Number(product?.amount);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
 function decodeHtmlEntities(value: string): string {
@@ -314,10 +321,12 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
   const {
     updateNotice,
+    hasInstallableUpdate,
     updatePublishedDateLabel,
     isOpeningReleasePage,
     installState,
     isInstallingUpdate,
+    openInstallableUpdateNotice,
     openReleasePage,
     installUpdate,
     closeUpdateNotice,
@@ -360,6 +369,24 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       aiModelSubTab: 'login',
     });
   }, []);
+  const openSettingsFromSidebar = useCallback(() => {
+    dispatchAppIntent({ type: 'settings.open' });
+  }, []);
+  const openFounderSponsorModalFromSidebar = useCallback(() => {
+    setFounderSponsorOpen(true);
+    void window.ipcRenderer.analytics.track('founder_sponsor_modal_opened', {
+      surface: 'app-shell',
+      origin: 'sidebar_footer',
+      properties: {
+        entry: 'sidebar_footer',
+        active: founderSponsorState.active,
+        sidebarCollapsed: sidebarVisualCollapsed,
+      },
+    });
+  }, [founderSponsorState.active, sidebarVisualCollapsed]);
+  const openCurrentReleaseNotesFromTitleBar = useCallback(async () => {
+    await openInstallableUpdateNotice();
+  }, [openInstallableUpdateNotice]);
 
   const renderSidebarNavItem = (item: SidebarNavItem) => {
     const { key, view, labelKey, icon: Icon, primary } = item;
@@ -390,7 +417,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             aria-hidden="true"
           />
         ) : (
-          <Icon className="app-sidebar-nav-icon shrink-0" strokeWidth={primary ? 1.6 : 1.65} />
+          <Icon className="app-sidebar-nav-icon shrink-0" strokeWidth={1.35} />
         )}
         <span className={clsx(
           'app-sidebar-nav-label truncate whitespace-nowrap',
@@ -420,6 +447,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         isSidebarCollapsed={isSidebarCollapsed}
         toggleSidebarCollapsed={toggleSidebarCollapsed}
         openGlobalSearch={openGlobalSearch}
+        openCurrentReleaseNotes={openCurrentReleaseNotesFromTitleBar}
+        showUpdateButton={hasInstallableUpdate}
         notificationDrawerOpen={notificationDrawerOpen}
         unreadNotificationCount={unreadNotificationCount}
         toggleNotificationDrawer={toggleNotificationDrawer}
@@ -468,7 +497,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
           <div className={clsx('border-t border-border', sidebarVisualCollapsed ? 'px-2 py-2 flex flex-col items-center gap-2' : 'px-4 py-2 space-y-2')}>
             <button
               type="button"
-              onClick={() => setFounderSponsorOpen(true)}
+              onClick={openFounderSponsorModalFromSidebar}
               className={clsx(
                 'app-founder-sponsor-button group inline-flex shrink-0 items-center justify-center transition-all',
                 sidebarVisualCollapsed
@@ -496,10 +525,12 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             {sidebarVisualCollapsed && (
               <button
                 type="button"
-                onClick={() => onNavigate('settings')}
-                className="h-8 w-8 rounded-md text-text-tertiary hover:text-text-primary transition-colors inline-flex items-center justify-center shrink-0"
+                onClick={openSettingsFromSidebar}
+                onPointerDown={(event) => event.stopPropagation()}
+                className="h-10 w-10 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface-primary transition-colors inline-flex items-center justify-center shrink-0"
                 title={t('nav.settings')}
                 aria-label={t('nav.settings')}
+                data-no-window-drag
               >
                 <SettingsIcon className="w-[17px] h-[17px]" strokeWidth={1.75} />
               </button>
@@ -513,10 +544,12 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             >
               <button
                 type="button"
-                onClick={() => onNavigate('settings')}
-                className="h-8 rounded-md px-2 text-text-tertiary hover:text-text-primary hover:bg-surface-primary transition-colors inline-flex items-center justify-center gap-1.5 shrink-0"
+                onClick={openSettingsFromSidebar}
+                onPointerDown={(event) => event.stopPropagation()}
+                className="h-9 rounded-lg px-2.5 text-text-tertiary hover:text-text-primary hover:bg-surface-primary transition-colors inline-flex items-center justify-center gap-1.5 shrink-0"
                 title={t('nav.settings')}
                 aria-label={t('nav.settings')}
+                data-no-window-drag
               >
                 <SettingsIcon className="w-[19px] h-[19px]" strokeWidth={1.75} />
                 <span className="text-xs font-medium">{t('nav.settings')}</span>
@@ -563,7 +596,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
 
                 {isSpaceMenuOpen && (
                   <div
-                    className="app-space-menu absolute right-0 bottom-full z-[1] mb-1.5 w-[172px] overflow-hidden rounded-lg border border-border shadow-lg"
+                    className="app-space-menu absolute right-0 bottom-full z-[1] mb-1.5 w-[172px] overflow-hidden rounded-lg border border-border bg-surface-primary shadow-lg"
                   >
                     <div className="max-h-44 overflow-y-auto">
                       {spaces.length === 0 ? (
@@ -911,14 +944,28 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
     setPaymentMessage('');
     setOrderNo('');
     setPollOrderNo('');
+    const productId = String(product?.id || FOUNDER_SPONSOR_PRODUCT_ID).trim() || FOUNDER_SPONSOR_PRODUCT_ID;
+    const amount = founderProductAmountValue(product) ?? founderProductAmountValue(fallbackFounderSponsorProduct());
+    let failedStage: 'create_order' | 'missing_payment_info' | 'open_payment' = 'create_order';
+    let failedReason: 'create_order_failed' | 'missing_payment_info' | 'open_payment_failed' = 'create_order_failed';
+    void window.ipcRenderer.analytics.track('founder_sponsor_purchase_clicked', {
+      surface: 'billing',
+      origin: 'founder_sponsor_modal',
+      properties: {
+        source: 'founder_sponsor_modal',
+        productId,
+        paymentKind: 'page_pay',
+        amount,
+      },
+    });
     try {
-      const productId = String(product?.id || FOUNDER_SPONSOR_PRODUCT_ID).trim() || FOUNDER_SPONSOR_PRODUCT_ID;
       const orderResult = await window.ipcRenderer.officialAuth.createPagePayOrder({
         productId,
         product_id: productId,
         subject: t('layout.founderSponsor.title'),
         pointsToDeduct: 0,
         points_to_deduct: 0,
+        acquisitionSource: getAppAcquisitionSource(),
       }) as {
         success?: boolean;
         order?: Record<string, unknown>;
@@ -931,8 +978,12 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
       const nextOrderNo = String(order.out_trade_no || order.outTradeNo || '').trim();
       const paymentTarget = extractPaymentTarget(order);
       if (!nextOrderNo || !paymentTarget) {
+        failedStage = 'missing_payment_info';
+        failedReason = 'missing_payment_info';
         throw new Error(t('layout.founderSponsor.missingPaymentInfo'));
       }
+      failedStage = 'open_payment';
+      failedReason = 'open_payment_failed';
       const openResult = await window.ipcRenderer.officialAuth.openPaymentForm({ paymentForm: paymentTarget }) as {
         success?: boolean;
         error?: string;
@@ -947,8 +998,20 @@ function FounderSponsorModal({ active, onClose, onOpenBilling }: {
     } catch (error) {
       setPaymentState('error');
       setPaymentMessage(error instanceof Error ? error.message : t('layout.founderSponsor.createOrderFailed'));
+      void window.ipcRenderer.analytics.track('checkout_failed', {
+        surface: 'billing',
+        origin: 'founder_sponsor_modal',
+        properties: {
+          source: 'founder_sponsor_modal',
+          stage: failedStage,
+          reason: failedReason,
+          productId,
+          paymentKind: 'page_pay',
+          amount,
+        },
+      });
     }
-  }, [active, onOpenBilling, product?.id, t]);
+  }, [active, onOpenBilling, product, t]);
 
   const openFounderXProfile = useCallback(async () => {
     if (!founderXUrl) return;
